@@ -25,6 +25,19 @@ AI agents are becoming the next commerce channel. Just like merchants once added
 | [`@financedistrict/saleor-agentic-commerce-core`](./packages/core) | Protocol types, Saleor-to-protocol formatters, payment handler interface |
 | [`@financedistrict/saleor-agentic-commerce-nextjs`](./packages/nextjs) | Ready-made Next.js App Router route handlers for UCP and ACP |
 | [`@financedistrict/saleor-prism-payment`](./packages/prism-payment) | Prism payment handler — stablecoin settlement via x402/EIP-3009 |
+| [`@financedistrict/saleor-agentic-commerce-skill`](./packages/claude-skill) | Claude Code plugin — `/setup-agentic-commerce`, `/add-payment-handler`, `/diagnose-agentic-commerce` |
+
+### Saleor App (optional)
+
+The [`apps/saleor-agentic-commerce-app`](./apps/saleor-agentic-commerce-app) is a **Saleor Dashboard App** that acts as a control plane for the SDK. It's entirely optional — the SDK works standalone with environment variables — but it gives merchants a better experience:
+
+- **Configure from the Dashboard** — store name, protocols, payment handlers — no code or env var editing
+- **Per-channel control** — enable agentic commerce for specific channels, assign different payment handlers
+- **Payment handler management** — configure Prism credentials, test connections, all from the UI
+- **Agent activity monitoring** — see which orders were placed by AI agents, track session metrics
+- **Order attribution** — an order detail widget shows whether an order came from an AI agent
+
+When the App is installed, the SDK can load its configuration automatically with `configFromApp: true` instead of requiring explicit environment variables for everything.
 
 ## Installation
 
@@ -119,7 +132,7 @@ import { ucpRoutes } from "@/lib/agentic-commerce"
 export const { GET } = ucpRoutes.order
 ```
 
-ACP routes follow the same pattern with `acpRoutes`. See [`storefront/`](./storefront) for the complete reference integration.
+ACP routes follow the same pattern with `acpRoutes`.
 
 ### 4. Verify it works
 
@@ -130,6 +143,37 @@ curl http://localhost:3000/.well-known/ucp
 ```
 
 You should see a JSON response with your store's UCP profile, available services, and payment handlers.
+
+### Alternative: App-managed config
+
+If you've installed the [Agentic Commerce App](#saleor-app-optional) in your Dashboard, you can skip the manual env vars and let the SDK load its configuration from the App:
+
+```ts
+// src/lib/agentic-commerce.ts
+import { createAgenticCommerce } from "@financedistrict/saleor-agentic-commerce-nextjs"
+
+const agenticCommerce = await createAgenticCommerce({
+  saleorApiUrl: process.env.NEXT_PUBLIC_SALEOR_API_URL!,
+  saleorAuthToken: process.env.SALEOR_AGENTIC_AUTH_TOKEN!,
+  storefrontUrl: process.env.NEXT_PUBLIC_STOREFRONT_URL!,
+  configFromApp: true,  // Loads store name, payment handlers, etc. from Dashboard config
+})
+```
+
+## Claude Code Plugin
+
+If you use [Claude Code](https://claude.ai/code), install the skill plugin and let Claude set everything up for you:
+
+```
+/setup-agentic-commerce
+```
+
+Three commands available:
+- `/setup-agentic-commerce` — full guided install and route scaffolding
+- `/add-payment-handler` — add Prism stablecoin payments to an existing setup
+- `/diagnose-agentic-commerce` — troubleshoot issues with a diagnostic report
+
+See [`packages/claude-skill`](./packages/claude-skill) for installation options.
 
 ## Architecture
 

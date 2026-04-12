@@ -26,3 +26,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Reference storefront (separate project, installs SDK from npm)
+storefront/
+
+# Saleor App SDK auth data (local dev)
+.auth-data.json
