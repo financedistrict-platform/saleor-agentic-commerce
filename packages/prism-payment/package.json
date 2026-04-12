@@ -1,6 +1,6 @@
 {
   "name": "@financedistrict/saleor-prism-payment",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Stablecoin payment handler for Saleor agentic commerce. Enables AI agents to pay with USDC via Finance District Prism and x402/EIP-3009 signed transfers.",
   "author": "Finance District <dev@fd.xyz>",
   "license": "MIT",
@@ -57,14 +57,13 @@
   "bugs": {
     "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce/issues"
   },
-  "dependencies": {
-    "@financedistrict/saleor-agentic-commerce-core": "workspace:*"
-  },
-  "devDependencies": {
-    "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
-  },
+  "dependencies": {},
   "peerDependencies": {
     "@financedistrict/saleor-agentic-commerce-core": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@financedistrict/saleor-agentic-commerce-core": "workspace:*",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
   }
 }

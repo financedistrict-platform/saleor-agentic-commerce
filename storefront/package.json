@@ -47,9 +47,9 @@
 		"ts-invariant": "0.10.3",
 		"urql": "4.0.6",
 		"xss": "1.0.15",
-		"@financedistrict/saleor-agentic-commerce-core": "^0.1.1",
-		"@financedistrict/saleor-agentic-commerce-nextjs": "^0.1.1",
-		"@financedistrict/saleor-prism-payment": "^0.1.1"
+		"@financedistrict/saleor-agentic-commerce-core": "^0.2.0",
+		"@financedistrict/saleor-agentic-commerce-nextjs": "^0.2.0",
+		"@financedistrict/saleor-prism-payment": "^0.2.0"
 	},
 	"devDependencies": {
 		"@graphql-codegen/cli": "6.1.1",

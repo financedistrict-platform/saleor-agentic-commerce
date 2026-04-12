@@ -1,6 +1,6 @@
 {
   "name": "@financedistrict/saleor-agentic-commerce-core",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Make your Saleor store shoppable by AI agents. Core protocol types, formatters, and payment handler interface for UCP and ACP.",
   "author": "Finance District <dev@fd.xyz>",
   "license": "MIT",
@@ -59,10 +59,7 @@
   "bugs": {
     "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce/issues"
   },
-  "dependencies": {
-    "graphql": "^16.8.0",
-    "graphql-tag": "^2.12.0"
-  },
+  "dependencies": {},
   "devDependencies": {
     "typescript": "^5.3.0"
   }
