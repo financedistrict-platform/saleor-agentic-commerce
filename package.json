@@ -1,0 +1,12 @@
+{
+  "name": "saleor-agentic-commerce",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "build:core": "pnpm --filter @financedistrict/saleor-agentic-commerce-core build",
+    "build:nextjs": "pnpm --filter @financedistrict/saleor-agentic-commerce-nextjs build",
+    "build:prism": "pnpm --filter @financedistrict/saleor-prism-payment build",
+    "dev": "pnpm -r --parallel dev",
+    "clean": "pnpm -r clean"
+  }
+}

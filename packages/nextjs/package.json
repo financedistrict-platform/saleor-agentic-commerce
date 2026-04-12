@@ -1,0 +1,51 @@
+{
+  "name": "@financedistrict/saleor-agentic-commerce-nextjs",
+  "version": "0.1.0",
+  "description": "Next.js integration for Saleor agentic commerce — drop-in UCP/ACP route handlers, middleware, and configuration for Saleor storefronts.",
+  "author": "Finance District <dev@fd.xyz>",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./routes/*": {
+      "types": "./dist/routes/*.d.ts",
+      "default": "./dist/routes/*.js"
+    },
+    "./middleware/*": {
+      "types": "./dist/middleware/*.d.ts",
+      "default": "./dist/middleware/*.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "saleor",
+    "nextjs",
+    "agentic-commerce",
+    "ucp",
+    "acp",
+    "route-handlers",
+    "middleware"
+  ],
+  "dependencies": {
+    "@financedistrict/saleor-agentic-commerce-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}

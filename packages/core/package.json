@@ -1,0 +1,48 @@
+{
+  "name": "@financedistrict/saleor-agentic-commerce-core",
+  "version": "0.1.0",
+  "description": "Framework-agnostic UCP/ACP protocol support for Saleor — types, Saleor GraphQL mappings, payment handler registry, and protocol formatters.",
+  "author": "Finance District <dev@fd.xyz>",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "saleor",
+    "agentic-commerce",
+    "ucp",
+    "acp",
+    "universal-commerce-protocol",
+    "agent-commerce-protocol",
+    "ai-agent",
+    "ai-commerce",
+    "headless-commerce",
+    "machine-to-machine",
+    "commerce-api"
+  ],
+  "dependencies": {
+    "graphql": "^16.8.0",
+    "graphql-tag": "^2.12.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0"
+  }
+}
