@@ -1,0 +1,12 @@
+{
+  "name": "saleor-agentic-commerce",
+  "version": "0.1.0",
+  "description": "Claude Code skills for installing, configuring, and troubleshooting the Saleor Agentic Commerce SDK — make your Saleor store shoppable by AI agents.",
+  "author": "Finance District <developers@fd.xyz>",
+  "homepage": "https://github.com/financedistrict-platform/saleor-agentic-commerce",
+  "skills": [
+    "skills/setup-agentic-commerce",
+    "skills/add-payment-handler",
+    "skills/diagnose-agentic-commerce"
+  ]
+}

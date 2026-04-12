@@ -1,0 +1,35 @@
+{
+  "name": "@financedistrict/saleor-agentic-commerce-skill",
+  "version": "0.1.0",
+  "description": "Claude Code plugin with skills for installing, configuring, and troubleshooting the Saleor Agentic Commerce SDK.",
+  "author": "Finance District <developers@fd.xyz>",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "claude-code-skill",
+    "claude-code-plugin",
+    "saleor",
+    "agentic-commerce",
+    "ai-commerce",
+    "ai-agent",
+    "ucp",
+    "acp",
+    "developer-tools",
+    "sdk-installer",
+    "saleor-app"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce.git",
+    "directory": "packages/claude-skill"
+  },
+  "homepage": "https://github.com/financedistrict-platform/saleor-agentic-commerce#readme",
+  "bugs": {
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce/issues"
+  },
+  "files": [
+    "plugin.json",
+    "skills",
+    "README.md"
+  ]
+}
