@@ -9,9 +9,12 @@
 import {
   SaleorClient,
   PaymentHandlerRegistry,
+  loadConfigFromAppCached,
   type PaymentHandlerAdapter,
   type FormatterContext,
   type SaleorClientOptions,
+  type AppConfig,
+  type AppPaymentHandlerConfig,
 } from "@financedistrict/saleor-agentic-commerce-core"
 
 // =====================================================
@@ -27,17 +30,36 @@ export type AgenticCommerceConfig = {
   channel?: string
   /** Storefront public URL (e.g., "https://store.com") */
   storefrontUrl: string
-  /** Store display name */
-  storeName: string
-  /** Store description */
+  /**
+   * Load configuration from the Saleor Agentic Commerce App metadata
+   * instead of requiring explicit storeName, paymentHandlers, etc.
+   *
+   * When true, the SDK queries the App's privateMetadata on startup
+   * and auto-configures itself. Env-based overrides still take priority.
+   */
+  configFromApp?: boolean
+  /**
+   * Cache TTL in milliseconds for App config (default: 60000 = 60s).
+   * Only used when configFromApp is true.
+   */
+  configCacheTtl?: number
+  /**
+   * Factory function to create payment handler adapters from App metadata.
+   * Called for each payment handler config found in App metadata.
+   * If not provided, payment handlers from App config are ignored.
+   */
+  paymentHandlerFactory?: (config: AppPaymentHandlerConfig) => PaymentHandlerAdapter | null
+  /** Store display name (overrides App config if both present) */
+  storeName?: string
+  /** Store description (overrides App config if both present) */
   storeDescription?: string
   /** UCP protocol version (default: "2026-04-08") */
   ucpVersion?: string
   /** ACP protocol version (default: "2026-01-30") */
   acpVersion?: string
-  /** API key for ACP Bearer token authentication */
+  /** API key for ACP Bearer token authentication (overrides App config) */
   acpApiKey?: string
-  /** Payment handler adapters to register */
+  /** Payment handler adapters to register (added alongside App-managed handlers) */
   paymentHandlers?: PaymentHandlerAdapter[]
 }
 
@@ -49,17 +71,97 @@ export type AgenticCommerceInstance = {
   saleorClient: SaleorClient
   paymentHandlers: PaymentHandlerRegistry
   formatterContext: FormatterContext
-  config: Required<Pick<AgenticCommerceConfig, "storefrontUrl" | "storeName" | "ucpVersion" | "acpVersion">> &
-    Pick<AgenticCommerceConfig, "storeDescription" | "acpApiKey">
+  config: Required<Pick<AgenticCommerceConfig, "storefrontUrl" | "ucpVersion" | "acpVersion">> &
+    Pick<AgenticCommerceConfig, "storeDescription" | "acpApiKey"> &
+    { storeName: string }
 }
 
-export function createAgenticCommerce(config: AgenticCommerceConfig): AgenticCommerceInstance {
+/**
+ * Create an Agentic Commerce instance.
+ *
+ * Supports two modes:
+ * 1. **Explicit config** — Pass storeName, paymentHandlers, etc. directly.
+ * 2. **App-managed config** — Set `configFromApp: true` to load config from
+ *    the Saleor Agentic Commerce App's metadata.
+ *
+ * When using `configFromApp`, the function becomes async and returns a Promise.
+ */
+export function createAgenticCommerce(
+  config: AgenticCommerceConfig & { configFromApp: true }
+): Promise<AgenticCommerceInstance>
+export function createAgenticCommerce(
+  config: AgenticCommerceConfig & { configFromApp?: false }
+): AgenticCommerceInstance
+export function createAgenticCommerce(
+  config: AgenticCommerceConfig
+): AgenticCommerceInstance | Promise<AgenticCommerceInstance>
+export function createAgenticCommerce(
+  config: AgenticCommerceConfig
+): AgenticCommerceInstance | Promise<AgenticCommerceInstance> {
   // Validate required config
   if (!config.saleorApiUrl) throw new Error("saleorApiUrl is required")
   if (!config.saleorAuthToken) throw new Error("saleorAuthToken is required")
   if (!config.storefrontUrl) throw new Error("storefrontUrl is required")
-  if (!config.storeName) throw new Error("storeName is required")
 
+  if (config.configFromApp) {
+    return createFromApp(config)
+  }
+
+  // Explicit config mode — storeName is required
+  if (!config.storeName) {
+    throw new Error("storeName is required (or use configFromApp: true)")
+  }
+
+  return buildInstance(config, config.storeName)
+}
+
+/**
+ * Load config from App metadata and build the instance.
+ */
+async function createFromApp(
+  config: AgenticCommerceConfig
+): Promise<AgenticCommerceInstance> {
+  const appConfig = await loadConfigFromAppCached(
+    config.saleorApiUrl,
+    config.saleorAuthToken,
+    config.configCacheTtl
+  )
+
+  // App config provides defaults; explicit config overrides
+  const storeName = config.storeName || appConfig.storeName
+  if (!storeName) {
+    throw new Error(
+      "storeName not found in App config. Configure it in the Dashboard or pass it explicitly."
+    )
+  }
+
+  // Build payment handlers from App config
+  const appHandlers: PaymentHandlerAdapter[] = []
+  if (config.paymentHandlerFactory) {
+    for (const ph of appConfig.paymentHandlers) {
+      const handler = config.paymentHandlerFactory(ph)
+      if (handler) appHandlers.push(handler)
+    }
+  }
+
+  const mergedConfig: AgenticCommerceConfig = {
+    ...config,
+    storeName,
+    storeDescription: config.storeDescription || appConfig.storeDescription,
+    acpApiKey: config.acpApiKey || appConfig.acpApiKey,
+    paymentHandlers: [...appHandlers, ...(config.paymentHandlers || [])],
+  }
+
+  return buildInstance(mergedConfig, storeName)
+}
+
+/**
+ * Build the final instance from resolved config.
+ */
+function buildInstance(
+  config: AgenticCommerceConfig,
+  storeName: string
+): AgenticCommerceInstance {
   const ucpVersion = config.ucpVersion || "2026-04-08"
   const acpVersion = config.acpVersion || "2026-01-30"
 
@@ -78,7 +180,7 @@ export function createAgenticCommerce(config: AgenticCommerceConfig): AgenticCom
 
   // Create formatter context
   const formatterContext: FormatterContext = {
-    storeName: config.storeName,
+    storeName,
     storefrontUrl: config.storefrontUrl,
     ucpVersion,
     acpVersion,
@@ -91,7 +193,7 @@ export function createAgenticCommerce(config: AgenticCommerceConfig): AgenticCom
     formatterContext,
     config: {
       storefrontUrl: config.storefrontUrl,
-      storeName: config.storeName,
+      storeName,
       storeDescription: config.storeDescription,
       ucpVersion,
       acpVersion,

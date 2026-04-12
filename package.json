@@ -6,7 +6,9 @@
     "build:core": "pnpm --filter @financedistrict/saleor-agentic-commerce-core build",
     "build:nextjs": "pnpm --filter @financedistrict/saleor-agentic-commerce-nextjs build",
     "build:prism": "pnpm --filter @financedistrict/saleor-prism-payment build",
+    "build:app": "pnpm --filter @financedistrict/saleor-agentic-commerce-app build",
     "dev": "pnpm -r --parallel dev",
+    "dev:app": "pnpm --filter @financedistrict/saleor-agentic-commerce-app dev",
     "clean": "pnpm -r clean"
   }
 }

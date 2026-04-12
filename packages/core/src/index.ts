@@ -134,3 +134,15 @@ export {
   recordToMetadataInput,
   getMetadataValue,
 } from "./lib/metadata.js"
+
+// App Config Loader
+export {
+  loadConfigFromApp,
+  loadConfigFromAppCached,
+  clearAppConfigCache,
+} from "./lib/app-config-loader.js"
+export type {
+  AppConfig,
+  AppChannelConfig,
+  AppPaymentHandlerConfig,
+} from "./lib/app-config-loader.js"
