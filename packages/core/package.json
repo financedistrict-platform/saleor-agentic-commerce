@@ -1,6 +1,6 @@
 {
   "name": "@financedistrict/saleor-agentic-commerce-core",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "description": "Make your Saleor store shoppable by AI agents. Core protocol types, formatters, and payment handler interface for UCP and ACP.",
   "author": "Finance District <developers@fd.xyz>",
   "license": "MIT",
