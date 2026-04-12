@@ -47,9 +47,9 @@
 		"ts-invariant": "0.10.3",
 		"urql": "4.0.6",
 		"xss": "1.0.15",
-		"@financedistrict/saleor-agentic-commerce-core": "link:../packages/core",
-		"@financedistrict/saleor-agentic-commerce-nextjs": "link:../packages/nextjs",
-		"@financedistrict/saleor-prism-payment": "link:../packages/prism-payment"
+		"@financedistrict/saleor-agentic-commerce-core": "^0.1.1",
+		"@financedistrict/saleor-agentic-commerce-nextjs": "^0.1.1",
+		"@financedistrict/saleor-prism-payment": "^0.1.1"
 	},
 	"devDependencies": {
 		"@graphql-codegen/cli": "6.1.1",
@@ -90,12 +90,18 @@
 			"micromatch": ">=4.0.8",
 			"@babel/runtime": ">=7.26.10",
 			"@babel/helpers": ">=7.26.10",
-			"brace-expansion@>=2": ">=2.0.2"
+			"brace-expansion@>=2": ">=2.0.2",
+			"eslint-import-resolver-typescript": "3.9.1"
 		},
 		"ignoredBuiltDependencies": [
 			"esbuild",
 			"sharp",
 			"unrs-resolver"
+		],
+		"minimumReleaseAgeExclude": [
+			"@financedistrict/saleor-agentic-commerce-core",
+			"@financedistrict/saleor-agentic-commerce-nextjs",
+			"@financedistrict/saleor-prism-payment"
 		]
 	},
 	"packageManager": "pnpm@10.28.1",

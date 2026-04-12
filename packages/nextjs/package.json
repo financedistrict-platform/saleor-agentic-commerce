@@ -1,7 +1,7 @@
 {
   "name": "@financedistrict/saleor-agentic-commerce-nextjs",
-  "version": "0.1.0",
-  "description": "Next.js integration for Saleor agentic commerce — drop-in UCP/ACP route handlers, middleware, and configuration for Saleor storefronts.",
+  "version": "0.1.1",
+  "description": "Drop-in Next.js route handlers that expose your Saleor storefront to AI shopping agents via UCP and ACP protocols.",
   "author": "Finance District <dev@fd.xyz>",
   "license": "MIT",
   "type": "module",
@@ -35,13 +35,36 @@
   },
   "keywords": [
     "saleor",
+    "saleor-sdk",
+    "saleor-app",
     "nextjs",
+    "next-js",
+    "app-router",
+    "route-handler",
     "agentic-commerce",
+    "ai-commerce",
+    "ai-agent",
+    "ai-shopping",
     "ucp",
     "acp",
-    "route-handlers",
-    "middleware"
+    "universal-commerce-protocol",
+    "agentic-commerce-protocol",
+    "headless-commerce",
+    "storefront",
+    "commerce-api",
+    "checkout",
+    "shopping-agent",
+    "autonomous-agent"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce.git",
+    "directory": "packages/nextjs"
+  },
+  "homepage": "https://github.com/financedistrict-platform/saleor-agentic-commerce#readme",
+  "bugs": {
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce/issues"
+  },
   "dependencies": {
     "@financedistrict/saleor-agentic-commerce-core": "workspace:*"
   },

@@ -1,7 +1,7 @@
 {
   "name": "@financedistrict/saleor-prism-payment",
-  "version": "0.1.0",
-  "description": "Prism x402 stablecoin payment handler for Saleor agentic commerce — enables AI agents to pay with USDC, FDUSD, and other stablecoins via EIP-3009 authorizations.",
+  "version": "0.1.1",
+  "description": "Stablecoin payment handler for Saleor agentic commerce. Enables AI agents to pay with USDC via Finance District Prism and x402/EIP-3009 signed transfers.",
   "author": "Finance District <dev@fd.xyz>",
   "license": "MIT",
   "type": "module",
@@ -27,16 +27,36 @@
   },
   "keywords": [
     "saleor",
+    "saleor-sdk",
+    "saleor-payment",
     "prism",
     "x402",
     "stablecoin",
-    "eip-3009",
     "usdc",
     "fdusd",
-    "agentic-commerce",
+    "eip-3009",
     "crypto-payments",
-    "ai-agent"
+    "web3-payments",
+    "defi",
+    "agentic-commerce",
+    "ai-commerce",
+    "ai-agent",
+    "ai-shopping",
+    "payment-handler",
+    "payment-gateway",
+    "finance-district",
+    "blockchain-payments",
+    "autonomous-agent"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce.git",
+    "directory": "packages/prism-payment"
+  },
+  "homepage": "https://github.com/financedistrict-platform/saleor-agentic-commerce#readme",
+  "bugs": {
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce/issues"
+  },
   "dependencies": {
     "@financedistrict/saleor-agentic-commerce-core": "workspace:*"
   },

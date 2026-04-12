@@ -1,7 +1,7 @@
 {
   "name": "@financedistrict/saleor-agentic-commerce-core",
-  "version": "0.1.0",
-  "description": "Framework-agnostic UCP/ACP protocol support for Saleor — types, Saleor GraphQL mappings, payment handler registry, and protocol formatters.",
+  "version": "0.1.1",
+  "description": "Make your Saleor store shoppable by AI agents. Core protocol types, formatters, and payment handler interface for UCP and ACP.",
   "author": "Finance District <dev@fd.xyz>",
   "license": "MIT",
   "type": "module",
@@ -27,17 +27,38 @@
   },
   "keywords": [
     "saleor",
+    "saleor-sdk",
+    "saleor-plugin",
+    "saleor-app",
     "agentic-commerce",
+    "ai-commerce",
+    "ai-agent",
+    "ai-shopping",
+    "agent-to-agent",
     "ucp",
     "acp",
     "universal-commerce-protocol",
-    "agent-commerce-protocol",
-    "ai-agent",
-    "ai-commerce",
+    "agentic-commerce-protocol",
     "headless-commerce",
     "machine-to-machine",
-    "commerce-api"
+    "commerce-api",
+    "commerce-sdk",
+    "ecommerce",
+    "checkout",
+    "payment",
+    "shopping-agent",
+    "autonomous-agent",
+    "llm-commerce"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/financedistrict-platform/saleor-agentic-commerce#readme",
+  "bugs": {
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce/issues"
+  },
   "dependencies": {
     "graphql": "^16.8.0",
     "graphql-tag": "^2.12.0"
