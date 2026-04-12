@@ -14,7 +14,7 @@ AI agents are becoming the next commerce channel. Just like merchants once added
 
 - **Agent discovery** — A `.well-known/ucp` profile that tells agents what your store supports, which payment methods are available, and where the API lives
 - **Checkout sessions** — Agents can create carts, set shipping addresses, select delivery options, and complete purchases through protocol-compliant endpoints
-- **Pluggable payments** — Ships with [Finance District Prism](https://financedistrict.xyz) for stablecoin payments (x402/EIP-3009), or implement your own payment handler
+- **Pluggable payments** — Ships with [Finance District Prism](https://developers.fd.xyz/prism) for stablecoin payments (x402/EIP-3009), or implement your own payment handler
 - **No backend changes** — Everything runs in your Next.js storefront layer, consuming the same Saleor GraphQL API your storefront already uses
 - **Zero runtime dependencies** — The packages add no transitive dependencies to your project
 
@@ -64,7 +64,7 @@ SALEOR_AGENTIC_AUTH_TOKEN=your-saleor-app-token    # Needs MANAGE_CHECKOUTS + MA
 SALEOR_AGENTIC_STORE_NAME=Your Store Name
 
 # Prism Payment (optional — only if using stablecoin payments)
-PRISM_API_URL=https://prism-gw.financedistrict.xyz
+PRISM_API_URL=https://prism-gw.fd.xyz
 PRISM_API_KEY=your-prism-api-key
 ```
 
