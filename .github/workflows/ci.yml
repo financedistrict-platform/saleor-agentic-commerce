@@ -1,0 +1,41 @@
+name: CI
+
+# PR-time validation for the source repo.
+#
+# This workflow only validates that the source compiles and the workspace
+# builds clean. Containerization and deployment live in the internal
+# fd-deployments repo (financedistrict-platform/fd-deployments) — see its
+# README for the deploy flow.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Lint, type-check, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build all workspace packages
+        run: pnpm -r build
