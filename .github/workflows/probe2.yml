@@ -1,0 +1,20 @@
+name: Probe2 - composite action
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  call-composite:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "step before composite"
+      - uses: 1stdigital/fd-infra/.github/actions/resolve-fd-env@develop
+        with:
+          environment: test
+          service_name: saleor-agentic-commerce-app
+      - run: echo "if you can read this, composite action loading works"
