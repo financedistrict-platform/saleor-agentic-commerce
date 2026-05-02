@@ -50,61 +50,107 @@ Saleor `privateMetadata` is a metadata store, not a secrets vault. Whoever has `
 
 If field-level secret protection is needed later, the upgrade path is **store-a-reference-not-a-value**: privateMetadata holds e.g. `secret://aws-sm/prism-api-key`, the storefront resolves at boot. Don't build this until a real requirement appears.
 
-## 3. Handler manifest
+## 3. Handler shape — align with the specs
 
-Every handler exposes a manifest the App uses to render config UI and route traffic. Handlers are discoverable by the App through one of:
+**Both UCP and ACP define the handler shape on the wire.** We do not invent our own. The App's internal model is the union of fields both specs require, with two output adapters that serialize to each protocol's wire format.
 
-- **Local registry** — App ships with a list of known handler manifests (npm packages it knows about). Simplest. Works for v1.
-- **URL-pasted manifest** — merchant pastes a handler manifest URL in the dashboard, App fetches it. Enables third parties without an App release.
-- **Future: curated marketplace** — explicitly out of scope; FD does not intend to operate one.
+### ACP `PaymentHandler` (from `spec/2026-04-17/json-schema/schema.agentic_checkout.json`)
 
-### Manifest shape (proposed)
+Required:
 
-```ts
-type HandlerManifest = {
-  /** Stable identifier, namespaced. e.g. "xyz.fd.prism_payment", "com.stripe.acp_payment" */
-  id: string
+```jsonc
+{
+  "id": "handler_stripe_01",                  // seller-defined instance identifier
+  "name": "dev.acp.tokenized.card",           // reverse-DNS handler type
+  "version": "2026-04-17",                    // YYYY-MM-DD
+  "spec": "https://example.com/spec",         // URL to human-readable handler spec
+  "requires_delegate_payment": false,         // bool
+  "requires_pci_compliance": false,           // bool
+  "psp": "stripe",                            // PSP identifier
+  "config_schema": "https://.../config.json", // URL to JSON Schema for config
+  "instrument_schemas": ["https://..."],      // URLs to JSON Schemas for instruments
+  "config": { /* handler-specific */ }
+}
+```
 
-  /** Human-readable name shown in the dashboard */
-  name: string
+Optional: `display_name` (human-readable label for buyer-facing UI), `display_order` (integer, lower = higher preference; suggestive only).
 
-  /** Optional one-line description */
-  description?: string
+Discovery transport: per-session, embedded in the `CheckoutSession` response under `capabilities.payment.handlers[]`. There is **no** ACP well-known endpoint for handlers themselves — only `DiscoveryCapabilities` (services, extensions, intervention_types, supported_currencies, supported_locales).
 
-  /** Optional URL the dashboard deep-links to for advanced settings */
-  manageUrl?: string
+### UCP handler declaration (from `payment-handler-guide.md`)
 
-  /** JSON Schema describing fields the App should render in the config form */
-  configSchema: JSONSchema7
-
-  /** Protocol versions the handler supports — App uses for routing */
-  protocols: {
-    ucp?: { version: string }
-    acp?: { version: string }
-  }
-
-  /** Optional capability flags — drives UI affordances */
-  capabilities?: {
-    testConnection?: boolean   // App offers a "Test Connection" button
-    sandbox?: boolean          // Handler has a sandbox/test mode
-    webhooks?: string[]        // Saleor event types this handler wants
+```jsonc
+{
+  "ucp": {
+    "payment_handlers": {
+      "com.example.handler": [
+        {
+          "id": "processor_tokenizer_1234",
+          "version": "{{ ucp_version }}",
+          "spec": "https://example.com/ucp/handler",
+          "schema": "https://example.com/ucp/handler/schema.json",
+          "available_instruments": [/* optional */],
+          "config": { /* handler-specific */ }
+        }
+      ]
+    }
   }
 }
 ```
 
-**Why JSON Schema for `configSchema`:**
-- Existing standard, dynamic UI rendering trivial (`react-jsonschema-form` etc.)
-- Adding new fields to a handler doesn't require an App release
-- Aligns with the broader HTTP/OpenAPI ecosystem
-- We'd like to align with whatever UCP/ACP themselves specify for discovery if anything; pending a spec audit (see §9 open questions)
+- Reverse-DNS identifier is the **object key** under `payment_handlers`, not a field.
+- Single `schema` URL (not separated into config vs instrument like ACP).
+- No `requires_*` flags, no `psp` field.
+- Discovery transport: static, served at `/.well-known/ucp` (merchant-published).
 
-### Where the manifest lives
+### So they differ in shape
 
-For an in-tree handler (e.g. current Prism): exported as a static `manifest` constant from the handler npm package.
+UCP and ACP share **concepts** (instance id, dated version, externally-hosted JSON Schema, merchant-supplied config blob) but the wire formats are not interchangeable. The gateway maintains a single internal model and serializes through two adapters: one to `/.well-known/ucp`, one to `capabilities.payment.handlers[]` in the `CheckoutSession` response.
 
-For an out-of-process handler (future Stripe): served at a known endpoint on the handler service (e.g. `GET /handler-info` returning the manifest as JSON).
+### App internal model
 
-The App treats both uniformly — it just needs a manifest object, doesn't care where it came from.
+The App stores per handler what's needed to drive both serializations and the dashboard UI:
+
+```ts
+type HandlerRegistration = {
+  // Identity (both protocols)
+  instanceId: string          // e.g. "handler_prism_01"   — stable per-merchant
+  type: string                // e.g. "xyz.fd.prism_payment" (ACP `name` / UCP key)
+  version: string             // YYYY-MM-DD
+
+  // Spec + schemas (both protocols, slightly different layout)
+  specUrl: string             // ACP `spec` / UCP `spec`
+  configSchemaUrl: string     // ACP `config_schema` / UCP `schema`
+  instrumentSchemas?: string[] // ACP `instrument_schemas` (UCP folds into `schema`)
+
+  // ACP-only flags
+  requiresDelegatePayment: boolean
+  requiresPciCompliance: boolean
+  psp: string
+
+  // UCP-only
+  availableInstruments?: unknown[]
+
+  // Optional UI metadata
+  displayName?: string
+  displayOrder?: number
+
+  // Merchant config (validated against configSchemaUrl)
+  config: Record<string, unknown>
+}
+```
+
+The dashboard fetches the JSON Schema at `configSchemaUrl` and renders the form (`react-jsonschema-form` or similar). Adding fields to a handler doesn't require an App release.
+
+### Where handlers come from (App-side)
+
+The App needs to obtain the metadata above from somewhere. Options, in order of complexity:
+
+1. **In-tree manifest export** — handler npm package exports a static `manifest` constant. App imports it. Simplest. Works for any handler shipped alongside the App.
+2. **Handler URL in privateMetadata** — merchant pastes a URL in the dashboard, App fetches `${url}/spec` (or follows the published `spec` URL convention) and derives the registration. Enables third parties without an App code change.
+3. **Future** — npm-package convention (App scans installed packages for a known export marker). Defer.
+
+Both ACP and UCP explicitly leave merchant onboarding / handler installation **out of band** ("non-goal" in ACP, "out-of-band" in UCP prerequisites section). This is our free space — the install UX is the App's invention.
 
 ## 4. Configuration storage layout
 
@@ -176,26 +222,38 @@ Each of these is an additional metadata key, not a new architecture. Keep them i
 
 ## 8. Sequencing
 
-1. **Verify Prism's UCP/ACP surface** — does Prism's existing API already conform, or is the current `packages/prism-payment` adapter doing real translation? (Open question, see §9.)
-2. **Define the handler protocol spec** as a separate artifact, neutral of FD branding. Public repo, permissive license. This is the contract third parties build against.
-3. **Slim down the App's Payment Handlers UI** — remove hardcoded Prism fields. Replace with dynamic form rendered from `configSchema`.
-4. **Build the App-side handler registry** — `privateMetadata` CRUD, channel scoping, enable/disable.
-5. **Update the SDK to consume the new metadata layout** — `loadConfigFromAppCached` already does the loading; instantiation logic needs to switch from "import these packages" to "for each enabled handler in metadata, instantiate from known package".
-6. **Migrate Prism handler to the new manifest-based registration** — exports static `manifest`, no special-casing in the App.
+1. **Verify Prism's UCP-shaped output.** Inspect a live response from `/api/v2/merchant/payment-profile` and diff against the UCP `PaymentHandler` shape (§3). Fix on either side as needed. ACP output already verified aligned.
+2. **Pin protocol versions.** ACP `2026-04-17`, UCP latest stable. Document in code as constants.
+3. **Slim down the App's Payment Handlers UI.** Remove hardcoded Prism fields. Replace with dynamic form rendered from the handler's `config_schema` URL.
+4. **Build the App-side handler registry.** `privateMetadata` CRUD per §4, channel scoping per §5, enable/disable.
+5. **Update the SDK to consume the new metadata layout.** `loadConfigFromAppCached` already does the fetch; instantiation logic switches from "import these packages" to "for each enabled handler registration, instantiate the matching adapter with config".
+6. **Migrate the Prism handler package to expose a static manifest export.** No special-casing in the App.
 7. **Add a stub second handler** to validate the abstraction before any real third party tries.
-8. **Document for third-party handler authors** — "How to build a handler for the Agentic Commerce protocol".
+8. **Document for third-party handler authors** — "How to build a handler for the Agentic Commerce protocol", pointing at the actual ACP and UCP spec docs as the source of truth for wire formats.
 
-Steps 3–6 are likely a single milestone. Step 2 (the spec) can run in parallel with 1.
+Steps 3–6 are likely a single milestone. Step 1 (Prism UCP output verification) can run in parallel with everything else; only blocks shipping.
 
-## 9. Open questions
+## 9. Spec audit — resolved
 
-- **Does UCP and/or ACP already define handler discovery / config introspection?** If yes, align with it. Pending audit by Sage (protocol architect agent) against the actual UCP and ACP specs.
-- **Does Prism's existing API already speak UCP/ACP at the wire level?** Currently the in-tree adapter does meaningful translation (`payment-profile`, `checkout-prepare`, `settle` are Prism-specific). Either Prism grows ACP-shaped endpoints, or a thin `prism-acp-handler` service ships separately, or the in-tree adapter stays in-process for now. Decision should be informed by the spec audit.
-- **Trust model for handler URL discovery (post-v1)** — when merchants paste a handler URL, what's the auth handoff? Bearer token? Signed-request? Defer until v1 ships.
+A targeted audit of UCP (`universal-commerce-protocol/ucp`) and ACP (`agentic-commerce-protocol/agentic-commerce-protocol`, version `2026-04-17`) confirms:
+
+- **Both specs define the handler shape.** Field names verified against `spec/2026-04-17/json-schema/schema.agentic_checkout.json` (ACP `PaymentHandler`) and `docs/specification/payment-handler-guide.md` (UCP). See §3 for the actual shapes.
+- **Discovery transports differ.** ACP = per-session capability negotiation in `CheckoutSession`. UCP = static `/.well-known/ucp` document. The App implements both surfaces over the same internal model.
+- **Both specs leave merchant onboarding / handler installation flow out of band** (ACP explicitly states "non-goal: centralized handler registry"; UCP describes prerequisites as out-of-band). Admin UX, secret storage, enable/disable, channel scoping — all our free space.
+- **Schemas are JSON Schema Draft 2020-12 in both cases.** Validation library choice: anything Draft 2020-12 compliant.
+- **OpenAPI for ACP gateway endpoints lives in `spec/2026-04-17/openapi/`.** Use it directly rather than authoring a parallel description.
+- **`credential_schema` is NOT a field on ACP `PaymentHandler`.** Sage's initial recommendation included it; the actual schema does not.
+- **The current Prism adapter's ACP discovery output is correctly aligned** — fields match the actual ACP `PaymentHandler` schema. UCP output is a passthrough of Prism's `payment-profile` response; needs verification that Prism returns the exact UCP shape under the namespace key.
+
+## 10. Remaining open questions
+
+- **Does Prism's `/api/v2/merchant/payment-profile` return UCP-shaped handler entries?** Need to inspect a live response and diff against UCP spec. If not exact, either fix Prism's response or have the adapter re-shape.
+- **Pin protocol versions.** ACP `2026-04-17` is current stable. UCP version cadence not yet confirmed — verify and pin.
+- **Trust model for handler URL discovery (post-v1)** — when merchants paste a handler URL, what's the auth handoff? Bearer token? Signed request? Defer until v1 ships.
 - **Hot-reload mechanism** — short TTL (v1) vs. webhook-driven invalidation (v2).
 - **Multi-tenancy on Saleor metadata** — if a Saleor instance hosts multiple isolated tenants, can per-tenant admins read each other's handler API keys? Confirm against Saleor's auth model.
 
-## 10. Non-goals
+## 11. Non-goals
 
 - **FD-operated handler marketplace.** Out of scope.
 - **In-App payment processing.** The App is a gateway; it does not process payments. All payment logic lives in handlers.
