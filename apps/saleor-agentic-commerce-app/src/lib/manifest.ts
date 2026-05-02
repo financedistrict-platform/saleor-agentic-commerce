@@ -41,7 +41,7 @@ export function createManifest(appUrl: string): AppManifest {
       {
         name: "Fulfillment Created",
         asyncEvents: ["FULFILLMENT_CREATED"],
-        query: `subscription { event { ... on FulfillmentCreated { fulfillment { id status trackingNumber order { id privateMetadata { key value } } lines { id quantity orderLine { id } } } } } }`,
+        query: `subscription { event { ... on FulfillmentCreated { fulfillment { id status trackingNumber lines { id quantity orderLine { id } } } order { id privateMetadata { key value } } } } }`,
         targetUrl: `${appUrl}/api/webhooks/fulfillment-created`,
         isActive: true,
       },
