@@ -9,12 +9,21 @@ export function createManifest(appUrl: string): AppManifest {
     author: "Finance District",
     about:
       "Make your store shoppable by AI agents. Adds UCP and ACP protocol support with configurable payment handlers.",
+    // Least-privilege permission set for the control-plane App:
+    //   - MANAGE_ORDERS: required for the 4 webhook subscriptions
+    //     (ORDER_CREATED, ORDER_UPDATED, ORDER_CANCELLED, FULFILLMENT_CREATED)
+    //     and the ORDER_DETAILS_WIDGETS extension.
+    //   - MANAGE_CHANNELS: required by ChannelSettings.tsx to list the
+    //     merchant's channels and configure per-channel storefront URLs.
+    //
+    // Previously also requested MANAGE_CHECKOUTS, MANAGE_PRODUCTS,
+    // MANAGE_SHIPPING — those aren't used by THIS App (the control plane).
+    // The separate agentic-storefront service-account App holds the
+    // checkout/order write permissions for the live storefront flow.
+    // If a future feature needs broader access, expand here deliberately.
     permissions: [
-      "MANAGE_CHECKOUTS",
       "MANAGE_ORDERS",
       "MANAGE_CHANNELS",
-      "MANAGE_PRODUCTS",
-      "MANAGE_SHIPPING",
     ],
     appUrl,
     tokenTargetUrl: `${appUrl}/api/register`,
