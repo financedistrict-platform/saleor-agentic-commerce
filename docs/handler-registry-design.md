@@ -287,6 +287,55 @@ A targeted audit of UCP (`universal-commerce-protocol/ucp`) and ACP (`agentic-co
 - **In-App payment processing.** The App is a gateway; it does not process payments. All payment logic lives in handlers.
 - **Saleor payment-app replacement.** UCP/ACP handlers operate on the agent flow, not the regular checkout payment gateway. Existing Saleor payment apps continue to work alongside.
 - **FD-specific telemetry.** No phone-home from the gateway.
+- **Re-implementing Saleor-native concerns** (shipping methods, channels, currencies, products, addresses, …). See §12.
+
+## 12. Saleor-native concerns vs. external services — two integration patterns
+
+Not everything the protocols expose is a third-party service that needs registration. The App must keep these two patterns separate:
+
+**Pattern A — External services (handler registry):**
+- Examples: payment handlers (Prism, Stripe), future tax-calculation services, future address-validation services.
+- Source of truth lives outside Saleor. Each one is a separate deployable service.
+- App's role: register them, configure them in dashboard, route protocol traffic.
+- This is what §3–§6 describe.
+
+**Pattern B — Saleor-native concerns (read-through translation):**
+- Examples: shipping methods, channels, currencies, products, fulfillment zones, customer addresses, taxes-as-configured-on-Saleor.
+- Source of truth lives in Saleor itself, configured via Saleor's existing admin UI.
+- App's role: **none in the configuration plane**. The storefront SDK reads from Saleor at request time and translates the data into UCP/ACP shapes.
+- The merchant configures these in Saleor as they always have. Adding an "Agentic Shipping" tab in the App would be re-implementing what already exists.
+
+Concrete example, shipping methods:
+
+```
+[Agent] ──UCP/ACP request──▶ [Storefront SDK]
+                                    │
+                                    │ GraphQL: Checkout.availableShippingMethods
+                                    ▼
+                              [Saleor backend]
+                                    │
+                                    │ shippingMethods (already filtered by
+                                    │ channel, zone, cart contents)
+                                    ▼
+                            [Storefront SDK formatters/ucp.ts:
+                             formatCheckoutFulfillment()
+                             → fulfillment.methods[]]
+                                    │
+[Agent] ◀──fulfillment.methods[]── │
+```
+
+This already works today — `packages/core/src/lib/formatters/{ucp,acp}.ts` translate `checkout.shippingMethods` to `fulfillment.methods[]` / `fulfillment_options[]`. The App is not in the loop, by design.
+
+**How to decide which pattern a new concern belongs to:**
+
+| Question                                                                 | Pattern A (handler registry)         | Pattern B (read-through translation)   |
+|--------------------------------------------------------------------------|--------------------------------------|----------------------------------------|
+| Does it require its own deployable service?                              | Yes                                  | No — Saleor handles it                 |
+| Does each merchant configure it differently per-instance?                | Yes (different API keys, etc.)       | Yes, but in Saleor's UI, not ours      |
+| Does the configuration belong to the protocol or to Saleor?              | Protocol (handler-specific schemas)  | Saleor (already-modeled domain)        |
+| Multiple competing implementations possible?                             | Yes (Prism vs Stripe vs Klarna)      | No — Saleor *is* the implementation    |
+
+If unsure, default to Pattern B. Adding an "Agentic X" tab to the App should require justification, not be the default.
 
 ---
 
