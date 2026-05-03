@@ -30,7 +30,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { saleorApp } from "@/lib/saleor-app"
 import { ConfigManager } from "@/lib/config-manager"
-import type { PaymentHandlerEntry } from "@/lib/metadata-keys"
+import {
+  readCallerCredentials,
+  validateCallerToken,
+} from "@/lib/caller-auth"
+import type { HandlerManifest, PaymentHandlerEntry } from "@/lib/metadata-keys"
 
 // =====================================================
 // Response shape — mirrors SDK's AppConfig
@@ -55,56 +59,8 @@ type AppConfigResponse = {
     enabled: boolean
     channels?: string[] | null
     config: Record<string, unknown>
+    manifest?: HandlerManifest
   }>
-}
-
-// =====================================================
-// Caller token validation
-// =====================================================
-
-async function validateCallerToken(
-  saleorApiUrl: string,
-  token: string,
-): Promise<{ ok: true; appId: string } | { ok: false; reason: string }> {
-  // Probe Saleor with the caller's token. If it resolves to a real App,
-  // the token is valid. We don't use the returned App ID for anything
-  // beyond logging today; future work might add an allow-list.
-  let res: Response
-  try {
-    res = await fetch(saleorApiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ query: "{ app { id name } }" }),
-    })
-  } catch (err) {
-    return {
-      ok: false,
-      reason: `Saleor unreachable: ${err instanceof Error ? err.message : "unknown"}`,
-    }
-  }
-
-  if (!res.ok) {
-    return { ok: false, reason: `Saleor returned ${res.status}` }
-  }
-
-  const json = (await res.json()) as {
-    data?: { app: { id: string; name: string } | null }
-    errors?: Array<{ message: string }>
-  }
-  if (json.errors?.length) {
-    return {
-      ok: false,
-      reason: json.errors.map((e) => e.message).join(", "),
-    }
-  }
-  if (!json.data?.app) {
-    return { ok: false, reason: "Token does not resolve to an App" }
-  }
-
-  return { ok: true, appId: json.data.app.id }
 }
 
 // =====================================================
@@ -112,17 +68,9 @@ async function validateCallerToken(
 // =====================================================
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  // 1. Extract caller credentials.
-  const authHeader = request.headers.get("authorization") ?? ""
-  const callerToken = authHeader.startsWith("Bearer ")
-    ? authHeader.slice("Bearer ".length).trim()
-    : ""
-  const saleorApiUrl =
-    request.headers.get("saleor-api-url") ??
-    request.nextUrl.searchParams.get("saleorApiUrl") ??
-    ""
-
-  if (!callerToken || !saleorApiUrl) {
+  // 1. Validate caller credentials.
+  const creds = readCallerCredentials(request)
+  if (!creds) {
     return NextResponse.json(
       {
         error:
@@ -132,29 +80,28 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     )
   }
 
-  // 2. Validate the caller's token against Saleor.
-  const validation = await validateCallerToken(saleorApiUrl, callerToken)
+  const validation = await validateCallerToken(creds)
   if (!validation.ok) {
     return NextResponse.json(
-      { error: `Unauthorized: ${validation.reason}` },
-      { status: 401 },
+      { error: `Unauthorized: ${validation.message}` },
+      { status: validation.status },
     )
   }
 
-  // 3. Look up the Agentic Commerce App's own auth for this Saleor
+  // 2. Look up the Agentic Commerce App's own auth for this Saleor
   //    instance. The APL was populated during install (EnvAPL reads from
   //    env vars; UpstashAPL from Redis; FileAPL from local disk).
-  const ownAuth = await saleorApp.apl.get(saleorApiUrl)
+  const ownAuth = await saleorApp.apl.get(creds.saleorApiUrl)
   if (!ownAuth) {
     return NextResponse.json(
       {
-        error: `Agentic Commerce App is not registered for ${saleorApiUrl}. Install it via the Saleor dashboard first.`,
+        error: `Agentic Commerce App is not registered for ${creds.saleorApiUrl}. Install it via the Saleor dashboard first.`,
       },
       { status: 503 },
     )
   }
 
-  // 4. Read the App's own privateMetadata using its own credentials and
+  // 3. Read the App's own privateMetadata using its own credentials and
   //    parse into the AppConfig shape the storefront SDK expects.
   try {
     const manager = new ConfigManager(ownAuth.saleorApiUrl, ownAuth.token)
@@ -173,6 +120,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       }
     }
 
+    // Filter to enabled handlers only — the storefront SDK's HTTP-mode
+    // loader trusts the response and instantiates everything in the
+    // array. Disabled handlers stay in privateMetadata; merchants flip
+    // them on via the dashboard's /api/config endpoint, which is
+    // App-internal and does return everything for the UI.
+    // Manifest comes through so the SDK can pass it to the
+    // paymentHandlerFactory if needed.
     const paymentHandlers: AppConfigResponse["paymentHandlers"] = Object.entries(
       paymentHandlersMap,
     )
@@ -184,6 +138,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           enabled: e.enabled,
           channels: e.channels ?? null,
           config: e.config,
+          ...(e.manifest ? { manifest: e.manifest } : {}),
         }
       })
 

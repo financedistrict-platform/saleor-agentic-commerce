@@ -6,8 +6,7 @@ the PR; when it's done, strike or remove.
 
 ## In flight
 
-- **fd-grocery-store deploy 25281041108** — `configFromApp` switch
-  (verifying end-to-end Pattern A)
+_(empty)_
 
 ## Up next
 
@@ -178,3 +177,11 @@ fields so we don't mislead merchants.
 - ✅ Install runbook rewrite for the EnvAPL flow (fd-infra#49)
 - ✅ TODO.md backlog (#12) + release-automation item (#14)
 - ✅ Tab audit (this doc, 2026-05-03) — gap items captured above
+- ✅ **Pattern A architecture proven end-to-end** (2026-05-03):
+  dashboard → privateMetadata → App `/api/config-public` (cross-App
+  HTTP bridge with Saleor-token validation) → SDK `loadConfigFromApp`
+  (HTTP mode via `agenticCommerceAppUrl`) → `paymentHandlerFactory`
+  → registry → discovery output. `/.well-known/ucp` finally shows
+  `payment_handlers.xyz.fd.prism_payment` populated from the dashboard
+  config. PRs: saleor-agentic-commerce#16 (App + SDK 0.4.0),
+  fd-grocery-store#8 (storefront), fd-infra#50 (env var).
