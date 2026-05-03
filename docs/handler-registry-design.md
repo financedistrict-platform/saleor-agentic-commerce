@@ -337,6 +337,101 @@ This already works today — `packages/core/src/lib/formatters/{ucp,acp}.ts` tra
 
 If unsure, default to Pattern B. Adding an "Agentic X" tab to the App should require justification, not be the default.
 
+## 13. The App is a convenience layer, not a runtime dependency
+
+The earlier sections describe the App as if it were always present. It usually will be — but **the App is the managed-mode option, not a hard dependency**. The SDK is the product. The App is one of three ways to feed it config.
+
+### Three configuration paths
+
+| Path | When | Setup |
+|---|---|---|
+| **A — Pure env vars** | Solo dev, single storefront, ops team comfortable with deploys | `npm install` SDK + handler packages, set per-handler env vars (`PRISM_API_KEY`, `STRIPE_API_KEY`, …), instantiate handlers explicitly in `paymentHandlers: [...]`. No App installed. |
+| **B — App-managed** | Multi-storefront, non-developer merchants, frequent config changes via dashboard | Install the App in Saleor, configure handlers via the dashboard's Payment Handlers tab, storefront uses `configFromApp: true` + `agenticCommerceAppUrl` + `paymentHandlerFactory`. |
+| **C — Hybrid** | Sensitive secrets in env (security boundary), public config in App (convenience) | Both. Each handler adapter's constructor merges `process.env.<HANDLER>_<FIELD>` (env wins) over the App-supplied config blob. |
+
+All three are first-class. The SDK doesn't enforce one path; vendors building handlers don't need to care which one a merchant chose. A handler package's adapter constructor just merges its inputs and runs.
+
+### Implications for handler packages
+
+Handler authors should follow this convention to keep all three paths working:
+
+1. **Adapter constructor takes optional config** + reads matching env vars as fallback. Env wins when both are set:
+
+   ```ts
+   class FooHandler implements PaymentHandlerAdapter {
+     constructor(opts: { apiKey?: string; apiUrl?: string } = {}) {
+       this.apiKey = process.env.FOO_API_KEY ?? opts.apiKey
+       this.apiUrl = process.env.FOO_API_URL ?? opts.apiUrl
+       if (!this.apiKey) throw new Error("FOO_API_KEY required (env or App config)")
+     }
+   }
+   ```
+
+2. **Manifest is for the App's dashboard rendering only.** It's exported by the *handler npm package* (e.g. `@yourorg/saleor-handler-foo`), not by the upstream vendor. Stripe-the-company doesn't need to publish a Saleor-specific anything; the package author defines the manifest. In Path A (no App), the manifest is unused — it's just metadata that happens to ride along.
+
+3. **Self-registration is opportunistic.** The SDK's `registerHandler()` helper should no-op gracefully when no `agenticCommerceAppUrl` is configured. Storefront boots fine; if the App is later installed, the next register call lands.
+
+### Implications for the App
+
+The App's role becomes clearer once we accept it's optional:
+
+- **Sells itself as ops friction reduction**, not protocol enablement. Marketing language matters.
+- **Doesn't break anything when uninstalled.** Storefronts already running Path A or C continue to work; only Path B users feel anything.
+- **Doesn't assume any specific handler.** Even Prism, while shipped by us, is just one handler the merchant might or might not be running. The App's UI must handle the empty state gracefully.
+
+### Implications for the eventual handover
+
+This makes the Saleor-handover story trivial:
+- The App can transfer to a neutral org (Saleor, a foundation) — anyone using Path A is unaffected
+- Anyone running Path B keeps using whichever fork/instance they prefer
+- New handler vendors don't need anyone's permission — publish a package, document env vars, ship a manifest if they want App-managed support
+
+### What the SDK README should look like
+
+After this framing lands, the README's "Quickstart" should present the three paths up front, equally weighted, in this order:
+
+```
+## Quickstart
+
+### Path A — Pure env vars (no App)
+
+```ts
+import { createAgenticCommerce } from "@financedistrict/saleor-agentic-commerce-nextjs"
+import { PrismPaymentHandler } from "@financedistrict/saleor-prism-payment"
+
+const ac = createAgenticCommerce({
+  saleorApiUrl: process.env.NEXT_PUBLIC_SALEOR_API_URL!,
+  saleorAuthToken: process.env.SALEOR_AGENTIC_AUTH_TOKEN!,
+  storefrontUrl: process.env.NEXT_PUBLIC_STOREFRONT_URL!,
+  paymentHandlers: [new PrismPaymentHandler()],  // reads PRISM_API_* from env
+})
+```
+
+### Path B — App-managed (dashboard config)
+
+```ts
+const ac = await createAgenticCommerce({
+  configFromApp: true,
+  agenticCommerceAppUrl: process.env.AGENTIC_COMMERCE_APP_URL!,
+  saleorApiUrl: ...,
+  saleorAuthToken: ...,
+  storefrontUrl: ...,
+  paymentHandlerFactory: (cfg) => {
+    if (cfg.handlerId === "xyz.fd.prism_payment") return new PrismPaymentHandler(cfg.config)
+    return null
+  },
+})
+```
+
+### Path C — Hybrid
+
+Combine both — pass `paymentHandlers: [explicit instances]` for fixed config + `configFromApp: true` for App-managed dynamic config. Adapter constructors merge env over App config, env always wins.
+```
+
+The SDK code changes needed to make Path A first-class are minor and tracked in TODO:
+- Default `storeName` fallback when not provided (currently throws)
+- `registerHandler()` no-ops gracefully when `agenticCommerceAppUrl` is missing
+
 ---
 
 **Next concrete step:** spec audit (open question #1) + first PR slimming the Prism config UI. The slim-down PR can land before the broader registry exists; the new UI just hardcodes one handler manifest while we build the rest.
