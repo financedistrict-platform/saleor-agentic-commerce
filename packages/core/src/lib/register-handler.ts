@@ -61,8 +61,16 @@ export type HandlerManifest = {
 }
 
 export type RegisterHandlerOptions = {
-  /** Public URL of the Agentic Commerce App (e.g. https://agentic-app.example.com). */
-  agenticCommerceAppUrl: string
+  /**
+   * Public URL of the Agentic Commerce App (e.g. https://agentic-app.example.com).
+   *
+   * **Optional.** If undefined or empty, registration is skipped with a
+   * console.info — handler packages can call `registerHandler()`
+   * unconditionally on storefront boot without breaking the
+   * no-App-installed (Path A) deployment model. The handler still works
+   * normally; it just won't appear in the App's dashboard.
+   */
+  agenticCommerceAppUrl?: string
   /** Saleor GraphQL URL the storefront talks to. */
   saleorApiUrl: string
   /**
@@ -74,25 +82,46 @@ export type RegisterHandlerOptions = {
   manifest: HandlerManifest
 }
 
-export type RegisterHandlerResult = {
-  ok: true
-  handlerId: string
-  /** True if the App created a new entry; false if it merged into existing. */
-  created: boolean
-  manifestVersion: string
-}
+export type RegisterHandlerResult =
+  | {
+      ok: true
+      handlerId: string
+      /** True if the App created a new entry; false if it merged into existing. */
+      created: boolean
+      manifestVersion: string
+    }
+  | {
+      ok: true
+      /** Registration was skipped because no `agenticCommerceAppUrl` was supplied. */
+      skipped: true
+      reason: "no-agentic-commerce-app-url"
+    }
 
 /**
  * Register a handler manifest with the Agentic Commerce App.
  *
- * Throws on network error or non-2xx response, with a descriptive
- * message including the App's error body when available. Callers
- * can choose to swallow (boot still succeeds — handler just won't
- * appear in the dashboard) or rethrow.
+ * **Tolerant of missing App.** When `agenticCommerceAppUrl` is undefined
+ * or empty, returns `{ ok: true, skipped: true }` without making a
+ * network call. This is the Path A flow (no App installed) — handler
+ * packages should call this unconditionally; the helper figures out
+ * whether there's anyone to talk to.
+ *
+ * **Network errors and non-2xx responses are caught.** Returns a
+ * rejected `Promise<RegisterHandlerResult>` so `await` flows in
+ * boot-time code don't crash the storefront. Throws a descriptive
+ * Error including the App's response body when available — callers
+ * can decide whether to log + continue or rethrow.
  */
 export async function registerHandler(
   opts: RegisterHandlerOptions,
 ): Promise<RegisterHandlerResult> {
+  if (!opts.agenticCommerceAppUrl) {
+    console.info(
+      `[registerHandler] No agenticCommerceAppUrl configured — skipping registration of "${opts.manifest.id}". (Path A: handler still works via env vars.)`,
+    )
+    return { ok: true, skipped: true, reason: "no-agentic-commerce-app-url" }
+  }
+
   const url = `${opts.agenticCommerceAppUrl.replace(/\/$/, "")}/api/handlers/register`
 
   let response: Response
@@ -125,6 +154,9 @@ export async function registerHandler(
     )
   }
 
-  const body = (await response.json()) as RegisterHandlerResult
+  const body = (await response.json()) as Extract<
+    RegisterHandlerResult,
+    { skipped?: undefined }
+  >
   return body
 }
