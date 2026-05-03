@@ -15,6 +15,11 @@ type Props = {
   /** Persist updated entries; key is handlerId, value is full replace. */
   onSave: (handlers: Record<string, PaymentHandlerEntry>) => Promise<void>
   saving: boolean
+  /**
+   * Saleor API URL of the dashboard session. Forwarded to internal API
+   * routes so they can resolve the correct App auth context.
+   */
+  saleorApiUrl: string
 }
 
 /**
@@ -36,7 +41,12 @@ function deriveManageUrl(apiUrl: string): string {
   return "https://prism.fd.xyz/"
 }
 
-export function PaymentHandlerSettings({ handlers, onSave, saving }: Props) {
+export function PaymentHandlerSettings({
+  handlers,
+  onSave,
+  saving,
+  saleorApiUrl,
+}: Props) {
   const stored = handlers[PRISM_HANDLER_ID] ?? null
   const storedConfig = (stored?.config ?? null) as PrismHandlerConfig | null
 
@@ -83,31 +93,30 @@ export function PaymentHandlerSettings({ handlers, onSave, saving }: Props) {
     setTesting(true)
     setTestResult(null)
     try {
-      // Hit Prism's payment-profile endpoint to verify the API key is
-      // valid against the configured gateway. Prism returns the merchant's
-      // handler block on success (200), or 401 with an error message on
-      // bad creds.
+      // Proxied through the App's own backend — see
+      // /api/payment-handlers/test-connection. The dashboard iframe can't
+      // call Prism directly (CORS).
       const res = await fetch(
-        `${apiUrl.replace(/\/$/, "")}/api/v2/merchant/payment-profile`,
+        `/api/payment-handlers/test-connection?saleorApiUrl=${encodeURIComponent(saleorApiUrl)}`,
         {
-          headers: {
-            "x-api-key": apiKey,
-            "Content-Type": "application/json",
-          },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            handlerId: PRISM_HANDLER_ID,
+            apiUrl: apiUrl.trim(),
+            apiKey: apiKey.trim(),
+          }),
         },
       )
-      if (res.ok) {
-        setTestResult({
-          success: true,
-          message: "Connected to Prism. Credentials verified.",
-        })
-      } else {
-        const body = await res.text().catch(() => "")
+      if (!res.ok) {
         setTestResult({
           success: false,
-          message: `Prism returned ${res.status}${body ? `: ${body.slice(0, 120)}` : ""}`,
+          message: `Proxy returned ${res.status}`,
         })
+        return
       }
+      const body = (await res.json()) as { ok: boolean; message: string }
+      setTestResult({ success: body.ok, message: body.message })
     } catch (err) {
       setTestResult({
         success: false,

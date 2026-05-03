@@ -200,6 +200,7 @@ export default function ConfigurationPage() {
             handlers={paymentHandlers}
             onSave={(h) => saveConfig({ paymentHandlers: h })}
             saving={saving}
+            saleorApiUrl={saleorApiUrl}
           />
         )}
         {activeTab === "activity" && <ActivityDashboard />}
