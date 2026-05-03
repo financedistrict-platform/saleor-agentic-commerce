@@ -39,6 +39,23 @@ export type AgenticCommerceConfig = {
    */
   configFromApp?: boolean
   /**
+   * Public URL of the Saleor Agentic Commerce App (e.g.
+   * `https://agentic-app.example.com`). When set, the SDK fetches config
+   * via the App's `/api/config-public` endpoint instead of querying
+   * Saleor's `{ app { privateMetadata } }` directly.
+   *
+   * Set this when the storefront's Saleor App token belongs to a
+   * DIFFERENT Saleor App than the Agentic Commerce App that holds the
+   * dashboard config (the typical setup — storefront has its own
+   * service-account App, the Agentic Commerce App is installed via the
+   * dashboard with its own identity). Saleor's `{ app }` query always
+   * returns the calling App's metadata, so the storefront can't read the
+   * Agentic Commerce App's metadata directly.
+   *
+   * Only used when `configFromApp: true`.
+   */
+  agenticCommerceAppUrl?: string
+  /**
    * Cache TTL in milliseconds for App config (default: 60000 = 60s).
    * Only used when configFromApp is true.
    */
@@ -124,7 +141,8 @@ async function createFromApp(
   const appConfig = await loadConfigFromAppCached(
     config.saleorApiUrl,
     config.saleorAuthToken,
-    config.configCacheTtl
+    config.configCacheTtl,
+    { agenticCommerceAppUrl: config.agenticCommerceAppUrl }
   )
 
   // App config provides defaults; explicit config overrides
