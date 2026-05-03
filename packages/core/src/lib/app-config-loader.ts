@@ -75,15 +75,59 @@ const APP_METADATA_QUERY = `
 `
 
 /**
+ * Options for {@link loadConfigFromApp}.
+ *
+ * `agenticCommerceAppUrl`: when set, the loader fetches config from the
+ * Agentic Commerce App's HTTP endpoint (`${url}/api/config-public`) instead
+ * of querying Saleor's `{ app { privateMetadata } }` GraphQL directly.
+ *
+ * Use the HTTP mode when the storefront's Saleor App token resolves to a
+ * DIFFERENT Saleor App than the one holding the agentic-commerce config —
+ * which is the typical setup, since the Agentic Commerce App is installed
+ * via the dashboard and has its own identity, while the storefront's
+ * service-account App is a separate one. Saleor's `{ app }` query always
+ * returns the calling App's metadata, so the storefront can't read the
+ * Agentic Commerce App's metadata that way.
+ *
+ * The HTTP endpoint requires the same `apiUrl` + `token` for caller
+ * validation: the App probes Saleor with the supplied token to confirm
+ * it belongs to a real installed App, then returns its own metadata.
+ */
+export type LoadConfigOptions = {
+  agenticCommerceAppUrl?: string
+}
+
+/**
  * Load Agentic Commerce configuration from Saleor App metadata.
  *
- * @param apiUrl - Saleor GraphQL API URL
- * @param token  - Saleor App Token with appropriate permissions
+ * Two modes:
+ *
+ * 1. **Direct mode (default).** Queries Saleor's `{ app { privateMetadata } }`
+ *    using the provided token. Returns the calling App's metadata. Use this
+ *    only when the storefront is itself the Agentic Commerce App.
+ * 2. **HTTP mode** (when `options.agenticCommerceAppUrl` is set). Fetches
+ *    `${url}/api/config-public` with the same Saleor credentials forwarded
+ *    in `Authorization` + `saleor-api-url` headers. The App validates the
+ *    token, then returns its own parsed config.
+ *
+ * @param apiUrl  - Saleor GraphQL API URL
+ * @param token   - Saleor App Token with appropriate permissions
+ * @param options - Optional overrides; pass `agenticCommerceAppUrl` to
+ *                  fetch via the App's HTTP endpoint.
  */
 export async function loadConfigFromApp(
   apiUrl: string,
-  token: string
+  token: string,
+  options: LoadConfigOptions = {}
 ): Promise<AppConfig> {
+  if (options.agenticCommerceAppUrl) {
+    return loadConfigFromAppHttp(
+      options.agenticCommerceAppUrl,
+      apiUrl,
+      token
+    )
+  }
+
   const response = await fetch(apiUrl, {
     method: "POST",
     headers: {
@@ -115,6 +159,62 @@ export async function loadConfigFromApp(
   }
 
   return parseMetadata(json.data.app.privateMetadata)
+}
+
+/**
+ * HTTP mode: fetch parsed AppConfig from the Agentic Commerce App's
+ * public config endpoint. The App returns the same shape as
+ * `parseMetadata` produces, so we deserialize and pass through.
+ */
+async function loadConfigFromAppHttp(
+  agenticCommerceAppUrl: string,
+  saleorApiUrl: string,
+  saleorAppToken: string
+): Promise<AppConfig> {
+  const url = `${agenticCommerceAppUrl.replace(/\/$/, "")}/api/config-public`
+
+  let response: Response
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${saleorAppToken}`,
+        "saleor-api-url": saleorApiUrl,
+        Accept: "application/json",
+      },
+    })
+  } catch (err) {
+    throw new Error(
+      `Failed to reach Agentic Commerce App at ${url}: ${err instanceof Error ? err.message : "unknown"}`
+    )
+  }
+
+  if (!response.ok) {
+    let detail = ""
+    try {
+      const body = (await response.json()) as { error?: string }
+      if (body?.error) detail = `: ${body.error}`
+    } catch {
+      // ignore
+    }
+    throw new Error(
+      `Agentic Commerce App config-public returned ${response.status}${detail}`
+    )
+  }
+
+  const config = (await response.json()) as AppConfig
+  // The App returns the same shape `parseMetadata` produces; defensive
+  // fallbacks in case fields are absent (older App versions).
+  return {
+    enabled: !!config.enabled,
+    storeName: config.storeName ?? "",
+    storeDescription: config.storeDescription ?? "",
+    ucpEnabled: config.ucpEnabled !== false,
+    acpEnabled: !!config.acpEnabled,
+    acpApiKey: config.acpApiKey ?? "",
+    channels: config.channels ?? {},
+    paymentHandlers: config.paymentHandlers ?? [],
+  }
 }
 
 /**
@@ -214,14 +314,16 @@ let cache: CacheEntry | null = null
 /**
  * Load config with caching. Returns cached config if within TTL.
  *
- * @param apiUrl - Saleor GraphQL API URL
- * @param token  - Saleor App Token
- * @param ttlMs  - Cache TTL in milliseconds (default: 60000 = 60s)
+ * @param apiUrl  - Saleor GraphQL API URL
+ * @param token   - Saleor App Token
+ * @param ttlMs   - Cache TTL in milliseconds (default: 60000 = 60s)
+ * @param options - Optional loader options (forwarded to `loadConfigFromApp`).
  */
 export async function loadConfigFromAppCached(
   apiUrl: string,
   token: string,
-  ttlMs = 60_000
+  ttlMs = 60_000,
+  options: LoadConfigOptions = {}
 ): Promise<AppConfig> {
   const now = Date.now()
 
@@ -229,7 +331,7 @@ export async function loadConfigFromAppCached(
     return cache.config
   }
 
-  const config = await loadConfigFromApp(apiUrl, token)
+  const config = await loadConfigFromApp(apiUrl, token, options)
   cache = { config, loadedAt: now }
 
   return config
