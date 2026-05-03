@@ -46,14 +46,20 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   readonly name = "Finance District Prism"
 
   private client: PrismClient
+  private readonly apiUrl: string
 
   /** Cached Prism payment-profile for discovery (5 min TTL) */
   private profileCache: { data: Record<string, unknown[]>; expiry: number } | null = null
   private readonly PROFILE_TTL = 5 * 60 * 1000
 
   constructor(options: PrismPaymentHandlerOptions = {}) {
+    // Resolve once and store — needed to construct ACP/UCP spec URLs that
+    // point at gateway-hosted documents (`{apiUrl}/acp/spec.md`,
+    // `{apiUrl}/ucp/schema.json`, …). See Prism gateway impl in
+    // fd-prism-platform/src/api/Prism.Platform.Api.Gateway/Features/{Acp,Ucp}/.
+    this.apiUrl = options.apiUrl || process.env.PRISM_API_URL || "https://prism-gw.fd.xyz"
     this.client = new PrismClient({
-      apiUrl: options.apiUrl,
+      apiUrl: this.apiUrl,
       apiKey: options.apiKey,
     })
   }
@@ -70,18 +76,29 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     const profile = await this.fetchProfile()
     const handlers: unknown[] = []
 
+    // Per ACP 2026-04-17 PaymentHandler schema:
+    //   - `id` is the seller-defined INSTANCE identifier (Prism uses "x402")
+    //   - `name` is the reverse-DNS handler-TYPE identifier (the namespace key
+    //     in Prism's payment-profile response)
+    // We previously had these reversed, which is harmless when there's only
+    // one Prism handler but breaks ACP semantics for any consumer relying on
+    // them. Spec URLs now point at gateway-hosted docs (Prism gateway serves
+    // /acp/spec.md, /acp/config_schema.json, /acp/instrument_schema.json),
+    // not the placeholder fd.xyz URLs that never resolved. Long-term, fold
+    // this whole block away by calling Prism's discovery endpoint once it
+    // exists — see fd-prism-platform issue #22.
     for (const [namespace, entries] of Object.entries(profile)) {
       for (const entry of entries as any[]) {
         handlers.push({
-          id: namespace,
-          name: "xyz.fd.prism_payment",
+          id: entry.id || "x402",
+          name: namespace,
           version: entry.version || "2026-01-15",
-          spec: "https://fd.xyz/specs/prism-payment/2026-01-15",
+          spec: `${this.apiUrl}/acp/spec.md`,
           requires_delegate_payment: false,
           requires_pci_compliance: false,
           psp: "prism",
-          config_schema: "https://fd.xyz/specs/prism-payment/config-schema.json",
-          instrument_schemas: ["https://fd.xyz/specs/prism-payment/x402-instrument-schema.json"],
+          config_schema: `${this.apiUrl}/acp/config_schema.json`,
+          instrument_schemas: [`${this.apiUrl}/acp/instrument_schema.json`],
           config: entry.config || {},
         })
       }
@@ -183,16 +200,17 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     const config = (checkoutMetadata?.[PRISM_HANDLER_ID] ?? checkoutMetadata?.[PRISM_CHECKOUT_CONFIG_KEY]) as any
     if (!config?.config) return []
 
+    // See note in getAcpDiscoveryHandlers re: id/name semantics + spec URLs.
     return [{
-      id: PRISM_HANDLER_ID,
-      name: "xyz.fd.prism_payment",
+      id: config.id || "x402",
+      name: PRISM_HANDLER_ID,
       version: config.version || "2026-01-15",
-      spec: "https://fd.xyz/specs/prism-payment/2026-01-15",
+      spec: `${this.apiUrl}/acp/spec.md`,
       requires_delegate_payment: false,
       requires_pci_compliance: false,
       psp: "prism",
-      config_schema: "https://fd.xyz/specs/prism-payment/config-schema.json",
-      instrument_schemas: ["https://fd.xyz/specs/prism-payment/x402-instrument-schema.json"],
+      config_schema: `${this.apiUrl}/acp/config_schema.json`,
+      instrument_schemas: [`${this.apiUrl}/acp/instrument_schema.json`],
       config: config.config,
     }]
   }
