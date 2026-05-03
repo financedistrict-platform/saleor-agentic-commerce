@@ -58,6 +58,40 @@ fields so we don't mislead merchants.
       stored consumers of the previous key. Fine for v1 (single
       Bearer-token model), but worth a doc note.
 
+## Make Path A first-class
+*(per design doc §13 — App is convenience, not a runtime dependency)*
+
+The SDK already structurally supports running without the App (Path A),
+but a couple of friction points trip up new users. Fix these so all three
+paths are equally clean.
+
+- [ ] **Default `storeName` fallback in `createAgenticCommerce`.** Today
+      the explicit-config path throws `storeName is required (or use
+      configFromApp: true)`. Replace with a sensible default like
+      `"My Store"` so a Path A storefront can boot from env vars alone.
+      Merchant overrides via `storeName: process.env.STORE_NAME` if they
+      care.
+- [ ] **`registerHandler()` no-ops gracefully when no App URL.** Today
+      it would error if `agenticCommerceAppUrl` is undefined or
+      unreachable. Path A doesn't have an App at all, so handler
+      packages calling `registerHandler` should be able to do so
+      unconditionally — log a warning and return when the App isn't
+      configured, don't throw. Storefront boots fine; handler still
+      works (it has its env vars).
+- [ ] **README rewrite — three-paths quickstart.** README currently
+      implies App is required. Restructure to present Path A first
+      (simplest), then B, then C — each with a copy-pasteable code
+      block. Also update the App's `GeneralSettings.tsx` "SDK Setup"
+      example which is currently out of date.
+- [ ] **"How to build a handler" guide.** Codify the convention that
+      handler adapter constructors should merge env over passed config,
+      with env winning. Plus the manifest export for App-managed mode.
+      One reference example (Prism), one stub example (`saleor-handler-template`).
+- [ ] **Installation Guide / User Guide** as a top-level docs artifact.
+      Aggregates Quickstart + per-path setup + handler authoring guide
+      into a coherent "I just heard about agentic commerce, where do I
+      start" doc.
+
 ## Cleanup / DX
 
 - [ ] **Automated SDK release workflow.** Today every npm publish is
