@@ -6,7 +6,11 @@ import { GeneralSettings } from "@/components/GeneralSettings"
 import { ChannelSettings } from "@/components/ChannelSettings"
 import { PaymentHandlerSettings } from "@/components/PaymentHandlerSettings"
 import { ActivityDashboard } from "@/components/ActivityDashboard"
-import type { GlobalConfig, ChannelConfig } from "@/lib/metadata-keys"
+import type {
+  GlobalConfig,
+  ChannelConfig,
+  PaymentHandlerEntry,
+} from "@/lib/metadata-keys"
 import { DEFAULT_GLOBAL_CONFIG } from "@/lib/metadata-keys"
 
 type Tab = "general" | "channels" | "payment-handlers" | "activity"
@@ -23,6 +27,7 @@ type Channel = {
 type ConfigData = {
   global: GlobalConfig
   channels: Channel[]
+  paymentHandlers: Record<string, PaymentHandlerEntry>
 }
 
 /**
@@ -73,6 +78,7 @@ export default function ConfigurationPage() {
   const saveConfig = async (body: {
     global?: Partial<GlobalConfig>
     channels?: Record<string, ChannelConfig>
+    paymentHandlers?: Record<string, PaymentHandlerEntry>
   }) => {
     if (!saleorApiUrl) return
 
@@ -140,6 +146,7 @@ export default function ConfigurationPage() {
 
   const globalConfig = data?.global ?? DEFAULT_GLOBAL_CONFIG
   const channels = data?.channels ?? []
+  const paymentHandlers = data?.paymentHandlers ?? {}
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "general", label: "General" },
@@ -188,7 +195,13 @@ export default function ConfigurationPage() {
             saving={saving}
           />
         )}
-        {activeTab === "payment-handlers" && <PaymentHandlerSettings />}
+        {activeTab === "payment-handlers" && (
+          <PaymentHandlerSettings
+            handlers={paymentHandlers}
+            onSave={(h) => saveConfig({ paymentHandlers: h })}
+            saving={saving}
+          />
+        )}
         {activeTab === "activity" && <ActivityDashboard />}
       </div>
     </div>

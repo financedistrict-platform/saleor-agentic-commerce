@@ -115,31 +115,18 @@ export function ChannelSettings({ channels, onSave, saving }: Props) {
                   </label>
                 </div>
 
-                {config.paymentHandlers.length > 0 ? (
-                  <div style={{ marginTop: "12px" }}>
-                    <span style={styles.label}>Payment Handlers:</span>
-                    <ul style={styles.handlerList}>
-                      {config.paymentHandlers.map((ph) => (
-                        <li key={ph.handlerId} style={styles.handlerItem}>
-                          <code>{ph.handlerId}</code>
-                          <span
-                            style={{
-                              color: ph.enabled ? "#059669" : "#9ca3af",
-                              fontSize: "12px",
-                            }}
-                          >
-                            {ph.enabled ? "Active" : "Inactive"}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : (
-                  <p style={styles.hint}>
-                    No payment handlers assigned. Configure them in the
-                    Payment Handlers tab.
-                  </p>
-                )}
+                {/*
+                  ChannelConfig.paymentHandlers is deprecated — handler
+                  enable/disable now lives on the handler entry itself
+                  (PaymentHandlerEntry.channels). For now the Channels tab
+                  just nudges the operator to the Payment Handlers tab; a
+                  follow-up PR will surface the active handlers per channel
+                  from the new metadata layout.
+                */}
+                <p style={styles.hint}>
+                  Configure payment handlers (Prism, etc.) and their
+                  per-channel scoping in the Payment Handlers tab.
+                </p>
               </div>
             )}
           </div>

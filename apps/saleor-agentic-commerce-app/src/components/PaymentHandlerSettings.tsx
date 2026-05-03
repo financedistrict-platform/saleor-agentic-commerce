@@ -1,94 +1,139 @@
 "use client"
 
-import { useState } from "react"
-import type { PrismConfig } from "@/lib/metadata-keys"
+import { useEffect, useMemo, useState } from "react"
+import {
+  PRISM_HANDLER_ID,
+  DEFAULT_PRISM_HANDLER_CONFIG,
+  DEFAULT_PRISM_HANDLER_ENTRY,
+  type PaymentHandlerEntry,
+  type PrismHandlerConfig,
+} from "@/lib/metadata-keys"
 
 type Props = {
-  // Phase 2: Will receive current payment handler configs
-  onSave?: (configs: unknown) => Promise<void>
+  /** Map of handlerId → stored entry. Empty object on first load. */
+  handlers: Record<string, PaymentHandlerEntry>
+  /** Persist updated entries; key is handlerId, value is full replace. */
+  onSave: (handlers: Record<string, PaymentHandlerEntry>) => Promise<void>
+  saving: boolean
 }
 
-const DEFAULT_PRISM_CONFIG: PrismConfig = {
-  apiUrl: "https://prism-gw.fd.xyz",
-  apiKey: "",
-  webhookSecret: "",
-  acceptedTokens: ["USDC"],
-  acceptedChains: ["base"],
-  merchantWallet: "",
+/**
+ * Derive the merchant-portal "Manage in Prism →" deep link from the
+ * configured gateway URL. Convention: prism-gw.<env> → prism.<env>.
+ * Falls back to a stable default if the host doesn't match the convention.
+ */
+function deriveManageUrl(apiUrl: string): string {
+  try {
+    const u = new URL(apiUrl)
+    if (u.hostname.startsWith("prism-gw.")) {
+      u.hostname = u.hostname.replace(/^prism-gw\./, "prism.")
+      u.pathname = "/"
+      return u.origin + "/"
+    }
+  } catch {
+    // ignore — fall through
+  }
+  return "https://prism.fd.xyz/"
 }
 
-const AVAILABLE_TOKENS = ["USDC", "FDUSD"]
-const AVAILABLE_CHAINS = ["base", "bsc", "ethereum"]
+export function PaymentHandlerSettings({ handlers, onSave, saving }: Props) {
+  const stored = handlers[PRISM_HANDLER_ID] ?? null
+  const storedConfig = (stored?.config ?? null) as PrismHandlerConfig | null
 
-export function PaymentHandlerSettings({ onSave }: Props) {
-  const [prismConfig, setPrismConfig] = useState<PrismConfig>(DEFAULT_PRISM_CONFIG)
+  const [enabled, setEnabled] = useState<boolean>(
+    stored?.enabled ?? DEFAULT_PRISM_HANDLER_ENTRY.enabled,
+  )
+  const [apiUrl, setApiUrl] = useState<string>(
+    storedConfig?.apiUrl ?? DEFAULT_PRISM_HANDLER_CONFIG.apiUrl,
+  )
+  const [apiKey, setApiKey] = useState<string>(
+    storedConfig?.apiKey ?? DEFAULT_PRISM_HANDLER_CONFIG.apiKey,
+  )
+
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{
     success: boolean
     message: string
   } | null>(null)
 
-  const update = <K extends keyof PrismConfig>(
-    key: K,
-    value: PrismConfig[K]
-  ) => {
-    setPrismConfig((prev) => ({ ...prev, [key]: value }))
-    setTestResult(null)
-  }
+  // Re-sync local state if the upstream `handlers` prop changes (e.g.
+  // after a save round-trip refreshes the loaded config).
+  useEffect(() => {
+    if (!stored) return
+    setEnabled(stored.enabled)
+    if (storedConfig) {
+      setApiUrl(storedConfig.apiUrl ?? DEFAULT_PRISM_HANDLER_CONFIG.apiUrl)
+      setApiKey(storedConfig.apiKey ?? DEFAULT_PRISM_HANDLER_CONFIG.apiKey)
+    }
+  }, [stored, storedConfig])
 
-  const toggleArrayItem = (
-    key: "acceptedTokens" | "acceptedChains",
-    item: string
-  ) => {
-    const current = prismConfig[key]
-    const next = current.includes(item)
-      ? current.filter((i) => i !== item)
-      : [...current, item]
-    update(key, next)
-  }
+  const manageUrl = useMemo(() => deriveManageUrl(apiUrl), [apiUrl])
 
-  const testConnection = async () => {
+  const dirty = useMemo(() => {
+    const ref = stored ?? DEFAULT_PRISM_HANDLER_ENTRY
+    const refConfig = (ref.config ?? {}) as PrismHandlerConfig
+    return (
+      enabled !== ref.enabled ||
+      apiUrl !== (refConfig.apiUrl ?? DEFAULT_PRISM_HANDLER_CONFIG.apiUrl) ||
+      apiKey !== (refConfig.apiKey ?? DEFAULT_PRISM_HANDLER_CONFIG.apiKey)
+    )
+  }, [stored, enabled, apiUrl, apiKey])
+
+  async function testConnection() {
     setTesting(true)
     setTestResult(null)
-
     try {
-      // Call Prism API to verify credentials
-      const response = await fetch(
-        `${prismConfig.apiUrl}/api/v2/merchant/payment-profile`,
+      // Hit Prism's payment-profile endpoint to verify the API key is
+      // valid against the configured gateway. Prism returns the merchant's
+      // handler block on success (200), or 401 with an error message on
+      // bad creds.
+      const res = await fetch(
+        `${apiUrl.replace(/\/$/, "")}/api/v2/merchant/payment-profile`,
         {
           headers: {
-            Authorization: `Bearer ${prismConfig.apiKey}`,
+            "x-api-key": apiKey,
             "Content-Type": "application/json",
           },
-        }
+        },
       )
-
-      if (response.ok) {
+      if (res.ok) {
         setTestResult({
           success: true,
-          message: "Connection successful! Prism credentials verified.",
+          message: "Connected to Prism. Credentials verified.",
         })
       } else {
+        const body = await res.text().catch(() => "")
         setTestResult({
           success: false,
-          message: `Connection failed: ${response.status} ${response.statusText}`,
+          message: `Prism returned ${res.status}${body ? `: ${body.slice(0, 120)}` : ""}`,
         })
       }
-    } catch (error) {
+    } catch (err) {
       setTestResult({
         success: false,
-        message: `Connection failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+        message: `Network error: ${err instanceof Error ? err.message : "unknown"}`,
       })
     } finally {
       setTesting(false)
     }
   }
 
+  async function handleSave() {
+    const entry: PaymentHandlerEntry = {
+      enabled,
+      channels: stored?.channels ?? null,
+      config: { apiUrl: apiUrl.trim(), apiKey: apiKey.trim() },
+    }
+    await onSave({ [PRISM_HANDLER_ID]: entry })
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
       <p style={styles.description}>
-        Configure payment handlers that process agent payments. Currently
-        supported: Finance District Prism (stablecoin payments via
+        Payment handlers process agent transactions. Each handler is a
+        separate service (Prism, Stripe, etc.); the Agentic Commerce App
+        routes UCP/ACP traffic to whichever handlers you have enabled.
+        Currently shipped: Finance District Prism (stablecoin payments via
         x402/EIP-3009).
       </p>
 
@@ -97,128 +142,82 @@ export function PaymentHandlerSettings({ onSave }: Props) {
         <div style={styles.cardHeader}>
           <div>
             <h3 style={styles.cardTitle}>Prism Payment Handler</h3>
-            <span style={styles.handlerId}>xyz.fd.prism_payment</span>
+            <span style={styles.handlerId}>{PRISM_HANDLER_ID}</span>
           </div>
+          <a
+            href={manageUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={styles.manageLink}
+          >
+            Manage in Prism →
+          </a>
         </div>
 
         <div style={styles.form}>
+          <label style={styles.toggleRow}>
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            <span style={styles.toggleLabel}>
+              Enabled — route agent payments to Prism
+            </span>
+          </label>
+
           <div style={styles.field}>
             <label style={styles.label}>Prism Gateway URL</label>
             <input
               type="text"
-              value={prismConfig.apiUrl}
-              onChange={(e) => update("apiUrl", e.target.value)}
+              value={apiUrl}
+              onChange={(e) => {
+                setApiUrl(e.target.value)
+                setTestResult(null)
+              }}
               placeholder="https://prism-gw.fd.xyz"
               style={styles.input}
             />
+            <span style={styles.hint}>
+              Override only when pointing at a self-hosted or test Prism
+              instance.
+            </span>
           </div>
 
           <div style={styles.field}>
             <label style={styles.label}>API Key</label>
             <input
               type="password"
-              value={prismConfig.apiKey}
-              onChange={(e) => update("apiKey", e.target.value)}
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value)
+                setTestResult(null)
+              }}
               placeholder="Your Prism API key"
               style={styles.input}
             />
-          </div>
-
-          <div style={styles.field}>
-            <label style={styles.label}>Webhook Secret</label>
-            <input
-              type="password"
-              value={prismConfig.webhookSecret}
-              onChange={(e) => update("webhookSecret", e.target.value)}
-              placeholder="HMAC signing secret"
-              style={styles.input}
-            />
             <span style={styles.hint}>
-              Used to verify incoming Prism webhook payloads
+              Generated in your Prism merchant dashboard. All other settings
+              (accepted chains, accepted tokens, settlement wallet, webhook
+              secrets) are managed in Prism — use the &quot;Manage in
+              Prism&quot; link above.
             </span>
           </div>
 
-          <div style={styles.field}>
-            <label style={styles.label}>Merchant Wallet Address</label>
-            <input
-              type="text"
-              value={prismConfig.merchantWallet}
-              onChange={(e) => update("merchantWallet", e.target.value)}
-              placeholder="0x..."
-              style={{ ...styles.input, fontFamily: "monospace" }}
-            />
-            <span style={styles.hint}>
-              Settlement destination for stablecoin payments
-            </span>
-          </div>
-
-          <div style={styles.field}>
-            <label style={styles.label}>Accepted Tokens</label>
-            <div style={styles.chipRow}>
-              {AVAILABLE_TOKENS.map((token) => (
-                <label key={token} style={styles.chip}>
-                  <input
-                    type="checkbox"
-                    checked={prismConfig.acceptedTokens.includes(token)}
-                    onChange={() => toggleArrayItem("acceptedTokens", token)}
-                    style={{ display: "none" }}
-                  />
-                  <span
-                    style={{
-                      ...styles.chipLabel,
-                      ...(prismConfig.acceptedTokens.includes(token)
-                        ? styles.chipActive
-                        : {}),
-                    }}
-                  >
-                    {token}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div style={styles.field}>
-            <label style={styles.label}>Accepted Chains</label>
-            <div style={styles.chipRow}>
-              {AVAILABLE_CHAINS.map((chain) => (
-                <label key={chain} style={styles.chip}>
-                  <input
-                    type="checkbox"
-                    checked={prismConfig.acceptedChains.includes(chain)}
-                    onChange={() => toggleArrayItem("acceptedChains", chain)}
-                    style={{ display: "none" }}
-                  />
-                  <span
-                    style={{
-                      ...styles.chipLabel,
-                      ...(prismConfig.acceptedChains.includes(chain)
-                        ? styles.chipActive
-                        : {}),
-                    }}
-                  >
-                    {chain.charAt(0).toUpperCase() + chain.slice(1)}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {/* Test Connection */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "16px",
-              marginTop: "8px",
-            }}
-          >
+          <div style={styles.actionsRow}>
             <button
               onClick={testConnection}
-              disabled={testing || !prismConfig.apiKey}
+              disabled={testing || !apiKey}
               style={styles.secondaryButton}
             >
               {testing ? "Testing..." : "Test Connection"}
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving || !dirty}
+              style={styles.primaryButton}
+            >
+              {saving ? "Saving..." : "Save"}
             </button>
             {testResult && (
               <span
@@ -237,7 +236,8 @@ export function PaymentHandlerSettings({ onSave }: Props) {
       {/* Placeholder for additional handlers */}
       <div style={{ ...styles.card, borderStyle: "dashed", opacity: 0.6 }}>
         <p style={{ margin: 0, color: "#6b7280", textAlign: "center" }}>
-          + Additional payment handlers coming soon
+          + Additional payment handlers will be configurable here once the
+          handler registry lands.
         </p>
       </div>
     </div>
@@ -264,6 +264,7 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: "space-between",
     alignItems: "flex-start",
     marginBottom: "20px",
+    gap: "16px",
   },
   cardTitle: {
     margin: 0,
@@ -275,10 +276,27 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#9ca3af",
     fontFamily: "monospace",
   },
+  manageLink: {
+    fontSize: "13px",
+    color: "#2563eb",
+    textDecoration: "none",
+    fontWeight: 500,
+    whiteSpace: "nowrap",
+  },
   form: {
     display: "flex",
     flexDirection: "column" as const,
     gap: "16px",
+  },
+  toggleRow: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    cursor: "pointer",
+  },
+  toggleLabel: {
+    fontSize: "14px",
+    color: "#374151",
   },
   field: {
     display: "flex",
@@ -300,30 +318,24 @@ const styles: Record<string, React.CSSProperties> = {
   hint: {
     fontSize: "12px",
     color: "#9ca3af",
+    lineHeight: "1.4",
   },
-  chipRow: {
+  actionsRow: {
     display: "flex",
-    gap: "8px",
+    alignItems: "center",
+    gap: "12px",
+    marginTop: "8px",
     flexWrap: "wrap" as const,
   },
-  chip: {
-    cursor: "pointer",
-  },
-  chipLabel: {
-    display: "inline-block",
-    padding: "4px 12px",
-    borderRadius: "16px",
+  primaryButton: {
+    padding: "8px 16px",
     fontSize: "13px",
     fontWeight: 500,
-    border: "1px solid #d1d5db",
-    color: "#6b7280",
-    background: "#fff",
-    transition: "all 0.15s",
-  },
-  chipActive: {
-    background: "#eff6ff",
-    borderColor: "#2563eb",
-    color: "#2563eb",
+    color: "#fff",
+    background: "#2563eb",
+    border: "1px solid #2563eb",
+    borderRadius: "6px",
+    cursor: "pointer",
   },
   secondaryButton: {
     padding: "8px 16px",

@@ -20,11 +20,13 @@ export async function GET(request: NextRequest) {
   try {
     const manager = new ConfigManager(auth.saleorApiUrl, auth.token)
 
-    const [globalConfig, channelConfigs, channels] = await Promise.all([
-      manager.getGlobalConfig(),
-      manager.getAllChannelConfigs(),
-      manager.getChannels(),
-    ])
+    const [globalConfig, channelConfigs, channels, paymentHandlers] =
+      await Promise.all([
+        manager.getGlobalConfig(),
+        manager.getAllChannelConfigs(),
+        manager.getChannels(),
+        manager.getAllPaymentHandlers(),
+      ])
 
     return NextResponse.json({
       global: globalConfig,
@@ -32,6 +34,7 @@ export async function GET(request: NextRequest) {
         ...ch,
         agenticConfig: channelConfigs[ch.slug] ?? null,
       })),
+      paymentHandlers,
     })
   } catch (error) {
     console.error("[Config API] Failed to load config:", error)
@@ -69,6 +72,14 @@ export async function POST(request: NextRequest) {
     if (body.channels) {
       for (const [slug, config] of Object.entries(body.channels)) {
         await manager.saveChannelConfig(slug, config as any)
+      }
+    }
+
+    // Save per-handler entries — body.paymentHandlers maps handlerId →
+    // PaymentHandlerEntry (full replace per handler).
+    if (body.paymentHandlers) {
+      for (const [handlerId, entry] of Object.entries(body.paymentHandlers)) {
+        await manager.savePaymentHandler(handlerId, entry as any)
       }
     }
 

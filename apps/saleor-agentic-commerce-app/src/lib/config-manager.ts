@@ -12,6 +12,7 @@ import {
   DEFAULT_CHANNEL_CONFIG,
   type GlobalConfig,
   type ChannelConfig,
+  type PaymentHandlerEntry,
 } from "./metadata-keys"
 import { SaleorApiClient, QUERIES, MUTATIONS } from "./saleor-api"
 
@@ -158,6 +159,59 @@ export class ConfigManager {
     await this.client.query(MUTATIONS.UPDATE_APP_METADATA, {
       id: appId,
       input: [{ key: KEYS.channel(slug), value: JSON.stringify(config) }],
+    })
+  }
+
+  // ─── Payment handlers ────────────────────────────────────
+
+  /**
+   * Get config for a single payment handler by reverse-DNS id.
+   * Returns null if the handler has no stored entry.
+   */
+  async getPaymentHandler(handlerId: string): Promise<PaymentHandlerEntry | null> {
+    const metadata = await this.getAllMetadata()
+    const raw = metadata.get(KEYS.handler(handlerId))
+    if (!raw) return null
+    try {
+      return JSON.parse(raw) as PaymentHandlerEntry
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Get all payment handler entries keyed by reverse-DNS handlerId.
+   */
+  async getAllPaymentHandlers(): Promise<Record<string, PaymentHandlerEntry>> {
+    const metadata = await this.getAllMetadata()
+    const handlerPrefix = `${METADATA_PREFIX}handler__`
+    const handlers: Record<string, PaymentHandlerEntry> = {}
+
+    for (const [key, value] of metadata) {
+      if (key.startsWith(handlerPrefix)) {
+        const handlerId = key.slice(handlerPrefix.length)
+        try {
+          handlers[handlerId] = JSON.parse(value) as PaymentHandlerEntry
+        } catch {
+          // Skip malformed entries — surfaced to operator on next save.
+        }
+      }
+    }
+
+    return handlers
+  }
+
+  /**
+   * Save (or replace) a payment handler entry.
+   */
+  async savePaymentHandler(
+    handlerId: string,
+    entry: PaymentHandlerEntry,
+  ): Promise<void> {
+    const appId = await this.ensureAppId()
+    await this.client.query(MUTATIONS.UPDATE_APP_METADATA, {
+      id: appId,
+      input: [{ key: KEYS.handler(handlerId), value: JSON.stringify(entry) }],
     })
   }
 
