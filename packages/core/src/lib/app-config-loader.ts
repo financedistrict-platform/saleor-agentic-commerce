@@ -20,7 +20,11 @@ const KEYS = {
   acpEnabled: `${METADATA_PREFIX}acp_enabled`,
   acpApiKey: `${METADATA_PREFIX}acp_api_key`,
   channel: (slug: string) => `${METADATA_PREFIX}channel__${slug}`,
+  // New shape (PR #10) — per-handler entry stored under handler__<id>.
+  handler: (handlerId: string) => `${METADATA_PREFIX}handler__${handlerId}`,
 } as const
+
+const HANDLER_KEY_PREFIX = `${METADATA_PREFIX}handler__`
 
 // ─── Types ──────────────────────────────────────────────
 
@@ -44,6 +48,13 @@ export type AppChannelConfig = {
 export type AppPaymentHandlerConfig = {
   handlerId: string
   enabled: boolean
+  /**
+   * Optional channel allow-list. `null` / `undefined` means "all channels".
+   * Set by the App's Payment Handlers tab; only applies to entries stored
+   * in the new per-handler key shape. Old per-channel-nested entries leave
+   * this undefined.
+   */
+  channels?: string[] | null
   config: Record<string, unknown>
 }
 
@@ -130,7 +141,7 @@ function parseMetadata(entries: MetadataEntry[]): AppConfig {
     paymentHandlers: [],
   }
 
-  // Parse per-channel configs
+  // Parse per-channel configs (still used for protocol enable/disable per channel)
   const channelPrefix = `${METADATA_PREFIX}channel__`
   const allHandlers = new Map<string, AppPaymentHandlerConfig>()
 
@@ -141,7 +152,9 @@ function parseMetadata(entries: MetadataEntry[]): AppConfig {
         const channelConfig = JSON.parse(value) as AppChannelConfig
         config.channels[slug] = channelConfig
 
-        // Collect unique payment handlers across channels
+        // Backward-compat: older configs stored handlers nested inside
+        // channel entries. Read those too so we don't lose state from a
+        // pre-PR-10 install.
         for (const ph of channelConfig.paymentHandlers ?? []) {
           if (ph.enabled && !allHandlers.has(ph.handlerId)) {
             allHandlers.set(ph.handlerId, ph)
@@ -149,6 +162,37 @@ function parseMetadata(entries: MetadataEntry[]): AppConfig {
         }
       } catch {
         // Skip malformed channel config
+      }
+    }
+  }
+
+  // New shape (PR #10): per-handler entries stored under
+  // `agentic_commerce__handler__<handlerId>` as a JSON blob with
+  // `{ enabled, channels, config }`. These take precedence over the
+  // backward-compat channel-nested reads above, which they completely
+  // replace once the App writes a value (the App's Payment Handlers tab
+  // never writes the old shape).
+  for (const [key, value] of metadata) {
+    if (key.startsWith(HANDLER_KEY_PREFIX)) {
+      const handlerId = key.slice(HANDLER_KEY_PREFIX.length)
+      try {
+        const entry = JSON.parse(value) as {
+          enabled: boolean
+          channels?: string[] | null
+          config: Record<string, unknown>
+        }
+        if (!entry.enabled) {
+          allHandlers.delete(handlerId)
+          continue
+        }
+        allHandlers.set(handlerId, {
+          handlerId,
+          enabled: true,
+          channels: entry.channels ?? null,
+          config: entry.config ?? {},
+        })
+      } catch {
+        // Skip malformed handler entry
       }
     }
   }

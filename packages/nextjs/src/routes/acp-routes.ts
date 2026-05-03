@@ -69,9 +69,11 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
     return auth === `Bearer ${config.acpApiKey}`
   }
 
-  function endpointBaseUrl(request: Request): string {
-    const url = new URL(request.url)
-    return `${url.origin}/api/acp`
+  function endpointBaseUrl(_request: Request): string {
+    // See note in ucp-routes — use the configured public storefront URL
+    // rather than the request URL (which falls back to the internal bind
+    // address in Next.js).
+    return `${config.storefrontUrl.replace(/\/$/, "")}/api/acp`
   }
 
   /**

@@ -72,9 +72,14 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     return Response.json(formatUcpError({ ucpVersion: config.ucpVersion, code, content }), { status })
   }
 
-  function endpointBaseUrl(request: Request): string {
-    const url = new URL(request.url)
-    return `${url.origin}/api/ucp`
+  function endpointBaseUrl(_request: Request): string {
+    // Use the storefront's configured public URL rather than the incoming
+    // request's URL. `request.url` in Next.js is path-only on the wire, so
+    // `new URL(request.url)` falls back to the container's internal bind
+    // address (e.g. http://0.0.0.0:3000) — not what we want to advertise to
+    // agents. The storefront knows its own public URL because the merchant
+    // passes it explicitly when calling `createAgenticCommerce()`.
+    return `${config.storefrontUrl.replace(/\/$/, "")}/api/ucp`
   }
 
   /**
