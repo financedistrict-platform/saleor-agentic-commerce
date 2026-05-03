@@ -6,8 +6,8 @@ the PR; when it's done, strike or remove.
 
 ## In flight
 
-- **fd-infra#49** — install runbook rewrite (docs only)
-- **saleor-agentic-commerce#7** — handler registry design doc (review)
+- **fd-grocery-store deploy 25281041108** — `configFromApp` switch
+  (verifying end-to-end Pattern A)
 
 ## Up next
 
@@ -16,18 +16,48 @@ the PR; when it's done, strike or remove.
       App's webhook history (Apps → Agentic Commerce → Webhooks). The App's
       handlers will no-op on non-agent orders by design — what we're proving
       is just that the wire is up.
-- [ ] **Storefront SDK end-to-end check.** Hit the storefront's
-      `/.well-known/ucp` and `/.well-known/acp.json`. Confirm:
-      - UCP `payment_handlers` includes `xyz.fd.prism_payment` with the
-        new (post-#8) `id="x402"`, `name="xyz.fd.prism_payment"` semantics.
-      - ACP `capabilities.payment.handlers[]` includes the same with
-        gateway-hosted spec URLs (no more `fd.xyz/specs/...` placeholders).
-      - `fulfillment.methods[]` reflects whichever shipping methods are
-        configured on the active channel in Saleor (sanity-check the
-        Pattern B read-through is working).
-- [ ] **Audit App's other tabs** — General / Channels / Activity. What's
-      actually wired vs. stub? Likely the same `no-save` pattern the Prism
-      tab had until #10. Map each tab's state and queue follow-ups.
+
+## Tab audit — follow-ups
+*(survey of General / Channels / Activity tabs in the App, 2026-05-03)*
+
+The dashboard saves a number of fields the SDK reads but doesn't actually
+enforce. Either close the gap (make the SDK honor them) or remove the
+fields so we don't mislead merchants.
+
+- [ ] **Master `enabled` toggle is decorative.** Saved as
+      `agentic_commerce__enabled`, read by `loadConfigFromApp` into
+      `appConfig.enabled`, **never used** anywhere in the SDK. Merchants
+      who toggle off in the dashboard still serve UCP/ACP routes. Either:
+      (a) the SDK's UCP/ACP route handlers short-circuit when
+      `appConfig.enabled === false`, or (b) hide the toggle until (a)
+      ships. Currently misleading.
+- [ ] **`ucpEnabled` / `acpEnabled` per-protocol toggles are decorative.**
+      Same pattern as the master toggle — saved, read, ignored. Either
+      enforce (route handlers 404 when disabled) or remove.
+- [ ] **Per-channel `enabled` is decorative.** Saved per channel via the
+      Channels tab, never enforced. UCP/ACP requests aren't filtered by
+      channel today (the SDK uses a default channel from config). Tied
+      to per-channel handler scoping work in the registry track —
+      probably best implemented together.
+- [ ] **Per-channel `protocols` selector is decorative.** Same.
+- [ ] **GeneralSettings "SDK Setup" code example is out of date.** Shows
+      a minimal `configFromApp: true` snippet but omits the
+      `paymentHandlerFactory` callback that's actually required to
+      instantiate handlers (mirroring what we just shipped in
+      fd-grocery-store#7). Update the example to match real usage, or
+      link to fd-grocery-store as a reference impl.
+- [ ] **Activity tab is a pure stub.** All stats `—`, empty-state
+      reads "Phase 4 coming soon". No data fetching. Implementation
+      blocked on activity persistence (today the webhook handlers
+      `// TODO Phase 4: Write to activity tracking storage`). Decide
+      whether to ship a minimal v1 (e.g. show recent agent orders read
+      directly from Saleor with the `agent_session` privateMetadata
+      filter) or leave the stub and remove the misleading numbers row.
+- [ ] **ACP API Key regeneration is local-only.** Pressing "Regenerate"
+      in GeneralSettings produces `acp_<random hex>` purely client-side.
+      No server-side validation that it's well-formed; nothing rotates
+      stored consumers of the previous key. Fine for v1 (single
+      Bearer-token model), but worth a doc note.
 
 ## Cleanup / DX
 
@@ -144,6 +174,7 @@ the PR; when it's done, strike or remove.
       reads new `agentic_commerce__handler__*` shape (#13)
 - ✅ Published SDK packages 0.3.0 to npm (core, nextjs, prism-payment)
 - ✅ fd-grocery-store bumped to 0.3.0 (1stdigital/fd-grocery-store#6)
-- ✅ Handler registry design doc (PR #7, in review)
-- ✅ Spec audit confirming UCP/ACP shape (folded into #7)
-- ✅ §12: Saleor-native concerns vs external services (folded into #7)
+- ✅ Handler registry design doc — spec audit + §12 Saleor-native vs external services (#7)
+- ✅ Install runbook rewrite for the EnvAPL flow (fd-infra#49)
+- ✅ TODO.md backlog (#12) + release-automation item (#14)
+- ✅ Tab audit (this doc, 2026-05-03) — gap items captured above
