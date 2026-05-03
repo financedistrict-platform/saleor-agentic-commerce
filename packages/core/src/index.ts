@@ -145,4 +145,13 @@ export type {
   AppConfig,
   AppChannelConfig,
   AppPaymentHandlerConfig,
+  LoadConfigOptions,
 } from "./lib/app-config-loader.js"
+
+// Handler Self-Registration
+export { registerHandler } from "./lib/register-handler.js"
+export type {
+  HandlerManifest,
+  RegisterHandlerOptions,
+  RegisterHandlerResult,
+} from "./lib/register-handler.js"

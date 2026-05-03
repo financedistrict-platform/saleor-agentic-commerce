@@ -56,6 +56,21 @@ export type AppPaymentHandlerConfig = {
    */
   channels?: string[] | null
   config: Record<string, unknown>
+  /**
+   * Optional handler manifest written via the self-registration
+   * endpoint. Present when the storefront has called `registerHandler()`
+   * on boot for this handler's package. Carried through so the factory
+   * (or future schema-driven UIs) can use it.
+   */
+  manifest?: {
+    id: string
+    name: string
+    version: string
+    displayName?: string
+    description?: string
+    manageUrl?: string
+    configSchema?: Record<string, unknown>
+  }
 }
 
 // ─── Loader ─────────────────────────────────────────────
@@ -280,6 +295,7 @@ function parseMetadata(entries: MetadataEntry[]): AppConfig {
           enabled: boolean
           channels?: string[] | null
           config: Record<string, unknown>
+          manifest?: AppPaymentHandlerConfig["manifest"]
         }
         if (!entry.enabled) {
           allHandlers.delete(handlerId)
@@ -290,6 +306,7 @@ function parseMetadata(entries: MetadataEntry[]): AppConfig {
           enabled: true,
           channels: entry.channels ?? null,
           config: entry.config ?? {},
+          ...(entry.manifest ? { manifest: entry.manifest } : {}),
         })
       } catch {
         // Skip malformed handler entry
