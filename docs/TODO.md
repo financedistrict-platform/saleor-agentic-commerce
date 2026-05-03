@@ -31,6 +31,14 @@ the PR; when it's done, strike or remove.
 
 ## Cleanup / DX
 
+- [ ] **Automated SDK release workflow.** Today every npm publish is
+      manual: bump versions in three packages, push, merge, run
+      `pnpm -r publish` from a workstation, then bump the storefront's
+      deps in a separate PR. Use Changesets or release-please so version
+      bumps are derived from PR descriptions and publish happens from CI
+      on merge. Bonus: auto-generate a CHANGELOG. This was painful
+      enough on the 0.2.2 → 0.3.0 ship that it's worth doing before the
+      next release.
 - [ ] **Drop `ALLOWED_SALEOR_URLS` plumbing from `route.ts`.** The conditional
       that splits the env var is now dead code (we're explicitly
       open-tenant). Small refactor.
@@ -132,6 +140,10 @@ the PR; when it's done, strike or remove.
 - ✅ Prism handler ACP id/name fix + gateway-hosted URLs (#8)
 - ✅ Slim Prism config UI + privateMetadata persistence (#10)
 - ✅ Test Connection proxy (CORS fix) (#11)
+- ✅ Storefront SDK fixes — `endpoint` from `storefrontUrl`, handler reader
+      reads new `agentic_commerce__handler__*` shape (#13)
+- ✅ Published SDK packages 0.3.0 to npm (core, nextjs, prism-payment)
+- ✅ fd-grocery-store bumped to 0.3.0 (1stdigital/fd-grocery-store#6)
 - ✅ Handler registry design doc (PR #7, in review)
 - ✅ Spec audit confirming UCP/ACP shape (folded into #7)
 - ✅ §12: Saleor-native concerns vs external services (folded into #7)
