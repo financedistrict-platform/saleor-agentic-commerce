@@ -124,12 +124,13 @@ export function createAgenticCommerce(
     return createFromApp(config)
   }
 
-  // Explicit config mode — storeName is required
-  if (!config.storeName) {
-    throw new Error("storeName is required (or use configFromApp: true)")
-  }
-
-  return buildInstance(config, config.storeName)
+  // Explicit config mode (Path A — no App). storeName falls back to a
+  // generic default so a storefront can boot from env vars alone without
+  // extra boilerplate. Merchants override via the `storeName` config field
+  // (or via env) when they care about how their store appears to agents
+  // during UCP/ACP discovery.
+  const storeName = config.storeName ?? "Saleor Store"
+  return buildInstance({ ...config, storeName }, storeName)
 }
 
 /**
