@@ -1,5 +1,12 @@
 # Saleor Agentic Commerce
 
+[![CI](https://github.com/financedistrict-platform/saleor-agentic-commerce/actions/workflows/ci.yml/badge.svg)](https://github.com/financedistrict-platform/saleor-agentic-commerce/actions/workflows/ci.yml)
+[![Release](https://github.com/financedistrict-platform/saleor-agentic-commerce/actions/workflows/release.yml/badge.svg)](https://github.com/financedistrict-platform/saleor-agentic-commerce/actions/workflows/release.yml)
+[![npm: core](https://img.shields.io/npm/v/@financedistrict/saleor-agentic-commerce-core?label=core)](https://www.npmjs.com/package/@financedistrict/saleor-agentic-commerce-core)
+[![npm: nextjs](https://img.shields.io/npm/v/@financedistrict/saleor-agentic-commerce-nextjs?label=nextjs)](https://www.npmjs.com/package/@financedistrict/saleor-agentic-commerce-nextjs)
+[![npm: prism-payment](https://img.shields.io/npm/v/@financedistrict/saleor-prism-payment?label=prism-payment)](https://www.npmjs.com/package/@financedistrict/saleor-prism-payment)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Make your Saleor store shoppable by AI agents.
 
 This SDK adds [UCP](https://ucp.dev/) and [ACP](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol) protocol endpoints to your existing Next.js storefront, so AI shopping agents can discover your products, create checkouts, and complete purchases — without any changes to your Saleor backend.
