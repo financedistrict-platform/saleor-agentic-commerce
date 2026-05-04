@@ -26,7 +26,21 @@ Small + focused is best. Some guidance:
 - **One concern per PR.** A PR that fixes a bug *and* refactors three files is hard to review and risky to land.
 - **Tests.** If you're changing behavior, exercise the new code path. The repo currently has lighter test coverage than ideal — adding tests around your change is a good complement.
 - **Run the build.** `pnpm -r build` should pass. CI will catch this anyway, but locally is faster.
-- **Don't bump versions in your PR.** Releases are batched (today: manual `pnpm -r publish`; eventually automated). Maintainers handle version bumps.
+- **Add a changeset.** If your PR changes any published package, run `pnpm changeset` and commit the generated `.changeset/*.md` file. Pick the bump type (patch/minor/major) per package and write a one-line summary — that summary lands in the CHANGELOG. Don't edit `package.json` versions directly; the release workflow does that.
+
+### Release flow (automated)
+
+Releases run via [Changesets](https://github.com/changesets/changesets) and the GitHub Action in `.github/workflows/release.yml`:
+
+1. Each PR that changes a published package adds a changeset.
+2. On merge to `main`, the workflow opens (or updates) a `chore: version packages` PR that consumes the changesets, bumps versions, and updates CHANGELOGs.
+3. Merging that PR triggers `changeset publish` and the packages go to npm.
+
+If you're a maintainer and need to release manually (rare), run `pnpm version` then `pnpm release` locally with a valid `NPM_TOKEN`.
+
+### Protocol-bump policy
+
+When changing a UCP/ACP protocol type that ripples through `core`, `nextjs`, and the handler packages, write a changeset that bumps **all** affected packages together (typically `minor` while pre-1.0). The changeset CLI lets you select multiple packages in one entry — use that.
 
 For larger changes, open an issue first to discuss the direction. Saves both sides time.
 
