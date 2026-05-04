@@ -4,11 +4,10 @@
  * Implements the PaymentHandlerAdapter interface from
  * @financedistrict/saleor-agentic-commerce-core.
  *
- * Provides x402 stablecoin payment support via the Prism Gateway:
- * - Discovery: advertises xyz.fd.prism_payment in .well-known/ucp
- * - Checkout preparation: calls Prism checkout-prepare for x402 requirements
- * - Settlement: submits signed ERC-3009 credential to Prism for on-chain transfer
- * - Response formatting: includes Prism payment config in checkout session responses
+ * Wires Prism's protocol-specific endpoints (UCP and ACP variants of
+ * `/handlers` and `/payment-requirements`) into the agentic commerce
+ * SDK. Discovery and checkout-prepare responses are passed through
+ * verbatim — Prism is the authority on its own handler shape.
  */
 
 import type {
@@ -17,14 +16,39 @@ import type {
   PaymentSettleInput,
   PaymentSettleResult,
 } from "@financedistrict/saleor-agentic-commerce-core"
-import { PrismClient, type CheckoutPrepareResult } from "./prism-client.js"
+import {
+  PrismClient,
+  type AcpHandler,
+  type PaymentHandlerConfig,
+  type UcpCheckoutPrepareResponse,
+  type UcpHandlersDiscoveryResponse,
+} from "./prism-client.js"
 
 // =====================================================
 // Constants
 // =====================================================
 
 export const PRISM_HANDLER_ID = "xyz.fd.prism_payment"
+
+/**
+ * Re-exported for back-compat readers of older Saleor checkout metadata.
+ * The legacy generic `payment-profile` flow used this key; the new flow
+ * stores the UCP+ACP blob under `PRISM_HANDLER_ID` directly (the registry
+ * keys prepare-results by the adapter's id automatically).
+ */
 export const PRISM_CHECKOUT_CONFIG_KEY = "prism_checkout_config"
+
+// =====================================================
+// Stored shape (per-checkout metadata blob)
+// =====================================================
+
+type PrismCheckoutData = {
+  ucp: UcpCheckoutPrepareResponse | null
+  acp: AcpHandler | null
+  /** Used for idempotency — set once per (resource, amount) pair */
+  preparedAmount: number
+  preparedResourceUrl: string
+}
 
 // =====================================================
 // Options
@@ -46,20 +70,17 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   readonly name = "Finance District Prism"
 
   private client: PrismClient
-  private readonly apiUrl: string
 
-  /** Cached Prism payment-profile for discovery (5 min TTL) */
-  private profileCache: { data: Record<string, unknown[]>; expiry: number } | null = null
-  private readonly PROFILE_TTL = 5 * 60 * 1000
+  /** Cached UCP discovery response (5 min TTL) */
+  private ucpDiscoveryCache: { data: UcpHandlersDiscoveryResponse; expiry: number } | null = null
+  /** Cached ACP discovery response (5 min TTL) */
+  private acpDiscoveryCache: { data: AcpHandler[]; expiry: number } | null = null
+  private readonly DISCOVERY_TTL = 5 * 60 * 1000
 
   constructor(options: PrismPaymentHandlerOptions = {}) {
-    // Resolve once and store — needed to construct ACP/UCP spec URLs that
-    // point at gateway-hosted documents (`{apiUrl}/acp/spec.md`,
-    // `{apiUrl}/ucp/schema.json`, …). See Prism gateway impl in
-    // fd-prism-platform/src/api/Prism.Platform.Api.Gateway/Features/{Acp,Ucp}/.
-    this.apiUrl = options.apiUrl || process.env.PRISM_API_URL || "https://prism-gw.fd.xyz"
+    const apiUrl = options.apiUrl || process.env.PRISM_API_URL || "https://prism-gw.fd.xyz"
     this.client = new PrismClient({
-      apiUrl: this.apiUrl,
+      apiUrl,
       apiKey: options.apiKey,
     })
   }
@@ -68,82 +89,72 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // Discovery
   // -------------------------------------------------
 
-  async getUcpDiscoveryHandlers(): Promise<Record<string, unknown[]>> {
-    return this.fetchProfile()
+  async getUcpDiscoveryHandlers(): Promise<UcpHandlersDiscoveryResponse> {
+    return this.fetchUcpDiscovery()
   }
 
-  async getAcpDiscoveryHandlers(): Promise<unknown[]> {
-    const profile = await this.fetchProfile()
-    const handlers: unknown[] = []
-
-    // Per ACP 2026-04-17 PaymentHandler schema:
-    //   - `id` is the seller-defined INSTANCE identifier (Prism uses "x402")
-    //   - `name` is the reverse-DNS handler-TYPE identifier (the namespace key
-    //     in Prism's payment-profile response)
-    // We previously had these reversed, which is harmless when there's only
-    // one Prism handler but breaks ACP semantics for any consumer relying on
-    // them. Spec URLs now point at gateway-hosted docs (Prism gateway serves
-    // /acp/spec.md, /acp/config_schema.json, /acp/instrument_schema.json),
-    // not the placeholder fd.xyz URLs that never resolved. Long-term, fold
-    // this whole block away by calling Prism's discovery endpoint once it
-    // exists — see fd-prism-platform issue #22.
-    for (const [namespace, entries] of Object.entries(profile)) {
-      for (const entry of entries as any[]) {
-        handlers.push({
-          id: entry.id || "x402",
-          name: namespace,
-          version: entry.version || "2026-01-15",
-          spec: `${this.apiUrl}/acp/spec.md`,
-          requires_delegate_payment: false,
-          requires_pci_compliance: false,
-          psp: "prism",
-          config_schema: `${this.apiUrl}/acp/config_schema.json`,
-          instrument_schemas: [`${this.apiUrl}/acp/instrument_schema.json`],
-          config: entry.config || {},
-        })
-      }
-    }
-
-    return handlers
+  async getAcpDiscoveryHandlers(): Promise<AcpHandler[]> {
+    return this.fetchAcpDiscovery()
   }
 
   // -------------------------------------------------
   // Checkout preparation
   // -------------------------------------------------
 
-  async prepareCheckoutPayment(input: CheckoutPrepareInput): Promise<CheckoutPrepareResult | null> {
+  async prepareCheckoutPayment(input: CheckoutPrepareInput): Promise<PrismCheckoutData | null> {
     const { checkoutId, total, currencyCode, checkoutBaseUrl, storeName, checkoutMetadata } = input
     const resourceUrl = `${checkoutBaseUrl}/${checkoutId}`
 
-    // Idempotency — skip if already prepared for this exact total
-    const existingConfig = checkoutMetadata?.[PRISM_CHECKOUT_CONFIG_KEY] as any
-    if (existingConfig?.config?.resource?.url === resourceUrl) {
-      const existingAmount = existingConfig._prepared_amount
-      if (existingAmount === total) {
-        return existingConfig as CheckoutPrepareResult
-      }
+    // Idempotency — return existing blob if we already prepared for this
+    // exact (resource, amount) pair.
+    const existing = checkoutMetadata?.[PRISM_HANDLER_ID] as PrismCheckoutData | undefined
+    if (
+      existing &&
+      existing.preparedResourceUrl === resourceUrl &&
+      existing.preparedAmount === total &&
+      (existing.ucp || existing.acp)
+    ) {
+      return existing
     }
 
-    let prepareResult: CheckoutPrepareResult
-    try {
-      prepareResult = await this.client.checkoutPrepare({
-        amount: total,
-        currency: currencyCode,
-        resourceUrl,
-        resourceDescription: `Purchase from ${storeName}`,
-      })
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Unknown error"
-      console.error(`[prism-handler] checkout-prepare failed for ${checkoutId}: ${message}`)
+    const prepareInput = {
+      amount: total,
+      currency: currencyCode,
+      resourceUrl,
+      resourceDescription: `Purchase from ${storeName}`,
+    }
+
+    // Call UCP and ACP prepare in parallel — fail-soft per protocol so a
+    // transient error on one side doesn't kill the other.
+    const [ucpResult, acpResult] = await Promise.allSettled([
+      this.client.prepareUcpPayment(prepareInput),
+      this.client.prepareAcpPayment(prepareInput),
+    ])
+
+    const ucp = ucpResult.status === "fulfilled" ? ucpResult.value : null
+    const acp = acpResult.status === "fulfilled" ? acpResult.value : null
+
+    if (ucpResult.status === "rejected") {
+      console.error(
+        `[prism-handler] UCP prepare failed for ${checkoutId}: ${ucpResult.reason}`,
+      )
+    }
+    if (acpResult.status === "rejected") {
+      console.error(
+        `[prism-handler] ACP prepare failed for ${checkoutId}: ${acpResult.reason}`,
+      )
+    }
+
+    if (!ucp && !acp) {
       return null
     }
 
-    // Return with prepared amount for idempotency tracking
-    // The core will store this on Saleor checkout metadata
     return {
-      ...prepareResult,
-      _prepared_amount: total,
-    } as CheckoutPrepareResult
+      ucp,
+      acp,
+      preparedAmount: total,
+      preparedResourceUrl: resourceUrl,
+    }
   }
 
   // -------------------------------------------------
@@ -153,16 +164,15 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
     const { credential, checkoutMetadata } = input
 
-    // Get the stored payment requirements from checkout metadata
-    const config = (checkoutMetadata?.[PRISM_HANDLER_ID] ?? checkoutMetadata?.[PRISM_CHECKOUT_CONFIG_KEY]) as any
-    if (!config?.config) {
+    const config = this.extractPaymentConfig(checkoutMetadata)
+    if (!config) {
       return { success: false, error: "No Prism payment config found on checkout" }
     }
 
     try {
       const result = await this.client.settle({
         paymentPayload: credential,
-        paymentRequirements: config.config,
+        paymentRequirements: config,
       })
 
       if (!result.success) {
@@ -184,53 +194,79 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // -------------------------------------------------
 
   getUcpCheckoutHandlers(checkoutMetadata?: Record<string, unknown>): Record<string, unknown[]> {
-    const config = (checkoutMetadata?.[PRISM_HANDLER_ID] ?? checkoutMetadata?.[PRISM_CHECKOUT_CONFIG_KEY]) as any
-    if (!config?.config) return {}
-
-    return {
-      [PRISM_HANDLER_ID]: [{
-        id: config.id || "x402",
-        version: config.version || "2026-01-15",
-        config: config.config,
-      }],
-    }
+    const data = checkoutMetadata?.[PRISM_HANDLER_ID] as PrismCheckoutData | undefined
+    return data?.ucp ?? {}
   }
 
   getAcpCheckoutHandlers(checkoutMetadata?: Record<string, unknown>): unknown[] {
-    const config = (checkoutMetadata?.[PRISM_HANDLER_ID] ?? checkoutMetadata?.[PRISM_CHECKOUT_CONFIG_KEY]) as any
-    if (!config?.config) return []
-
-    // See note in getAcpDiscoveryHandlers re: id/name semantics + spec URLs.
-    return [{
-      id: config.id || "x402",
-      name: PRISM_HANDLER_ID,
-      version: config.version || "2026-01-15",
-      spec: `${this.apiUrl}/acp/spec.md`,
-      requires_delegate_payment: false,
-      requires_pci_compliance: false,
-      psp: "prism",
-      config_schema: `${this.apiUrl}/acp/config_schema.json`,
-      instrument_schemas: [`${this.apiUrl}/acp/instrument_schema.json`],
-      config: config.config,
-    }]
+    const data = checkoutMetadata?.[PRISM_HANDLER_ID] as PrismCheckoutData | undefined
+    return data?.acp ? [data.acp] : []
   }
 
   // -------------------------------------------------
   // Internal
   // -------------------------------------------------
 
-  private async fetchProfile(): Promise<Record<string, unknown[]>> {
+  private async fetchUcpDiscovery(): Promise<UcpHandlersDiscoveryResponse> {
     const now = Date.now()
-    if (this.profileCache && now < this.profileCache.expiry) {
-      return this.profileCache.data
+    if (this.ucpDiscoveryCache && now < this.ucpDiscoveryCache.expiry) {
+      return this.ucpDiscoveryCache.data
+    }
+    try {
+      const data = await this.client.fetchUcpHandlers()
+      this.ucpDiscoveryCache = { data, expiry: now + this.DISCOVERY_TTL }
+      return data
+    } catch (error: unknown) {
+      console.error(`[prism-handler] UCP discovery failed: ${error}`)
+      return this.ucpDiscoveryCache?.data ?? {}
+    }
+  }
+
+  private async fetchAcpDiscovery(): Promise<AcpHandler[]> {
+    const now = Date.now()
+    if (this.acpDiscoveryCache && now < this.acpDiscoveryCache.expiry) {
+      return this.acpDiscoveryCache.data
+    }
+    try {
+      const data = await this.client.fetchAcpHandlers()
+      this.acpDiscoveryCache = { data, expiry: now + this.DISCOVERY_TTL }
+      return data
+    } catch (error: unknown) {
+      console.error(`[prism-handler] ACP discovery failed: ${error}`)
+      return this.acpDiscoveryCache?.data ?? []
+    }
+  }
+
+  /**
+   * Pull the x402 PaymentHandlerConfig from stored checkout metadata.
+   * Prefers UCP storage; falls back to ACP. Both wrap the same x402
+   * payload so settlement works against either.
+   */
+  private extractPaymentConfig(
+    checkoutMetadata?: Record<string, unknown>,
+  ): PaymentHandlerConfig | null {
+    const data = checkoutMetadata?.[PRISM_HANDLER_ID] as PrismCheckoutData | undefined
+    if (!data) return null
+
+    if (data.ucp) {
+      const firstNamespace = Object.values(data.ucp)[0]
+      const firstEntry = firstNamespace?.[0]
+      if (firstEntry?.config) return firstEntry.config
     }
 
-    try {
-      const data = await this.client.fetchPaymentProfile()
-      this.profileCache = { data, expiry: now + this.PROFILE_TTL }
-      return data
-    } catch {
-      return this.profileCache?.data || {}
+    if (data.acp?.config && this.isPaymentHandlerConfig(data.acp.config)) {
+      return data.acp.config
     }
+
+    return null
+  }
+
+  private isPaymentHandlerConfig(value: unknown): value is PaymentHandlerConfig {
+    return (
+      typeof value === "object" &&
+      value !== null &&
+      "x402Version" in value &&
+      "accepts" in value
+    )
   }
 }
