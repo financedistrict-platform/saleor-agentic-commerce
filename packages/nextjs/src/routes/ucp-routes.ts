@@ -72,6 +72,22 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     return Response.json(formatUcpError({ ucpVersion: config.ucpVersion, code, content }), { status })
   }
 
+  /**
+   * Enforce master + per-protocol enable flags. When agentic commerce is
+   * disabled (master toggle off) or UCP specifically is disabled, every
+   * UCP route returns 404 — agents see the storefront as if no UCP support
+   * exists at all, rather than encountering errors mid-flow.
+   *
+   * Returns the 404 Response when blocked, or `null` when the request
+   * should proceed.
+   */
+  function checkUcpEnabled(): Response | null {
+    if (!config.enabled || !config.ucpEnabled) {
+      return new Response("Not Found", { status: 404 })
+    }
+    return null
+  }
+
   function endpointBaseUrl(_request: Request): string {
     // Use the storefront's configured public URL rather than the incoming
     // request's URL. `request.url` in Next.js is path-only on the wire, so
@@ -114,6 +130,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     // =====================================================
     discovery: {
       async GET(request: Request) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
         const baseUrl = endpointBaseUrl(request)
         const profile = await formatUcpProfile(formatterContext, baseUrl)
 
@@ -131,6 +150,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     // =====================================================
     checkoutSessions: {
       async POST(request: Request) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
         let body: any
         try {
           body = await request.json()
@@ -184,6 +206,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     // =====================================================
     checkoutSession: {
       async GET(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
         const { id } = await context.params
         const result = await saleorClient.getCheckout(id)
         if (!result.ok) return ucpError("checkout_not_found", result.error, 404)
@@ -193,6 +218,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       },
 
       async PUT(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
         const { id } = await context.params
         let body: any
         try {
@@ -255,6 +283,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     // =====================================================
     checkoutSessionComplete: {
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
         const { id } = await context.params
         let body: any
         try {
@@ -320,6 +351,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     // =====================================================
     checkoutSessionCancel: {
       async POST(_request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
         const { id } = await context.params
 
         // Verify checkout exists
@@ -346,6 +380,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     // =====================================================
     order: {
       async GET(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
         const { id } = await context.params
         const result = await saleorClient.getOrder(id)
         if (!result.ok) return ucpError("order_not_found", result.error, 404)

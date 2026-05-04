@@ -78,6 +78,26 @@ export type AgenticCommerceConfig = {
   acpApiKey?: string
   /** Payment handler adapters to register (added alongside App-managed handlers) */
   paymentHandlers?: PaymentHandlerAdapter[]
+  /**
+   * Master enable for the agentic commerce stack. When `false`, all routes
+   * (UCP discovery, ACP discovery, protocol endpoints) return 404 — the
+   * storefront responds as if no agentic-commerce features exist.
+   *
+   * Default: `true` in explicit-config mode (Path A — merchant opted in by
+   * calling createAgenticCommerce). In `configFromApp` mode, populated
+   * from the App's General tab toggle.
+   */
+  enabled?: boolean
+  /**
+   * Whether UCP protocol routes are served. When `false`, `/.well-known/ucp`
+   * and all `/api/ucp/*` routes return 404. Default: `true`.
+   */
+  ucpEnabled?: boolean
+  /**
+   * Whether ACP protocol routes are served. When `false`, `/.well-known/acp.json`
+   * and all `/api/acp/*` routes return 404. Default: `true`.
+   */
+  acpEnabled?: boolean
 }
 
 // =====================================================
@@ -90,7 +110,13 @@ export type AgenticCommerceInstance = {
   formatterContext: FormatterContext
   config: Required<Pick<AgenticCommerceConfig, "storefrontUrl" | "ucpVersion" | "acpVersion">> &
     Pick<AgenticCommerceConfig, "storeDescription" | "acpApiKey"> &
-    { storeName: string }
+    {
+      storeName: string
+      /** Resolved enable flags — read by route handlers to short-circuit when off. */
+      enabled: boolean
+      ucpEnabled: boolean
+      acpEnabled: boolean
+    }
 }
 
 /**
@@ -163,12 +189,17 @@ async function createFromApp(
     }
   }
 
+  // Enable flags: explicit config wins, otherwise inherit from App config.
+  // App's General tab controls these; merchants can flip without redeploy.
   const mergedConfig: AgenticCommerceConfig = {
     ...config,
     storeName,
     storeDescription: config.storeDescription || appConfig.storeDescription,
     acpApiKey: config.acpApiKey || appConfig.acpApiKey,
     paymentHandlers: [...appHandlers, ...(config.paymentHandlers || [])],
+    enabled: config.enabled ?? appConfig.enabled,
+    ucpEnabled: config.ucpEnabled ?? appConfig.ucpEnabled,
+    acpEnabled: config.acpEnabled ?? appConfig.acpEnabled,
   }
 
   return buildInstance(mergedConfig, storeName)
@@ -217,6 +248,12 @@ function buildInstance(
       ucpVersion,
       acpVersion,
       acpApiKey: config.acpApiKey,
+      // Enable flags. Default to `true` when missing — Path A merchants
+      // who explicitly call createAgenticCommerce shouldn't be forced to
+      // also pass `enabled: true`.
+      enabled: config.enabled ?? true,
+      ucpEnabled: config.ucpEnabled ?? true,
+      acpEnabled: config.acpEnabled ?? true,
     },
   }
 }

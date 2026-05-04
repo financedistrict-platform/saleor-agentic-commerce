@@ -63,6 +63,18 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
     )
   }
 
+  /**
+   * Enforce master + per-protocol enable flags. ACP routes return 404 when
+   * disabled — same approach as UCP. Returns the 404 Response when blocked,
+   * `null` when the request should proceed.
+   */
+  function checkAcpEnabled(): Response | null {
+    if (!config.enabled || !config.acpEnabled) {
+      return new Response("Not Found", { status: 404 })
+    }
+    return null
+  }
+
   function validateApiKey(request: Request): boolean {
     if (!config.acpApiKey) return true // No key configured = open access
     const auth = request.headers.get("Authorization")
@@ -108,6 +120,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
     // =====================================================
     checkoutSessions: {
       async POST(request: Request) {
+        const blocked = checkAcpEnabled()
+        if (blocked) return blocked
+
         if (!validateApiKey(request)) {
           return acpError("unauthorized", "Invalid or missing API key", 401)
         }
@@ -169,6 +184,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
     // =====================================================
     checkoutSession: {
       async GET(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkAcpEnabled()
+        if (blocked) return blocked
+
         if (!validateApiKey(request)) {
           return acpError("unauthorized", "Invalid or missing API key", 401)
         }
@@ -183,6 +201,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
 
       // ACP spec: Update uses POST (not PUT)
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkAcpEnabled()
+        if (blocked) return blocked
+
         if (!validateApiKey(request)) {
           return acpError("unauthorized", "Invalid or missing API key", 401)
         }
@@ -251,6 +272,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
     // =====================================================
     checkoutSessionComplete: {
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkAcpEnabled()
+        if (blocked) return blocked
+
         if (!validateApiKey(request)) {
           return acpError("unauthorized", "Invalid or missing API key", 401)
         }
@@ -315,6 +339,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
     // =====================================================
     checkoutSessionCancel: {
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
+        const blocked = checkAcpEnabled()
+        if (blocked) return blocked
+
         if (!validateApiKey(request)) {
           return acpError("unauthorized", "Invalid or missing API key", 401)
         }
