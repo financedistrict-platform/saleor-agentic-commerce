@@ -181,4 +181,4 @@ For arm64 deployment targets (e.g. AWS Graviton): build natively on an arm64 run
 - `src/lib/saleor-app.ts` — APL selection
 - `src/app/api/register/route.ts` — register handler
 - `@saleor/app-sdk` documentation — https://docs.saleor.io/developer/extending/apps/
-- ACP / UCP protocol specs — see `docs/handler-registry-design.md`
+- ACP / UCP protocol overview — see the [UCP and ACP](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/UCP-and-ACP) wiki page

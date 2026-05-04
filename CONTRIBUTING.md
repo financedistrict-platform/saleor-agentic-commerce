@@ -6,8 +6,7 @@ Thanks for considering a contribution. This project is MIT-licensed and built to
 
 - **[Wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki)** — architecture, integration guides, handler authoring
 - **[Quick Start](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Quick-Start)** — get running locally
-- **[Design doc](docs/handler-registry-design.md)** — the handler-registry architecture and the framing decisions behind it
-- **[TODO](docs/TODO.md)** — current backlog and known gaps
+- **[Architecture](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Architecture)** — the gateway pattern and design framing
 
 ## Reporting issues
 
@@ -65,7 +64,7 @@ By participating, you agree to abide by the [Contributor Covenant 2.1](https://w
 
 ## Roadmap & strategic direction
 
-The project is built for eventual handover to a neutral steward (e.g. Saleor, a protocol foundation). Finance District operates the hosted App today and ships the Prism handler — but the SDK and protocol surface are deliberately neutral. The design doc ([§1](docs/handler-registry-design.md#1-framing--neutral-protocol-gateway), [§13](docs/handler-registry-design.md#13-the-app-is-a-convenience-layer-not-a-runtime-dependency)) explains the framing.
+The project is built for eventual handover to a neutral steward (e.g. Saleor, a protocol foundation). Finance District operates the hosted App today and ships the Prism handler — but the SDK and protocol surface are deliberately neutral. See [Architecture: The gateway pattern](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Architecture) and [The App is Optional](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/The-App-is-Optional) on the wiki for the framing.
 
 If you're interested in helping shape the project's direction, the highest-leverage contributions today are:
 - **New handler packages** (Stripe, Klarna, etc.) shipped from your own repos

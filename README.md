@@ -259,7 +259,7 @@ pnpm build
 
 ## Contributing
 
-Issues and pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the basics, the [wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki) for architecture and integration guides, and [`docs/handler-registry-design.md`](docs/handler-registry-design.md) for the design framing.
+Issues and pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the basics and the [wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki) for architecture, integration guides, and the design framing.
 
 If you're shipping a new payment handler package, you don't need to fork or PR this repo — handler packages live in their own repos and self-register at storefront boot. See the [Build a Handler](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Build-a-Handler) wiki page.
 
@@ -267,4 +267,4 @@ If you're shipping a new payment handler package, you don't need to fork or PR t
 
 [MIT](LICENSE) © 2026 Finance District.
 
-The project is built for eventual handover to a neutral steward (e.g. Saleor, a protocol foundation) — see [§1 of the design doc](docs/handler-registry-design.md#1-framing--neutral-protocol-gateway) for the framing.
+The project is built for eventual handover to a neutral steward (e.g. Saleor, a protocol foundation) — see [Architecture: The gateway pattern](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Architecture) on the wiki for the framing.
