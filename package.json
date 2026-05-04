@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "changeset": "changeset",
-    "version": "changeset version",
+    "version-packages": "changeset version",
     "release": "pnpm -r build && changeset publish"
   },
   "devDependencies": {

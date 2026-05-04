@@ -35,7 +35,7 @@ Releases run via [Changesets](https://github.com/changesets/changesets) and the 
 2. On merge to `main`, the workflow opens (or updates) a `chore: version packages` PR that consumes the changesets, bumps versions, and updates CHANGELOGs.
 3. Merging that PR triggers `changeset publish` and the packages go to npm.
 
-If you're a maintainer and need to release manually (rare), run `pnpm version` then `pnpm release` locally with a valid `NPM_TOKEN`.
+If you're a maintainer and need to release manually (rare), run `pnpm version-packages` then `pnpm release` locally with a valid `NPM_TOKEN`.
 
 ### Protocol-bump policy
 
