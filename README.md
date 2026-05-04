@@ -11,6 +11,8 @@ Make your Saleor store shoppable by AI agents.
 
 This SDK adds [UCP](https://ucp.dev/) and [ACP](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol) protocol endpoints to your existing Next.js storefront, so AI shopping agents can discover your products, create checkouts, and complete purchases — without any changes to your Saleor backend.
 
+> **[→ Get started in 5 minutes (Wiki: Quick Start)](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Quick-Start)**
+
 ## Why this matters
 
 AI agents are becoming the next commerce channel. Just like merchants once added mobile apps alongside their websites, they'll soon need to serve autonomous agents that shop on behalf of consumers. But agents don't browse — they need structured APIs with standardized discovery, checkout flows, and payment settlement.
@@ -35,231 +37,40 @@ AI agents are becoming the next commerce channel. Just like merchants once added
 | [`@financedistrict/saleor-dummy-payment`](./packages/dummy-payment) | Always-succeeds simulator — for integration testing and as a reference implementation for new handler authors |
 | [`@financedistrict/saleor-agentic-commerce-skill`](./packages/claude-skill) | Claude Code plugin — `/setup-agentic-commerce`, `/add-payment-handler`, `/diagnose-agentic-commerce` |
 
-### Saleor App (optional)
+The [`apps/saleor-agentic-commerce-app`](./apps/saleor-agentic-commerce-app) folder also contains an optional **Saleor Dashboard App** that acts as a control plane for the SDK — see [The App is Optional](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/The-App-is-Optional) on the wiki for the three configuration paths.
 
-The [`apps/saleor-agentic-commerce-app`](./apps/saleor-agentic-commerce-app) is a **Saleor Dashboard App** that acts as a control plane for the SDK. It's entirely optional — the SDK works standalone with environment variables — but it gives merchants a better experience:
+## Documentation
 
-- **Configure from the Dashboard** — store name, protocols, payment handlers — no code or env var editing
-- **Per-channel control** — enable agentic commerce for specific channels, assign different payment handlers
-- **Payment handler management** — configure Prism credentials, test connections, all from the UI
-- **Agent activity monitoring** — see which orders were placed by AI agents, track session metrics
-- **Order attribution** — an order detail widget shows whether an order came from an AI agent
+The [wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki) is the canonical reference. Highlights:
 
-When the App is installed, the SDK can load its configuration automatically with `configFromApp: true` instead of requiring explicit environment variables for everything.
-
-## Installation
-
-```bash
-# npm
-npm install @financedistrict/saleor-agentic-commerce-core \
-            @financedistrict/saleor-agentic-commerce-nextjs \
-            @financedistrict/saleor-prism-payment
-
-# pnpm
-pnpm add @financedistrict/saleor-agentic-commerce-core \
-         @financedistrict/saleor-agentic-commerce-nextjs \
-         @financedistrict/saleor-prism-payment
-
-# yarn
-yarn add @financedistrict/saleor-agentic-commerce-core \
-         @financedistrict/saleor-agentic-commerce-nextjs \
-         @financedistrict/saleor-prism-payment
-```
-
-> If you don't need stablecoin payments, skip `@financedistrict/saleor-prism-payment` and implement your own payment handler (see [Custom Payment Handlers](#custom-payment-handlers)).
-
-## Quick Start
-
-### 1. Environment variables
-
-Add these to your `.env`:
-
-```env
-# Saleor (you likely already have these)
-NEXT_PUBLIC_SALEOR_API_URL=https://your-instance.saleor.cloud/graphql/
-NEXT_PUBLIC_STOREFRONT_URL=https://your-store.com
-NEXT_PUBLIC_DEFAULT_CHANNEL=default-channel
-
-# Agentic Commerce
-SALEOR_AGENTIC_AUTH_TOKEN=your-saleor-app-token    # Needs MANAGE_CHECKOUTS + MANAGE_ORDERS
-SALEOR_AGENTIC_STORE_NAME=Your Store Name
-
-# Prism Payment (optional — only if using stablecoin payments)
-PRISM_API_URL=https://prism-gw.fd.xyz
-PRISM_API_KEY=your-prism-api-key
-```
-
-### 2. Create the agentic commerce instance
-
-```ts
-// src/lib/agentic-commerce.ts
-import { createAgenticCommerce, createUcpRoutes, createAcpRoutes } from "@financedistrict/saleor-agentic-commerce-nextjs"
-import { PrismPaymentHandler } from "@financedistrict/saleor-prism-payment"
-
-const agenticCommerce = createAgenticCommerce({
-  saleorApiUrl: process.env.NEXT_PUBLIC_SALEOR_API_URL!,
-  saleorAuthToken: process.env.SALEOR_AGENTIC_AUTH_TOKEN!,
-  storefrontUrl: process.env.NEXT_PUBLIC_STOREFRONT_URL!,
-  storeName: process.env.SALEOR_AGENTIC_STORE_NAME!,
-  channel: process.env.NEXT_PUBLIC_DEFAULT_CHANNEL,
-  paymentHandlers: [
-    new PrismPaymentHandler({
-      apiUrl: process.env.PRISM_API_URL,
-      apiKey: process.env.PRISM_API_KEY,
-    }),
-  ],
-})
-
-export const ucpRoutes = createUcpRoutes(agenticCommerce)
-export const acpRoutes = createAcpRoutes(agenticCommerce)
-```
-
-### 3. Wire up the route handlers
-
-Each route file is a one-liner that re-exports from your agentic commerce instance:
-
-```ts
-// src/app/api/ucp/checkout-sessions/route.ts
-import { ucpRoutes } from "@/lib/agentic-commerce"
-export const { POST } = ucpRoutes.checkoutSessions
-
-// src/app/api/ucp/checkout-sessions/[id]/route.ts
-import { ucpRoutes } from "@/lib/agentic-commerce"
-export const { GET, PUT } = ucpRoutes.checkoutSession
-
-// src/app/api/ucp/checkout-sessions/[id]/complete/route.ts
-import { ucpRoutes } from "@/lib/agentic-commerce"
-export const { POST } = ucpRoutes.checkoutSessionComplete
-
-// src/app/api/ucp/checkout-sessions/[id]/cancel/route.ts
-import { ucpRoutes } from "@/lib/agentic-commerce"
-export const { POST } = ucpRoutes.checkoutSessionCancel
-
-// src/app/api/ucp/orders/[id]/route.ts
-import { ucpRoutes } from "@/lib/agentic-commerce"
-export const { GET } = ucpRoutes.order
-```
-
-ACP routes follow the same pattern with `acpRoutes`.
-
-### 4. Verify it works
-
-Start your dev server and check the UCP discovery endpoint:
-
-```bash
-curl http://localhost:3000/.well-known/ucp
-```
-
-You should see a JSON response with your store's UCP profile, available services, and payment handlers.
-
-### Alternative: App-managed config
-
-If you've installed the [Agentic Commerce App](#saleor-app-optional) in your Dashboard, you can skip the manual env vars and let the SDK load its configuration from the App:
-
-```ts
-// src/lib/agentic-commerce.ts
-import { createAgenticCommerce } from "@financedistrict/saleor-agentic-commerce-nextjs"
-
-const agenticCommerce = await createAgenticCommerce({
-  saleorApiUrl: process.env.NEXT_PUBLIC_SALEOR_API_URL!,
-  saleorAuthToken: process.env.SALEOR_AGENTIC_AUTH_TOKEN!,
-  storefrontUrl: process.env.NEXT_PUBLIC_STOREFRONT_URL!,
-  configFromApp: true,  // Loads store name, payment handlers, etc. from Dashboard config
-})
-```
+- **[Quick Start](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Quick-Start)** — get a Saleor storefront agent-shoppable in 5 minutes
+- **[Architecture](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Architecture)** — the gateway pattern and design framing
+- **[Storefront SDK](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Storefront-SDK)** — full configuration reference and route wire-up
+- **[The App](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/The-App)** — what the Saleor Dashboard App does (FD-hosted by default, self-host optional)
+- **[The App is Optional](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/The-App-is-Optional)** — three configuration paths (env-only, App-managed, hybrid)
+- **[Build a Handler](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Build-a-Handler)** — author your own payment handler package
+- **[Saleor Cloud](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Saleor-Cloud)** — Cloud-specific setup notes
+- **[UCP and ACP](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/UCP-and-ACP)** — protocol overview and conformance status
+- **[Authentication](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Authentication)** — five token contexts in this stack
+- **[Glossary](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Glossary)** — terminology reference
 
 ## Claude Code Plugin
 
-If you use [Claude Code](https://claude.ai/code), install the skill plugin and let Claude set everything up for you:
+If you use [Claude Code](https://claude.ai/code), install the skill plugin and let Claude set everything up:
 
 ```
 /setup-agentic-commerce
 ```
 
-Three commands available:
-- `/setup-agentic-commerce` — full guided install and route scaffolding
-- `/add-payment-handler` — add Prism stablecoin payments to an existing setup
-- `/diagnose-agentic-commerce` — troubleshoot issues with a diagnostic report
-
 See [`packages/claude-skill`](./packages/claude-skill) for installation options.
 
-## Architecture
+## Versioning & Releases
 
-These packages live in your storefront — not in the Saleor backend. They're a translation layer between agent protocols and Saleor's GraphQL API.
-
-```
-AI Agent  <-->  UCP/ACP Routes  <-->  Core Formatters  <-->  Saleor GraphQL API
-                  (nextjs)              (core)
-                                          |
-                                    Payment Handler
-                                     (prism-payment)
-```
-
-This is intentional. Agent-facing endpoints are a storefront concern: they need to live on the merchant's domain (for protocol discovery), and they don't modify Saleor's behavior — they just provide a new interface to it.
-
-## Custom Payment Handlers
-
-Prism is included for stablecoin payments, but you can implement any payment method by extending the `PaymentHandlerAdapter` interface:
-
-```ts
-import type { PaymentHandlerAdapter } from "@financedistrict/saleor-agentic-commerce-core"
-
-class StripeAgentPaymentHandler implements PaymentHandlerAdapter {
-  id = "com.stripe.agent_payment"
-
-  // Return handler info for UCP/ACP discovery responses
-  getUcpDiscoveryHandlers() { /* ... */ }
-  getAcpDiscoveryHandlers() { /* ... */ }
-
-  // Return handler info for individual checkout sessions
-  getUcpCheckoutHandlers(metadata?) { /* ... */ }
-  getAcpCheckoutHandlers(metadata?) { /* ... */ }
-
-  // Prepare checkout — called when agent selects this handler
-  prepareCheckoutPayment(input) { /* ... */ }
-
-  // Settle — called when agent submits payment credential
-  settlePayment(input) { /* ... */ }
-}
-```
-
-## Protocol Compliance
-
-Types and formatters are audited against the official protocol specifications:
-
-- **UCP** [`2026-04-08`](https://github.com/Universal-Commerce-Protocol/ucp) — checkout, fulfillment, payment, order, discovery
-- **ACP** [`2026-01-30`](https://github.com/agentic-commerce-protocol/agentic-commerce-protocol/tree/main/spec/2026-01-30) — checkout sessions, delegate payment, capabilities
-
-## Versioning
-
-All packages follow [semver](https://semver.org/). While pre-1.0:
-
-- **Protocol spec changes** → all packages bump minor together (e.g., 0.2.x → 0.3.0)
-- **Saleor API changes** → only `core` bumps patch (e.g., 0.2.0 → 0.2.1)
-- **Payment handler changes** → only the affected handler package bumps
-
-The `nextjs` and handler packages declare `core` as a peer dependency with a `^` range (e.g., `^0.6.0`), so incompatible combinations are caught at install time.
-
-Releases are automated via [Changesets](https://github.com/changesets/changesets) — see [CONTRIBUTING.md](CONTRIBUTING.md#release-flow-automated) for the flow.
-
-## Requirements
-
-- **Node.js** >= 20
-- **Next.js** >= 14 (App Router)
-- **Saleor** >= 3.x with a valid App Token (MANAGE_CHECKOUTS + MANAGE_ORDERS permissions)
-
-## Development
-
-```bash
-git clone https://github.com/financedistrict-platform/saleor-agentic-commerce.git
-cd saleor-agentic-commerce
-pnpm install
-pnpm build
-```
+All published packages follow [semver](https://semver.org/). Releases are automated via [Changesets](https://github.com/changesets/changesets) — see [CONTRIBUTING.md](CONTRIBUTING.md#release-flow-automated) for the flow.
 
 ## Contributing
 
-Issues and pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the basics and the [wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki) for architecture, integration guides, and the design framing.
+Issues and pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the basics and the [wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki) for architecture and integration guides.
 
 If you're shipping a new payment handler package, you don't need to fork or PR this repo — handler packages live in their own repos and self-register at storefront boot. See the [Build a Handler](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Build-a-Handler) wiki page.
 
