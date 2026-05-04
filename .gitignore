@@ -32,3 +32,6 @@ storefront/
 
 # Saleor App SDK auth data (local dev)
 .auth-data.json
+
+# Internal docs — kept private outside the public repo
+docs/
