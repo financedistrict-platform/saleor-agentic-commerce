@@ -225,13 +225,15 @@ Types and formatters are audited against the official protocol specifications:
 
 ## Versioning
 
-All three packages follow [semver](https://semver.org/). While pre-1.0:
+All packages follow [semver](https://semver.org/). While pre-1.0:
 
 - **Protocol spec changes** → all packages bump minor together (e.g., 0.2.x → 0.3.0)
 - **Saleor API changes** → only `core` bumps patch (e.g., 0.2.0 → 0.2.1)
 - **Payment handler changes** → only the affected handler package bumps
 
-The `nextjs` and `prism-payment` packages declare `core` as a peer dependency with a `^` range (e.g., `^0.2.0`), so incompatible combinations are caught at install time.
+The `nextjs` and handler packages declare `core` as a peer dependency with a `^` range (e.g., `^0.6.0`), so incompatible combinations are caught at install time.
+
+Releases are automated via [Changesets](https://github.com/changesets/changesets) — see [CONTRIBUTING.md](CONTRIBUTING.md#release-flow-automated) for the flow.
 
 ## Requirements
 
