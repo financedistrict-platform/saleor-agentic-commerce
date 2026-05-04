@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useState } from "react"
 import {
   PRISM_HANDLER_ID,
-  DEFAULT_PRISM_HANDLER_CONFIG,
-  DEFAULT_PRISM_HANDLER_ENTRY,
+  type HandlerManifest,
   type PaymentHandlerEntry,
-  type PrismHandlerConfig,
 } from "@/lib/metadata-keys"
 
 type Props = {
@@ -22,24 +20,9 @@ type Props = {
   saleorApiUrl: string
 }
 
-/**
- * Derive the merchant-portal "Manage in Prism →" deep link from the
- * configured gateway URL. Convention: prism-gw.<env> → prism.<env>.
- * Falls back to a stable default if the host doesn't match the convention.
- */
-function deriveManageUrl(apiUrl: string): string {
-  try {
-    const u = new URL(apiUrl)
-    if (u.hostname.startsWith("prism-gw.")) {
-      u.hostname = u.hostname.replace(/^prism-gw\./, "prism.")
-      u.pathname = "/"
-      return u.origin + "/"
-    }
-  } catch {
-    // ignore — fall through
-  }
-  return "https://prism.fd.xyz/"
-}
+// =====================================================
+// Top-level
+// =====================================================
 
 export function PaymentHandlerSettings({
   handlers,
@@ -47,64 +30,113 @@ export function PaymentHandlerSettings({
   saving,
   saleorApiUrl,
 }: Props) {
-  const stored = handlers[PRISM_HANDLER_ID] ?? null
-  const storedConfig = (stored?.config ?? null) as PrismHandlerConfig | null
+  const entries = Object.entries(handlers)
 
-  const [enabled, setEnabled] = useState<boolean>(
-    stored?.enabled ?? DEFAULT_PRISM_HANDLER_ENTRY.enabled,
-  )
-  const [apiUrl, setApiUrl] = useState<string>(
-    storedConfig?.apiUrl ?? DEFAULT_PRISM_HANDLER_CONFIG.apiUrl,
-  )
-  const [apiKey, setApiKey] = useState<string>(
-    storedConfig?.apiKey ?? DEFAULT_PRISM_HANDLER_CONFIG.apiKey,
-  )
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+      <p style={styles.description}>
+        Payment handlers process agent transactions. Each handler is a
+        separate package the storefront has installed; the App reads each
+        handler&apos;s self-registered manifest and renders the
+        configuration form below.
+      </p>
 
+      {entries.length === 0 ? (
+        <div style={styles.emptyState}>
+          <h3 style={{ margin: "0 0 8px", color: "#374151" }}>
+            No handlers registered yet
+          </h3>
+          <p style={{ margin: 0, color: "#6b7280", fontSize: "14px" }}>
+            Install a handler package in your storefront (e.g.{" "}
+            <code>@financedistrict/saleor-prism-payment</code>) and call{" "}
+            <code>registerHandler()</code> at boot. The handler will appear
+            here automatically.
+          </p>
+        </div>
+      ) : (
+        entries.map(([handlerId, entry]) => (
+          <HandlerCard
+            key={handlerId}
+            handlerId={handlerId}
+            entry={entry}
+            onSave={(updated) => onSave({ [handlerId]: updated })}
+            saving={saving}
+            saleorApiUrl={saleorApiUrl}
+          />
+        ))
+      )}
+    </div>
+  )
+}
+
+// =====================================================
+// Per-handler card
+// =====================================================
+
+type HandlerCardProps = {
+  handlerId: string
+  entry: PaymentHandlerEntry
+  onSave: (entry: PaymentHandlerEntry) => Promise<void>
+  saving: boolean
+  saleorApiUrl: string
+}
+
+function HandlerCard({
+  handlerId,
+  entry,
+  onSave,
+  saving,
+  saleorApiUrl,
+}: HandlerCardProps) {
+  const manifest = entry.manifest
+  const initialConfig = (entry.config ?? {}) as Record<string, unknown>
+
+  const [enabled, setEnabled] = useState(entry.enabled)
+  const [config, setConfig] = useState<Record<string, unknown>>(initialConfig)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{
     success: boolean
     message: string
   } | null>(null)
 
-  // Re-sync local state if the upstream `handlers` prop changes (e.g.
-  // after a save round-trip refreshes the loaded config).
+  // Re-sync if upstream entry changes (e.g. after save round-trip).
   useEffect(() => {
-    if (!stored) return
-    setEnabled(stored.enabled)
-    if (storedConfig) {
-      setApiUrl(storedConfig.apiUrl ?? DEFAULT_PRISM_HANDLER_CONFIG.apiUrl)
-      setApiKey(storedConfig.apiKey ?? DEFAULT_PRISM_HANDLER_CONFIG.apiKey)
-    }
-  }, [stored, storedConfig])
-
-  const manageUrl = useMemo(() => deriveManageUrl(apiUrl), [apiUrl])
+    setEnabled(entry.enabled)
+    setConfig((entry.config ?? {}) as Record<string, unknown>)
+    setTestResult(null)
+  }, [entry])
 
   const dirty = useMemo(() => {
-    const ref = stored ?? DEFAULT_PRISM_HANDLER_ENTRY
-    const refConfig = (ref.config ?? {}) as PrismHandlerConfig
-    return (
-      enabled !== ref.enabled ||
-      apiUrl !== (refConfig.apiUrl ?? DEFAULT_PRISM_HANDLER_CONFIG.apiUrl) ||
-      apiKey !== (refConfig.apiKey ?? DEFAULT_PRISM_HANDLER_CONFIG.apiKey)
-    )
-  }, [stored, enabled, apiUrl, apiKey])
+    if (enabled !== entry.enabled) return true
+    return JSON.stringify(config) !== JSON.stringify(initialConfig)
+    // initialConfig is stable per render — ESLint will whine but that's fine.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, config, entry])
+
+  const title = manifest?.displayName ?? handlerId
+  const description = manifest?.description
+  const manageUrl = manifest?.manageUrl
+  const version = manifest?.version
+
+  // Test Connection is currently only wired for Prism (the test-connection
+  // proxy hardcodes the probe URL by handlerId). When we add a generic
+  // probe mechanism (manifest capability flag + per-handler probe URL),
+  // this widens.
+  const supportsTestConnection = handlerId === PRISM_HANDLER_ID
 
   async function testConnection() {
     setTesting(true)
     setTestResult(null)
     try {
-      // Proxied through the App's own backend — see
-      // /api/payment-handlers/test-connection. The dashboard iframe can't
-      // call Prism directly (CORS).
       const res = await fetch(
         `/api/payment-handlers/test-connection?saleorApiUrl=${encodeURIComponent(saleorApiUrl)}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            handlerId: PRISM_HANDLER_ID,
-            apiUrl: apiUrl.trim(),
-            apiKey: apiKey.trim(),
+            handlerId,
+            apiUrl: (config.apiUrl as string | undefined)?.trim(),
+            apiKey: (config.apiKey as string | undefined)?.trim(),
           }),
         },
       )
@@ -128,132 +160,271 @@ export function PaymentHandlerSettings({
   }
 
   async function handleSave() {
-    const entry: PaymentHandlerEntry = {
+    await onSave({
       enabled,
-      channels: stored?.channels ?? null,
-      config: { apiUrl: apiUrl.trim(), apiKey: apiKey.trim() },
-    }
-    await onSave({ [PRISM_HANDLER_ID]: entry })
+      channels: entry.channels ?? null,
+      config,
+      ...(manifest ? { manifest } : {}),
+    })
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
-      <p style={styles.description}>
-        Payment handlers process agent transactions. Each handler is a
-        separate service (Prism, Stripe, etc.); the Agentic Commerce App
-        routes UCP/ACP traffic to whichever handlers you have enabled.
-        Currently shipped: Finance District Prism (stablecoin payments via
-        x402/EIP-3009).
-      </p>
-
-      {/* Prism Payment Handler */}
-      <div style={styles.card}>
-        <div style={styles.cardHeader}>
-          <div>
-            <h3 style={styles.cardTitle}>Prism Payment Handler</h3>
-            <span style={styles.handlerId}>{PRISM_HANDLER_ID}</span>
-          </div>
+    <div style={styles.card}>
+      <div style={styles.cardHeader}>
+        <div>
+          <h3 style={styles.cardTitle}>{title}</h3>
+          <span style={styles.handlerId}>
+            {handlerId}
+            {version ? ` · v${version}` : ""}
+          </span>
+        </div>
+        {manageUrl && (
           <a
             href={manageUrl}
             target="_blank"
             rel="noopener noreferrer"
             style={styles.manageLink}
           >
-            Manage in Prism →
+            Manage in {title} →
           </a>
-        </div>
+        )}
+      </div>
 
-        <div style={styles.form}>
-          <label style={styles.toggleRow}>
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-            />
-            <span style={styles.toggleLabel}>
-              Enabled — route agent payments to Prism
-            </span>
-          </label>
+      {description && (
+        <p style={styles.handlerDescription}>{description}</p>
+      )}
 
-          <div style={styles.field}>
-            <label style={styles.label}>Prism Gateway URL</label>
-            <input
-              type="text"
-              value={apiUrl}
-              onChange={(e) => {
-                setApiUrl(e.target.value)
-                setTestResult(null)
-              }}
-              placeholder="https://prism-gw.fd.xyz"
-              style={styles.input}
-            />
-            <span style={styles.hint}>
-              Override only when pointing at a self-hosted or test Prism
-              instance.
-            </span>
+      <div style={styles.form}>
+        <label style={styles.toggleRow}>
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          <span style={styles.toggleLabel}>
+            Enabled — route agent payments to this handler
+          </span>
+        </label>
+
+        {manifest?.configSchema ? (
+          <SchemaForm
+            schema={manifest.configSchema}
+            value={config}
+            onChange={(v) => {
+              setConfig(v)
+              setTestResult(null)
+            }}
+          />
+        ) : (
+          <div style={styles.noSchemaNote}>
+            This handler hasn&apos;t published a configuration schema. Use
+            environment variables on the storefront, or update the handler
+            package to include a <code>configSchema</code> in its manifest.
           </div>
+        )}
 
-          <div style={styles.field}>
-            <label style={styles.label}>API Key</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => {
-                setApiKey(e.target.value)
-                setTestResult(null)
-              }}
-              placeholder="Your Prism API key"
-              style={styles.input}
-            />
-            <span style={styles.hint}>
-              Generated in your Prism merchant dashboard. All other settings
-              (accepted chains, accepted tokens, settlement wallet, webhook
-              secrets) are managed in Prism — use the &quot;Manage in
-              Prism&quot; link above.
-            </span>
-          </div>
-
-          <div style={styles.actionsRow}>
+        <div style={styles.actionsRow}>
+          {supportsTestConnection && (
             <button
               onClick={testConnection}
-              disabled={testing || !apiKey}
+              disabled={testing || !config.apiKey}
               style={styles.secondaryButton}
             >
               {testing ? "Testing..." : "Test Connection"}
             </button>
-            <button
-              onClick={handleSave}
-              disabled={saving || !dirty}
-              style={styles.primaryButton}
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving || !dirty}
+            style={styles.primaryButton}
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+          {testResult && (
+            <span
+              style={{
+                fontSize: "13px",
+                color: testResult.success ? "#059669" : "#dc2626",
+              }}
             >
-              {saving ? "Saving..." : "Save"}
-            </button>
-            {testResult && (
-              <span
-                style={{
-                  fontSize: "13px",
-                  color: testResult.success ? "#059669" : "#dc2626",
-                }}
-              >
-                {testResult.message}
-              </span>
-            )}
-          </div>
+              {testResult.message}
+            </span>
+          )}
         </div>
-      </div>
-
-      {/* Placeholder for additional handlers */}
-      <div style={{ ...styles.card, borderStyle: "dashed", opacity: 0.6 }}>
-        <p style={{ margin: 0, color: "#6b7280", textAlign: "center" }}>
-          + Additional payment handlers will be configurable here once the
-          handler registry lands.
-        </p>
       </div>
     </div>
   )
 }
 
-// ─── Styles ───────────────────────────────────────────────
+// =====================================================
+// JSON Schema form renderer
+// =====================================================
+
+/**
+ * Minimal JSON Schema form renderer. Supports the subset of Draft
+ * 2020-12 used by handler config schemas:
+ *
+ * - Object root with `properties` and `required`
+ * - Property types: string, integer, number, boolean
+ * - String formats: password (→ password input), uri (→ url input)
+ * - String enum (→ select dropdown)
+ * - `default`, `title`, `description`
+ *
+ * Falls through gracefully on shapes it doesn't know — renders a JSON
+ * code block as a debugging fallback. Worth replacing with
+ * `react-jsonschema-form` if we need richer features (nested objects,
+ * arrays, oneOf, conditional schemas, etc.); current impl covers
+ * everything Prism + Dummy declare.
+ */
+function SchemaForm({
+  schema,
+  value,
+  onChange,
+}: {
+  schema: Record<string, unknown>
+  value: Record<string, unknown>
+  onChange: (v: Record<string, unknown>) => void
+}) {
+  const properties = (schema.properties ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >
+  const required = (schema.required ?? []) as string[]
+
+  if (Object.keys(properties).length === 0) {
+    return (
+      <pre style={styles.codeBlock}>
+        {JSON.stringify(schema, null, 2)}
+      </pre>
+    )
+  }
+
+  function update<K extends string>(key: K, v: unknown) {
+    onChange({ ...value, [key]: v })
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+      {Object.entries(properties).map(([key, prop]) => {
+        const type = prop.type as string | undefined
+        const title = (prop.title as string) ?? key
+        const desc = prop.description as string | undefined
+        const format = prop.format as string | undefined
+        const enumValues = prop.enum as unknown[] | undefined
+        const def = prop.default
+        const isRequired = required.includes(key)
+        const current = value[key] ?? def
+
+        // Enum → select
+        if (Array.isArray(enumValues) && enumValues.length > 0) {
+          return (
+            <div key={key} style={styles.field}>
+              <label style={styles.label}>
+                {title}
+                {isRequired && <span style={styles.requiredMark}> *</span>}
+              </label>
+              <select
+                value={(current as string | undefined) ?? ""}
+                onChange={(e) => update(key, e.target.value)}
+                style={styles.input}
+              >
+                {enumValues.map((opt) => (
+                  <option key={String(opt)} value={String(opt)}>
+                    {String(opt)}
+                  </option>
+                ))}
+              </select>
+              {desc && <span style={styles.hint}>{desc}</span>}
+            </div>
+          )
+        }
+
+        // Boolean → checkbox
+        if (type === "boolean") {
+          return (
+            <div key={key} style={styles.field}>
+              <label style={{ ...styles.toggleRow, gap: "8px" }}>
+                <input
+                  type="checkbox"
+                  checked={Boolean(current)}
+                  onChange={(e) => update(key, e.target.checked)}
+                />
+                <span style={styles.toggleLabel}>{title}</span>
+              </label>
+              {desc && <span style={styles.hint}>{desc}</span>}
+            </div>
+          )
+        }
+
+        // Integer / number
+        if (type === "integer" || type === "number") {
+          return (
+            <div key={key} style={styles.field}>
+              <label style={styles.label}>
+                {title}
+                {isRequired && <span style={styles.requiredMark}> *</span>}
+              </label>
+              <input
+                type="number"
+                step={type === "integer" ? 1 : "any"}
+                value={
+                  current === undefined || current === null
+                    ? ""
+                    : String(current)
+                }
+                onChange={(e) => {
+                  const raw = e.target.value
+                  if (raw === "") {
+                    update(key, undefined)
+                    return
+                  }
+                  const parsed =
+                    type === "integer"
+                      ? parseInt(raw, 10)
+                      : parseFloat(raw)
+                  update(key, Number.isFinite(parsed) ? parsed : undefined)
+                }}
+                style={styles.input}
+              />
+              {desc && <span style={styles.hint}>{desc}</span>}
+            </div>
+          )
+        }
+
+        // String (default)
+        const inputType =
+          format === "password"
+            ? "password"
+            : format === "uri" || format === "url"
+              ? "url"
+              : "text"
+
+        return (
+          <div key={key} style={styles.field}>
+            <label style={styles.label}>
+              {title}
+              {isRequired && <span style={styles.requiredMark}> *</span>}
+            </label>
+            <input
+              type={inputType}
+              value={(current as string | undefined) ?? ""}
+              onChange={(e) => update(key, e.target.value)}
+              placeholder={
+                typeof def === "string" ? (def as string) : undefined
+              }
+              style={styles.input}
+            />
+            {desc && <span style={styles.hint}>{desc}</span>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// =====================================================
+// Styles
+// =====================================================
 
 const styles: Record<string, React.CSSProperties> = {
   description: {
@@ -261,6 +432,13 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "14px",
     color: "#6b7280",
     lineHeight: "1.5",
+  },
+  emptyState: {
+    border: "1px dashed #d1d5db",
+    borderRadius: "8px",
+    padding: "32px 24px",
+    textAlign: "center" as const,
+    background: "#fafafa",
   },
   card: {
     border: "1px solid #e5e7eb",
@@ -272,7 +450,7 @@ const styles: Record<string, React.CSSProperties> = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: "20px",
+    marginBottom: "12px",
     gap: "16px",
   },
   cardTitle: {
@@ -284,6 +462,12 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "12px",
     color: "#9ca3af",
     fontFamily: "monospace",
+  },
+  handlerDescription: {
+    margin: "0 0 16px",
+    fontSize: "13px",
+    color: "#6b7280",
+    lineHeight: "1.5",
   },
   manageLink: {
     fontSize: "13px",
@@ -317,6 +501,10 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 500,
     color: "#374151",
   },
+  requiredMark: {
+    color: "#dc2626",
+    marginLeft: "2px",
+  },
   input: {
     padding: "8px 12px",
     fontSize: "14px",
@@ -328,6 +516,24 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "12px",
     color: "#9ca3af",
     lineHeight: "1.4",
+  },
+  noSchemaNote: {
+    padding: "12px 16px",
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    borderRadius: "6px",
+    fontSize: "13px",
+    color: "#92400e",
+    lineHeight: "1.5",
+  },
+  codeBlock: {
+    padding: "12px",
+    background: "#f3f4f6",
+    borderRadius: "6px",
+    fontSize: "12px",
+    fontFamily: "monospace",
+    overflow: "auto",
+    margin: 0,
   },
   actionsRow: {
     display: "flex",
