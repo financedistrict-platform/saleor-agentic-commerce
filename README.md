@@ -25,6 +25,7 @@ AI agents are becoming the next commerce channel. Just like merchants once added
 | [`@financedistrict/saleor-agentic-commerce-core`](./packages/core) | Protocol types, Saleor-to-protocol formatters, payment handler interface |
 | [`@financedistrict/saleor-agentic-commerce-nextjs`](./packages/nextjs) | Ready-made Next.js App Router route handlers for UCP and ACP |
 | [`@financedistrict/saleor-prism-payment`](./packages/prism-payment) | Prism payment handler — stablecoin settlement via x402/EIP-3009 |
+| [`@financedistrict/saleor-dummy-payment`](./packages/dummy-payment) | Always-succeeds simulator — for integration testing and as a reference implementation for new handler authors |
 | [`@financedistrict/saleor-agentic-commerce-skill`](./packages/claude-skill) | Claude Code plugin — `/setup-agentic-commerce`, `/add-payment-handler`, `/diagnose-agentic-commerce` |
 
 ### Saleor App (optional)
@@ -247,6 +248,14 @@ pnpm install
 pnpm build
 ```
 
+## Contributing
+
+Issues and pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the basics, the [wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki) for architecture and integration guides, and [`docs/handler-registry-design.md`](docs/handler-registry-design.md) for the design framing.
+
+If you're shipping a new payment handler package, you don't need to fork or PR this repo — handler packages live in their own repos and self-register at storefront boot. See the [Build a Handler](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/Build-a-Handler) wiki page.
+
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 Finance District.
+
+The project is built for eventual handover to a neutral steward (e.g. Saleor, a protocol foundation) — see [§1 of the design doc](docs/handler-registry-design.md#1-framing--neutral-protocol-gateway) for the framing.
