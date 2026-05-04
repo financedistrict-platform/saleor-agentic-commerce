@@ -1,0 +1,58 @@
+{
+  "name": "@financedistrict/saleor-dummy-payment",
+  "version": "0.1.0",
+  "description": "Dummy/test payment handler for Saleor agentic commerce. Always-succeeds simulator — for integration testing and as a reference implementation. Do not use in production.",
+  "author": "Finance District <developers@fd.xyz>",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "saleor",
+    "saleor-sdk",
+    "agentic-commerce",
+    "ai-commerce",
+    "ucp",
+    "acp",
+    "payment-handler",
+    "test",
+    "dummy",
+    "simulator"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce.git",
+    "directory": "packages/dummy-payment"
+  },
+  "homepage": "https://github.com/financedistrict-platform/saleor-agentic-commerce#readme",
+  "bugs": {
+    "url": "https://github.com/financedistrict-platform/saleor-agentic-commerce/issues"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@financedistrict/saleor-agentic-commerce-core": "^0.5.0"
+  },
+  "devDependencies": {
+    "@financedistrict/saleor-agentic-commerce-core": "workspace:*",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}
