@@ -10,12 +10,15 @@
     "dev": "pnpm -r --parallel dev",
     "dev:app": "pnpm --filter @financedistrict/saleor-agentic-commerce-app dev",
     "clean": "pnpm -r clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "changeset": "changeset",
     "version": "changeset version",
     "release": "pnpm -r build && changeset publish"
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.6.0",
-    "@changesets/cli": "^2.31.0"
+    "@changesets/cli": "^2.31.0",
+    "vitest": "^4.1.5"
   }
 }
