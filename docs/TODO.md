@@ -92,6 +92,21 @@ paths are equally clean.
       into a coherent "I just heard about agentic commerce, where do I
       start" doc.
 
+## Spec conformance
+
+- [ ] **ACP Bearer auth is currently optional, spec requires it.** The
+      ACP OpenAPI defines `securitySchemes: { bearerAuth: { type: http,
+      scheme: bearer, bearerFormat: "API Key" } }` and marks
+      `Authorization` as `required: true`. Today the SDK's
+      `acpApiKey`-check short-circuits when the field is unset — ACP
+      routes serve unauthenticated requests, non-conforming with the
+      spec. Useful for dev/testing; tighten before any real ACP
+      deployment. Either: (a) make `acpApiKey` required and throw at
+      `createAgenticCommerce` time when absent + ACP enabled, or (b)
+      keep optional but document the resulting non-conformance loudly
+      and force the dashboard's General tab to require the value when
+      ACP is on.
+
 ## Cleanup / DX
 
 - [ ] **Automated SDK release workflow.** Today every npm publish is
