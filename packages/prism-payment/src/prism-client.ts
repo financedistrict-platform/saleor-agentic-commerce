@@ -21,7 +21,7 @@
 // =====================================================
 
 export type PreparePaymentInput = {
-  /** Amount in minor units (cents) */
+  /** Amount in the currency's minor units (e.g. cents for USD, no fractional units for JPY) */
   amount: number
   /** ISO 4217 currency code */
   currency: string
@@ -29,6 +29,35 @@ export type PreparePaymentInput = {
   resourceUrl: string
   /** Human-readable description */
   resourceDescription?: string
+}
+
+/**
+ * Convert a minor-unit integer amount to the decimal-major-unit string that
+ * Prism's `/payment-requirements` endpoint expects (e.g. 11480 USD cents
+ * → "114.80", 100 JPY → "100"). Exponent is derived from the ISO 4217
+ * currency code via Intl, with a USD fallback if the runtime can't resolve
+ * the currency.
+ */
+export function minorUnitsToDecimalString(amount: number, currency: string): string {
+  const exponent = currencyExponent(currency)
+  if (exponent === 0) return String(amount)
+  const negative = amount < 0
+  const abs = Math.abs(amount).toString().padStart(exponent + 1, "0")
+  const whole = abs.slice(0, -exponent)
+  const frac = abs.slice(-exponent)
+  return `${negative ? "-" : ""}${whole}.${frac}`
+}
+
+function currencyExponent(currency: string): number {
+  try {
+    const fmt = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+    })
+    return fmt.resolvedOptions().maximumFractionDigits ?? 2
+  } catch {
+    return 2
+  }
 }
 
 // =====================================================
@@ -216,7 +245,7 @@ export class PrismClient {
 
   private preparePayload(input: PreparePaymentInput) {
     return {
-      amount: String(input.amount),
+      amount: minorUnitsToDecimalString(input.amount, input.currency),
       currency: input.currency.toUpperCase(),
       resource: {
         url: input.resourceUrl,
