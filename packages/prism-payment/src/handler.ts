@@ -22,6 +22,7 @@ import {
   type PaymentHandlerConfig,
   type UcpCheckoutPrepareResponse,
   type UcpHandlersDiscoveryResponse,
+  type X402AcceptEntry,
 } from "./prism-client.js"
 
 // =====================================================
@@ -169,10 +170,27 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       return { success: false, error: "No Prism payment config found on checkout" }
     }
 
+    const accepts = config.accepts ?? []
+    if (accepts.length === 0) {
+      return { success: false, error: "Prism payment config has no accepts entries" }
+    }
+
+    // Prism's /payment/settle wants a single accepts entry as
+    // `paymentRequirements` (with network/asset/amount/scheme/payTo at top
+    // level), not the wrapper config. Pick the entry matching the network
+    // the wallet signed for.
+    const requirements = pickAcceptsEntryForCredential(accepts, credential)
+    if (!requirements) {
+      return {
+        success: false,
+        error: "Could not match a payment-requirements entry to the submitted credential",
+      }
+    }
+
     try {
       const result = await this.client.settle({
         paymentPayload: credential,
-        paymentRequirements: config,
+        paymentRequirements: requirements,
       })
 
       if (!result.success) {
@@ -269,4 +287,42 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       "accepts" in value
     )
   }
+}
+
+/**
+ * Pick the `accepts[]` entry that the wallet signed against. The x402 v2
+ * PaymentPayload exposes `network` (and `scheme`) at the top level, so we
+ * match on those. If the credential doesn't carry that information (legacy
+ * shapes), fall back to the single entry when there is only one.
+ */
+export function pickAcceptsEntryForCredential(
+  accepts: X402AcceptEntry[],
+  credential: unknown,
+): X402AcceptEntry | null {
+  const network = readString(credential, "network")
+  const scheme = readString(credential, "scheme")
+
+  if (network) {
+    const byNetworkAndScheme = scheme
+      ? accepts.find((a) => a.network === network && a.scheme === scheme)
+      : undefined
+    if (byNetworkAndScheme) return byNetworkAndScheme
+
+    const byNetwork = accepts.filter((a) => a.network === network)
+    if (byNetwork.length === 1) return byNetwork[0]
+    if (byNetwork.length > 1) {
+      // Ambiguous: same network, multiple assets. Without an asset hint on
+      // the credential, settling against the wrong entry would be worse
+      // than failing fast.
+      return null
+    }
+  }
+
+  return accepts.length === 1 ? accepts[0] : null
+}
+
+function readString(value: unknown, key: string): string | undefined {
+  if (typeof value !== "object" || value === null) return undefined
+  const v = (value as Record<string, unknown>)[key]
+  return typeof v === "string" && v.length > 0 ? v : undefined
 }

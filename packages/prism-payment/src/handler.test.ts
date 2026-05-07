@@ -280,14 +280,16 @@ describe("PrismPaymentHandler — checkout-context handlers", () => {
 })
 
 describe("PrismPaymentHandler — settlement", () => {
-  it("extracts the x402 config from UCP storage and submits to Prism", async () => {
+  it("submits a single accepts entry as paymentRequirements (not the wrapper config)", async () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true, transactionHash: "0xdeadbeef" })
+
+    const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
 
     const result = await handler.settlePayment({
       checkoutId: "abc",
       handlerId: PRISM_HANDLER_ID,
-      credential: { signature: "0xsig" },
+      credential,
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
           ucp: sampleUcpPrepare,
@@ -301,8 +303,8 @@ describe("PrismPaymentHandler — settlement", () => {
     expect(result.success).toBe(true)
     expect(result.transactionReference).toBe("0xdeadbeef")
     expect(mock.settle).toHaveBeenCalledWith({
-      paymentPayload: { signature: "0xsig" },
-      paymentRequirements: samplePaymentHandlerConfig,
+      paymentPayload: credential,
+      paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
   })
 
@@ -310,10 +312,12 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true })
 
+    const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
+
     await handler.settlePayment({
       checkoutId: "abc",
       handlerId: PRISM_HANDLER_ID,
-      credential: { signature: "0xsig" },
+      credential,
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
           ucp: null,
@@ -325,8 +329,42 @@ describe("PrismPaymentHandler — settlement", () => {
     })
 
     expect(mock.settle).toHaveBeenCalledWith({
-      paymentPayload: { signature: "0xsig" },
-      paymentRequirements: samplePaymentHandlerConfig,
+      paymentPayload: credential,
+      paymentRequirements: samplePaymentHandlerConfig.accepts[0],
+    })
+  })
+
+  it("picks the accepts entry matching the credential's network when multiple are offered", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true })
+
+    const baseEntry = samplePaymentHandlerConfig.accepts[0]
+    const arbEntry = { ...baseEntry, network: "arbitrum-sepolia", asset: "USDC-arb" }
+    const multiAcceptsConfig: PaymentHandlerConfig = {
+      ...samplePaymentHandlerConfig,
+      accepts: [arbEntry, baseEntry],
+    }
+    const multiUcp: UcpCheckoutPrepareResponse = {
+      "xyz.fd.prism_payment": [{ id: "x402", version: "2026-01-15", config: multiAcceptsConfig }],
+    }
+
+    await handler.settlePayment({
+      checkoutId: "abc",
+      handlerId: PRISM_HANDLER_ID,
+      credential: { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} },
+      checkoutMetadata: {
+        [PRISM_HANDLER_ID]: {
+          ucp: multiUcp,
+          acp: null,
+          preparedAmount: 1099,
+          preparedResourceUrl: "https://store.test/checkout/abc",
+        },
+      },
+    })
+
+    expect(mock.settle).toHaveBeenCalledWith({
+      paymentPayload: expect.anything(),
+      paymentRequirements: baseEntry,
     })
   })
 
@@ -342,5 +380,37 @@ describe("PrismPaymentHandler — settlement", () => {
 
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/no prism payment config/i)
+  })
+
+  it("fails clearly when the credential's network can't be matched to any accepts entry", async () => {
+    const { handler, mock } = makeHandler()
+
+    const baseEntry = samplePaymentHandlerConfig.accepts[0]
+    const arbEntry = { ...baseEntry, network: "arbitrum-sepolia", asset: "USDC-arb" }
+    const multiAcceptsConfig: PaymentHandlerConfig = {
+      ...samplePaymentHandlerConfig,
+      accepts: [arbEntry, baseEntry],
+    }
+    const multiUcp: UcpCheckoutPrepareResponse = {
+      "xyz.fd.prism_payment": [{ id: "x402", version: "2026-01-15", config: multiAcceptsConfig }],
+    }
+
+    const result = await handler.settlePayment({
+      checkoutId: "abc",
+      handlerId: PRISM_HANDLER_ID,
+      credential: { x402Version: 2, scheme: "exact", network: "polygon-mumbai", payload: {} },
+      checkoutMetadata: {
+        [PRISM_HANDLER_ID]: {
+          ucp: multiUcp,
+          acp: null,
+          preparedAmount: 1099,
+          preparedResourceUrl: "https://store.test/checkout/abc",
+        },
+      },
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.error).toMatch(/could not match/i)
+    expect(mock.settle).not.toHaveBeenCalled()
   })
 })
