@@ -181,6 +181,38 @@ export class SaleorClient {
     return { ok: true, data: checkout }
   }
 
+  /**
+   * Register a settled payment against a checkout via Saleor's
+   * Transactions API. Must be called before `completeCheckout`, otherwise
+   * Saleor returns `CHECKOUT_NOT_FULLY_PAID` and refuses to create an order.
+   *
+   * `pspReference` is the handler's transaction reference (e.g., the
+   * on-chain tx hash for Prism settlements).
+   */
+  async createCheckoutTransaction(
+    checkoutId: string,
+    transaction: {
+      name: string
+      pspReference: string
+      amountCharged: { amount: number; currency: string }
+      externalUrl?: string
+      message?: string
+    },
+  ): Promise<SaleorResult<{ id: string }>> {
+    const result = await this.execute<{
+      transactionCreate: {
+        transaction: { id: string } | null
+        errors: SaleorError[]
+      }
+    }>(TRANSACTION_CREATE, { id: checkoutId, transaction })
+
+    if (!result.ok) return result
+    const { transaction: created, errors } = result.data.transactionCreate
+    if (errors.length > 0) return { ok: false, error: errors[0].message, errors }
+    if (!created) return { ok: false, error: "transactionCreate returned no transaction" }
+    return { ok: true, data: created }
+  }
+
   async completeCheckout(checkoutId: string): Promise<SaleorResult<SaleorOrder>> {
     const result = await this.execute<{
       checkoutComplete: { order: SaleorOrder; errors: SaleorError[] }
@@ -436,6 +468,15 @@ const CHECKOUT_COMPLETE = `
         }
         metadata { key value }
       }
+      errors { field message code }
+    }
+  }
+`
+
+const TRANSACTION_CREATE = `
+  mutation TransactionCreate($id: ID!, $transaction: TransactionCreateInput!) {
+    transactionCreate(id: $id, transaction: $transaction) {
+      transaction { id }
       errors { field message code }
     }
   }
