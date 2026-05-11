@@ -42,6 +42,10 @@ export class PaymentHandlerRegistry {
     return this.adapters
   }
 
+  getAdapter(id: string): PaymentHandlerAdapter | undefined {
+    return this.adapters.find((a) => a.id === id)
+  }
+
   getAdapterCount(): number {
     return this.adapters.length
   }

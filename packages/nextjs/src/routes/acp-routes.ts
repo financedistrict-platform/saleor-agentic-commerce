@@ -169,6 +169,17 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           return acpError("checkout_create_failed", checkoutResult.error, 422)
         }
 
+        // If a shipping address was supplied but Saleor returns no usable
+        // shipping methods for it, fail loudly here rather than silently
+        // accepting an unfulfillable order that would later die at complete.
+        if (shippingAddress && checkoutResult.data.shippingMethods.length === 0) {
+          return acpError(
+            "unsupported_shipping_destination",
+            `No shipping methods available for destination country '${shippingAddress.country ?? "unknown"}'`,
+            422,
+          )
+        }
+
         const baseUrl = endpointBaseUrl(request)
         const finalCheckout = await preparePaymentAndRefetch(
           checkoutResult.data.id, checkoutResult.data, baseUrl,
@@ -227,6 +238,13 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           const addr = acpToSaleorAddress(body.fulfillment_details.address)
           const result = await saleorClient.updateCheckoutShippingAddress(id, addr)
           if (!result.ok) return acpError("invalid", result.error, 422)
+          if (result.data.shippingMethods.length === 0) {
+            return acpError(
+              "unsupported_shipping_destination",
+              `No shipping methods available for destination country '${addr.country ?? "unknown"}'`,
+              422,
+            )
+          }
         }
 
         // Update billing address
@@ -322,6 +340,23 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
 
         if (!settleResult.success) {
           return acpError("payment_declined", settleResult.error || "Payment settlement failed", 422)
+        }
+
+        // Register the settled payment with Saleor before completing, otherwise
+        // Saleor sees the checkout as unpaid and returns CHECKOUT_NOT_FULLY_PAID.
+        if (settleResult.transactionReference) {
+          const handler = paymentHandlers.getAdapter(handlerId)
+          const txResult = await saleorClient.createCheckoutTransaction(id, {
+            name: handler?.name ?? handlerId,
+            pspReference: settleResult.transactionReference,
+            amountCharged: {
+              amount: checkout.totalPrice.gross.amount,
+              currency: checkout.totalPrice.gross.currency,
+            },
+          })
+          if (!txResult.ok) {
+            return acpError("processing_error", txResult.error, 422)
+          }
         }
 
         // Complete checkout in Saleor

@@ -191,6 +191,17 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           return ucpError("checkout_create_failed", checkoutResult.error, 422)
         }
 
+        // If a shipping address was supplied but Saleor returns no usable
+        // shipping methods for it, fail loudly here rather than silently
+        // accepting an unfulfillable order that would later die at complete.
+        if (shippingAddress && checkoutResult.data.shippingMethods.length === 0) {
+          return ucpError(
+            "unsupported_shipping_destination",
+            `No shipping methods available for destination country '${shippingAddress.country ?? "unknown"}'`,
+            422,
+          )
+        }
+
         const baseUrl = endpointBaseUrl(request)
         const finalCheckout = await preparePaymentAndRefetch(
           checkoutResult.data.id, checkoutResult.data, baseUrl,
@@ -245,6 +256,13 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
               const addr = ucpToSaleorAddress(dest)
               const result = await saleorClient.updateCheckoutShippingAddress(id, addr)
               if (!result.ok) return ucpError("shipping_address_update_failed", result.error, 422)
+              if (result.data.shippingMethods.length === 0) {
+                return ucpError(
+                  "unsupported_shipping_destination",
+                  `No shipping methods available for destination country '${addr.country ?? "unknown"}'`,
+                  422,
+                )
+              }
             }
 
             // Update delivery method from selected option
@@ -328,6 +346,23 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         if (!settleResult.success) {
           return ucpError("payment_failed", settleResult.error || "Payment settlement failed", 422)
+        }
+
+        // Register the settled payment with Saleor before completing, otherwise
+        // Saleor sees the checkout as unpaid and returns CHECKOUT_NOT_FULLY_PAID.
+        if (settleResult.transactionReference) {
+          const handler = paymentHandlers.getAdapter(selectedInstrument.handler_id)
+          const txResult = await saleorClient.createCheckoutTransaction(id, {
+            name: handler?.name ?? selectedInstrument.handler_id,
+            pspReference: settleResult.transactionReference,
+            amountCharged: {
+              amount: checkout.totalPrice.gross.amount,
+              currency: checkout.totalPrice.gross.currency,
+            },
+          })
+          if (!txResult.ok) {
+            return ucpError("transaction_create_failed", txResult.error, 422)
+          }
         }
 
         // Complete checkout in Saleor
