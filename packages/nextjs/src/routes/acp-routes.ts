@@ -153,9 +153,11 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         const shippingAddress = body.fulfillment_details?.address
           ? acpToSaleorAddress(body.fulfillment_details.address)
           : undefined
+        // If billing isn't explicitly provided, mirror shipping — otherwise
+        // checkoutComplete fails later with BILLING_ADDRESS_NOT_SET.
         const billingAddress = body.billing_address
           ? acpToSaleorAddress(body.billing_address)
-          : undefined
+          : shippingAddress
 
         // Create Saleor checkout
         const checkoutResult = await saleorClient.createCheckout({
@@ -207,7 +209,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         if (!result.ok) return acpError("not_found", result.error, 404)
 
         const session = formatAcpCheckoutSession(formatterContext, result.data)
-        return Response.json(session)
+        const canceled =
+          metadataToRecord(result.data.privateMetadata).acp_canceled === "true"
+        return Response.json(canceled ? { ...session, status: "canceled" } : session)
       },
 
       // ACP spec: Update uses POST (not PUT)
@@ -227,6 +231,13 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           return acpError("invalid_body", "Request body must be valid JSON", 400)
         }
 
+        // Refuse updates on a session the agent has already cancelled.
+        const cancelGuard = await saleorClient.getCheckout(id)
+        if (!cancelGuard.ok) return acpError("not_found", cancelGuard.error, 404)
+        if (metadataToRecord(cancelGuard.data.privateMetadata).acp_canceled === "true") {
+          return acpError("session_canceled", "Checkout session has been canceled", 409)
+        }
+
         // Update buyer email
         if (body.buyer?.email) {
           const result = await saleorClient.updateCheckoutEmail(id, body.buyer.email)
@@ -244,6 +255,12 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
               `No shipping methods available for destination country '${addr.country ?? "unknown"}'`,
               422,
             )
+          }
+          // Mirror billing if it hasn't been set yet, so checkoutComplete
+          // doesn't later fail with BILLING_ADDRESS_NOT_SET.
+          if (!result.data.billingAddress && !body.billing_address) {
+            const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
+            if (!billingResult.ok) return acpError("invalid", billingResult.error, 422)
           }
         }
 
@@ -323,6 +340,13 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
 
         const checkout = checkoutResult.data
         const metadata = metadataToRecord(checkout.privateMetadata)
+
+        // Refuse to settle on a session the agent has already cancelled.
+        // Without this, an agent that aborts and retries can still sign
+        // and settle against a session it thought was dead.
+        if (metadata.acp_canceled === "true") {
+          return acpError("session_canceled", "Checkout session has been canceled", 409)
+        }
 
         // Determine the payment handler to use
         const handlerId = paymentData.handler_id || "xyz.fd.prism_payment"
