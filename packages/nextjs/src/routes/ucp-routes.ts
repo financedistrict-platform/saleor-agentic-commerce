@@ -180,11 +180,14 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           ? ucpToSaleorAddress(fulfillmentDest)
           : undefined
 
-        // Create Saleor checkout
+        // Create Saleor checkout. UCP has no first-class billing block,
+        // so we mirror billing = shipping. Without this, checkoutComplete
+        // later fails with BILLING_ADDRESS_NOT_SET.
         const checkoutResult = await saleorClient.createCheckout({
           lines,
           email,
           shippingAddress,
+          billingAddress: shippingAddress,
         })
 
         if (!checkoutResult.ok) {
@@ -225,7 +228,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (!result.ok) return ucpError("checkout_not_found", result.error, 404)
 
         const session = formatUcpCheckoutSession(formatterContext, result.data)
-        return Response.json(session)
+        const canceled =
+          metadataToRecord(result.data.privateMetadata).ucp_canceled === "true"
+        return Response.json(canceled ? { ...session, status: "canceled" } : session)
       },
 
       async PUT(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -238,6 +243,13 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           body = await request.json()
         } catch {
           return ucpError("invalid_body", "Request body must be valid JSON", 400)
+        }
+
+        // Refuse updates on a session the agent has already cancelled.
+        const cancelGuard = await saleorClient.getCheckout(id)
+        if (!cancelGuard.ok) return ucpError("checkout_not_found", cancelGuard.error, 404)
+        if (metadataToRecord(cancelGuard.data.privateMetadata).ucp_canceled === "true") {
+          return ucpError("session_canceled", "Checkout session has been canceled", 409)
         }
 
         // Update buyer email
@@ -262,6 +274,15 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
                   `No shipping methods available for destination country '${addr.country ?? "unknown"}'`,
                   422,
                 )
+              }
+              // Mirror billing if it hasn't been set yet (UCP has no
+              // first-class billing block), so checkoutComplete doesn't
+              // later fail with BILLING_ADDRESS_NOT_SET.
+              if (!result.data.billingAddress) {
+                const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
+                if (!billingResult.ok) {
+                  return ucpError("billing_address_update_failed", billingResult.error, 422)
+                }
               }
             }
 
@@ -329,6 +350,13 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const checkout = checkoutResult.data
         const metadata = metadataToRecord(checkout.privateMetadata)
+
+        // Refuse to settle on a session the agent has already cancelled.
+        // Without this, an agent that aborts and retries can still sign
+        // and settle against a session it thought was dead.
+        if (metadata.ucp_canceled === "true") {
+          return ucpError("session_canceled", "Checkout session has been canceled", 409)
+        }
 
         // Update billing address if provided on instrument
         if (selectedInstrument.billing_address) {
