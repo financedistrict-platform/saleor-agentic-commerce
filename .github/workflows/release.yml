@@ -20,9 +20,9 @@ name: Release
 # through normal CI like any other PR.
 #
 # Requires:
-# - FD_CI_APP_ID secret      — App ID of the FD CI GitHub App.
-# - FD_CI_PRIVATE_KEY secret — Private key (.pem contents) for that App.
-# - NPM_TOKEN secret         — publish access to @financedistrict/* on npm.
+# - FD_CI_APP_ID secret  — App ID of the FD CI GitHub App.
+# - FD_CI_APP_KEY secret — Private key (.pem contents) for that App.
+# - NPM_TOKEN secret     — publish access to @financedistrict/* on npm.
 
 on:
   push:
@@ -47,7 +47,7 @@ jobs:
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.FD_CI_APP_ID }}
-          private-key: ${{ secrets.FD_CI_PRIVATE_KEY }}
+          private-key: ${{ secrets.FD_CI_APP_KEY }}
           # Scope the minted installation token to this repo only, even
           # though the App may be installed org-wide. Limits blast radius
           # if release.yml is ever compromised.
