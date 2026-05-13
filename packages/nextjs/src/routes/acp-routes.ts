@@ -209,8 +209,10 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         if (!result.ok) return acpError("not_found", result.error, 404)
 
         const session = formatAcpCheckoutSession(formatterContext, result.data)
+        // metadataToRecord JSON.parses values, so the literal "true" written by
+        // the cancel route comes back as boolean true (not the string "true").
         const canceled =
-          metadataToRecord(result.data.privateMetadata).acp_canceled === "true"
+          metadataToRecord(result.data.privateMetadata).acp_canceled === true
         return Response.json(canceled ? { ...session, status: "canceled" } : session)
       },
 
@@ -234,7 +236,7 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         // Refuse updates on a session the agent has already cancelled.
         const cancelGuard = await saleorClient.getCheckout(id)
         if (!cancelGuard.ok) return acpError("not_found", cancelGuard.error, 404)
-        if (metadataToRecord(cancelGuard.data.privateMetadata).acp_canceled === "true") {
+        if (metadataToRecord(cancelGuard.data.privateMetadata).acp_canceled === true) {
           return acpError("session_canceled", "Checkout session has been canceled", 409)
         }
 
@@ -344,7 +346,7 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         // Refuse to settle on a session the agent has already cancelled.
         // Without this, an agent that aborts and retries can still sign
         // and settle against a session it thought was dead.
-        if (metadata.acp_canceled === "true") {
+        if (metadata.acp_canceled === true) {
           return acpError("session_canceled", "Checkout session has been canceled", 409)
         }
 
