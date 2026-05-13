@@ -1,0 +1,12 @@
+# Code owners for security-sensitive paths.
+#
+# GitHub honors this file when "Require review from Code Owners" is enabled
+# on the main branch. Anything matched here needs an approving review from
+# at least one listed owner before merge.
+#
+# The .github directory holds CI/CD configuration. Changes there can shift
+# what runs with privileged tokens (e.g. the FD CI App token used by
+# release.yml). Gating it on owner review prevents a workflow edit from
+# being merged without a sanity check from someone empowered to police it.
+
+/.github/  @jj-at-fdt
