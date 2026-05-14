@@ -107,7 +107,19 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
 
     const metadataUpdates = recordToMetadataInput(prepareResults)
     if (metadataUpdates.length > 0) {
-      await saleorClient.updatePrivateMetadata(checkoutId, metadataUpdates)
+      // Best-effort persist of the prepared payment config. If this write
+      // fails the next request will re-prepare (idempotent on Prism's side
+      // for the same resource+amount), so we don't fail the create/update
+      // flow on this — but we DO surface the failure to logs so an
+      // ongoing systemic failure (e.g., permission regression on the
+      // Saleor App token) is visible operationally instead of just
+      // rendering empty payment_handlers to agents.
+      const persistResult = await saleorClient.updatePrivateMetadata(checkoutId, metadataUpdates)
+      if (!persistResult.ok) {
+        console.error(
+          `[acp-routes] Failed to persist prepared payment config on checkout ${checkoutId}: ${persistResult.error}`,
+        )
+      }
     }
 
     const updatedCheckout = await saleorClient.getCheckout(checkoutId)
@@ -330,10 +342,17 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           return acpError("missing", "payment_data is required", 400)
         }
 
-        // Update billing address if provided
+        // Update billing address if provided. Mirror the PUT route's
+        // error-check pattern: the same SDK call is checked there, but
+        // silently swallowed here — a malformed override would let
+        // settlement proceed against the previously-set billing address
+        // with no error surfaced to the agent.
         if (paymentData.billing_address) {
           const addr = acpToSaleorAddress(paymentData.billing_address)
-          await saleorClient.updateCheckoutBillingAddress(id, addr)
+          const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
+          if (!billingResult.ok) {
+            return acpError("billing_address_update_failed", billingResult.error, 422)
+          }
         }
 
         // Fetch checkout for metadata
@@ -413,11 +432,24 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         const result = await saleorClient.getCheckout(id)
         if (!result.ok) return acpError("not_found", result.error, 404)
 
-        // Mark as canceled via metadata
-        await saleorClient.updatePrivateMetadata(id, [
+        // Mark as canceled via metadata. We MUST check this write succeeded
+        // before telling the agent the session is cancelled — the cancel
+        // guards on GET/PUT/complete (PR #40, fixed in PR #42) read this
+        // metadata flag to decide whether to refuse further mutations. A
+        // silent persistence failure here would return status="canceled" to
+        // the agent but leave the flag unwritten, so the very next request
+        // would find no flag, the guards would not fire, and the agent could
+        // continue to mutate, sign, and settle against a session it thought
+        // was dead — the exact bug PR #42 closed at the type-coercion layer,
+        // re-opened here at a different failure mode (transient Saleor write
+        // error, permission issue, concurrent modification).
+        const persistResult = await saleorClient.updatePrivateMetadata(id, [
           { key: "acp_canceled", value: "true" },
           { key: "acp_canceled_at", value: new Date().toISOString() },
         ])
+        if (!persistResult.ok) {
+          return acpError("cancel_persist_failed", persistResult.error, 422)
+        }
 
         // Return full session with canceled status
         const session = formatAcpCheckoutSession(formatterContext, result.data)
