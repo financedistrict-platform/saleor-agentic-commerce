@@ -11,18 +11,22 @@ name: Release
 #     - When that PR is merged, the workflow runs again, sees no pending
 #       changesets, and instead publishes the bumped packages to npm.
 #
-# The PR is opened using a token minted from the FD CI GitHub App rather than
-# the workflow's default GITHUB_TOKEN. The default token is deliberately
-# prevented from triggering downstream workflows (anti-recursion), which means
-# ci.yml never runs on bot-opened "Version Packages" PRs, leaving the required
-# check missing and the PR un-mergeable without admin override. An App token
-# does trigger downstream workflows, so the version-packages PR now runs
-# through normal CI like any other PR.
+# Note on bot-PR + CI: the "Version Packages" PR is opened with the default
+# GITHUB_TOKEN, which by design does not trigger downstream workflows (an
+# anti-recursion safeguard from GitHub). So ci.yml does not run on those
+# PRs and the required "Lint, type-check, build" check stays missing. To
+# unblock a release, push an empty commit to changeset-release/main with
+# your own identity — that fires ci.yml under a human actor and clears the
+# required check.
+#
+# This release flow is scheduled to move to financedistrict-platform/fd-deployments
+# (internal repo) so the bot can authenticate as the FD CI GitHub App and
+# trigger CI on its own PRs. The App's secrets live at the org level and
+# are not reachable from public repos, so they cannot be wired up here.
 #
 # Requires:
-# - FD_CI_APP_ID secret  — App ID of the FD CI GitHub App.
-# - FD_CI_APP_KEY secret — Private key (.pem contents) for that App.
-# - NPM_TOKEN secret     — publish access to @financedistrict/* on npm.
+# - NPM_TOKEN secret with publish access to @financedistrict/* on npm.
+# - GITHUB_TOKEN (provided automatically) with contents:write + pull-requests:write.
 
 on:
   push:
@@ -42,21 +46,9 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     steps:
-      - name: Generate FD CI app token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.FD_CI_APP_ID }}
-          private-key: ${{ secrets.FD_CI_APP_KEY }}
-          # Scope the minted installation token to this repo only, even
-          # though the App may be installed org-wide. Limits blast radius
-          # if release.yml is ever compromised.
-          repositories: saleor-agentic-commerce
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v3
@@ -85,6 +77,6 @@ jobs:
           title: "chore: version packages"
           createGithubReleases: true
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
