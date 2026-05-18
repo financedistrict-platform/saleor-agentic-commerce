@@ -30,6 +30,9 @@ import {
   acpToSaleorAddress,
   metadataToRecord,
   recordToMetadataInput,
+  extractSignedSummary,
+  readStoredPrismAccepts,
+  validateSignedAgainstStored,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 
@@ -374,6 +377,23 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
 
         // Extract credential from instrument
         const credential = paymentData.instrument?.credential || paymentData.credential
+
+        // Validate the agent's signed payload against the checkout's
+        // stored Prism quote before forwarding to settlement. See
+        // validate-signed-amount.ts for details. Skipped if the credential
+        // shape is unrecognised or the checkout has no stored Prism quote
+        // (non-Prism handler) — those cases fall through to existing
+        // downstream validation.
+        const signedSummary = extractSignedSummary(credential)
+        if (signedSummary) {
+          const storedAccepts = readStoredPrismAccepts(metadata, "acp")
+          if (storedAccepts) {
+            const validation = validateSignedAgainstStored(signedSummary, storedAccepts)
+            if (!validation.ok) {
+              return acpError(validation.code, validation.message, 422)
+            }
+          }
+        }
 
         // Settle payment via the appropriate handler
         const settleResult = await paymentHandlers.settlePayment({

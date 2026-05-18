@@ -155,3 +155,16 @@ export type {
   RegisterHandlerOptions,
   RegisterHandlerResult,
 } from "./lib/register-handler.js"
+
+// Signed-amount validation (Prism x402)
+export {
+  extractSignedSummary,
+  readStoredPrismAccepts,
+  validateSignedAgainstStored,
+} from "./lib/validate-signed-amount.js"
+export type {
+  SignedPaymentSummary,
+  StoredAcceptEntry,
+  ValidationResult,
+  ValidationErrorCode,
+} from "./lib/validate-signed-amount.js"
