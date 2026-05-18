@@ -1,5 +1,14 @@
 # @financedistrict/saleor-agentic-commerce-nextjs
 
+## 0.6.6
+
+### Patch Changes
+
+- [#50](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/50) [`f5cb606`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/f5cb606b982c3daa98cca6648a79ffc216d361f8) Thanks [@Mani-fdt](https://github.com/Mani-fdt)! - Security: validate the agent's signed x402/EIP-3009 payment payload against the checkout's stored Prism quote (network, asset, amount, recipient) at the UCP and ACP `/complete` route handlers before forwarding to settlement. Closes a class of payment-validation gaps where the SDK could accept a signed payload whose fields didn't match the merchant's quote. Mismatches now return HTTP 422 with a specific error code.
+
+- Updated dependencies [[`f5cb606`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/f5cb606b982c3daa98cca6648a79ffc216d361f8)]:
+  - @financedistrict/saleor-agentic-commerce-core@0.6.3
+
 ## 0.6.5
 
 ### Patch Changes
