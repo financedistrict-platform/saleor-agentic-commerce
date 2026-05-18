@@ -50,7 +50,7 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@financedistrict/saleor-agentic-commerce-core": "^0.6.2"
+    "@financedistrict/saleor-agentic-commerce-core": "^0.6.3"
   },
   "devDependencies": {
     "@financedistrict/saleor-agentic-commerce-core": "workspace:*",
