@@ -34,6 +34,9 @@ import {
   ucpToSaleorAddress,
   metadataToRecord,
   recordToMetadataInput,
+  extractSignedSummary,
+  readStoredPrismAccepts,
+  validateSignedAgainstStored,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 
@@ -382,6 +385,23 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
           if (!billingResult.ok) {
             return ucpError("billing_address_update_failed", billingResult.error, 422)
+          }
+        }
+
+        // Validate the agent's signed payload against the checkout's
+        // stored Prism quote before forwarding to settlement. See
+        // validate-signed-amount.ts for details. Skipped if the credential
+        // shape is unrecognised or the checkout has no stored Prism quote
+        // (non-Prism handler) — those cases fall through to existing
+        // downstream validation.
+        const signedSummary = extractSignedSummary(selectedInstrument.credential)
+        if (signedSummary) {
+          const storedAccepts = readStoredPrismAccepts(metadata, "ucp")
+          if (storedAccepts) {
+            const validation = validateSignedAgainstStored(signedSummary, storedAccepts)
+            if (!validation.ok) {
+              return ucpError(validation.code, validation.message, 422)
+            }
           }
         }
 
