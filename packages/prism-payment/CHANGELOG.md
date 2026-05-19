@@ -1,5 +1,11 @@
 # @financedistrict/saleor-prism-payment
 
+## 0.7.3
+
+### Patch Changes
+
+- [#52](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/52) [`c96b0d0`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/c96b0d0691a78b38ee8324d92048e85068ddf9f7) Thanks [@Mani-fdt](https://github.com/Mani-fdt)! - Match `accepts[]` entries on (network, asset) so carts advertising multiple assets per network resolve to the entry the wallet actually signed for. Falls back to legacy (network, scheme) and single-entry resolution when asset is unreadable.
+
 ## 0.7.2
 
 ### Patch Changes
