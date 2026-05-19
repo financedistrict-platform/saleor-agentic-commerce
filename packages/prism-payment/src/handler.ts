@@ -290,18 +290,35 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
 }
 
 /**
- * Pick the `accepts[]` entry that the wallet signed against. The x402 v2
- * PaymentPayload exposes `network` (and `scheme`) at the top level, so we
- * match on those. If the credential doesn't carry that information (legacy
- * shapes), fall back to the single entry when there is only one.
+ * Pick the `accepts[]` entry that the wallet signed against. Match on
+ * (network, asset) — the only pair that uniquely identifies an entry when
+ * a cart advertises multiple assets per network. Falls back to legacy
+ * (network, scheme) or single-entry resolution when the credential
+ * doesn't carry a readable `accepted` block.
  */
 export function pickAcceptsEntryForCredential(
   accepts: X402AcceptEntry[],
   credential: unknown,
 ): X402AcceptEntry | null {
+  const { network: signedNetwork, asset: signedAsset } =
+    readAcceptedFromCredential(credential)
+
+  if (signedNetwork && signedAsset) {
+    const match = accepts.find(
+      (a) =>
+        a.network === signedNetwork &&
+        a.asset.toLowerCase() === signedAsset.toLowerCase(),
+    )
+    // When the credential carries asset info, treat it as authoritative.
+    // Don't silently substitute a different asset just because the network
+    // matches — that's what produced the picker-mismatch class of bugs.
+    return match ?? null
+  }
+
+  // Legacy fallbacks for credential shapes that don't carry an `accepted`
+  // block at all (only a hoisted top-level network/scheme).
   const network = readString(credential, "network")
   const scheme = readString(credential, "scheme")
-
   if (network) {
     const byNetworkAndScheme = scheme
       ? accepts.find((a) => a.network === network && a.scheme === scheme)
@@ -310,12 +327,7 @@ export function pickAcceptsEntryForCredential(
 
     const byNetwork = accepts.filter((a) => a.network === network)
     if (byNetwork.length === 1) return byNetwork[0]
-    if (byNetwork.length > 1) {
-      // Ambiguous: same network, multiple assets. Without an asset hint on
-      // the credential, settling against the wrong entry would be worse
-      // than failing fast.
-      return null
-    }
+    if (byNetwork.length > 1) return null
   }
 
   return accepts.length === 1 ? accepts[0] : null
@@ -325,4 +337,25 @@ function readString(value: unknown, key: string): string | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const v = (value as Record<string, unknown>)[key]
   return typeof v === "string" && v.length > 0 ? v : undefined
+}
+
+function readAcceptedFromCredential(
+  credential: unknown,
+): { network?: string; asset?: string } {
+  if (typeof credential !== "object" || credential === null) return {}
+  const obj = credential as Record<string, unknown>
+  // Handles flat paymentPayload shape (the obj IS the payload) AND wrapper
+  // shape ({paymentPayload, paymentRequirements}).
+  const pp =
+    obj.paymentPayload && typeof obj.paymentPayload === "object"
+      ? (obj.paymentPayload as Record<string, unknown>)
+      : obj
+  const accepted = pp.accepted
+  if (typeof accepted !== "object" || accepted === null) return {}
+  const ar = accepted as Record<string, unknown>
+  const network =
+    typeof ar.network === "string" && ar.network.length > 0 ? ar.network : undefined
+  const asset =
+    typeof ar.asset === "string" && ar.asset.length > 0 ? ar.asset : undefined
+  return { network, asset }
 }
