@@ -1,5 +1,13 @@
 # @financedistrict/saleor-prism-payment
 
+## 0.7.4
+
+### Patch Changes
+
+- [#54](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/54) [`de011db`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/de011dbfd75f15a7e46d40d64b934a02fe8126e9) Thanks [@Mani-fdt](https://github.com/Mani-fdt)! - Include `x402Version: 2` in the Prism `/payment/settle` request body.
+
+  Prism's settle endpoint expects `{ x402Version, paymentPayload, paymentRequirements }` — the field was present in the Medusa plugin but missing from the Saleor SDK, causing HTTP 400 rejections on all settle calls after a Prism gateway update (2026-06-25).
+
 ## 0.7.3
 
 ### Patch Changes
