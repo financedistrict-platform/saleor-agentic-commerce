@@ -223,7 +223,7 @@ export class PrismClient {
         "Content-Type": "application/json",
         "X-API-Key": this.apiKey,
       },
-      body: JSON.stringify(input),
+      body: JSON.stringify({ x402Version: 2, ...input }),
     })
 
     if (!response.ok) {
