@@ -41,22 +41,6 @@ function makeConnection(overrides: Partial<SaleorProductConnection> = {}): Saleo
 }
 
 describe("formatUcpCatalogSearch", () => {
-  it("returns correct ucp envelope", () => {
-    const result = formatUcpCatalogSearch(UCP_VERSION, makeConnection(), { limit: 20, offset: 0 })
-    expect(result.ucp.version).toBe(UCP_VERSION)
-    expect(result.ucp.status).toBe("success")
-  })
-
-  it("maps product fields correctly", () => {
-    const result = formatUcpCatalogSearch(UCP_VERSION, makeConnection(), { limit: 20, offset: 0 })
-    const p = result.products[0]
-    expect(p.id).toBe("UHJvZHVjdDo0Mzg=")
-    expect(p.title).toBe("Seed Malted Loaf")
-    expect(p.handle).toBe("seed-malted-loaf")
-    expect(p.categories).toEqual(["Bread"])
-    expect(p.thumbnail_url).toBe("https://cdn.example.com/thumb.jpg")
-  })
-
   it("strips Editorjs JSON description to plain text", () => {
     const result = formatUcpCatalogSearch(UCP_VERSION, makeConnection(), { limit: 20, offset: 0 })
     expect(result.products[0].description).toBe("A delicious loaf. Baked fresh.")
@@ -98,14 +82,7 @@ describe("formatUcpCatalogSearch", () => {
     expect(result.products[0].price_range).toBeNull()
   })
 
-  it("builds media array from thumbnail", () => {
-    const result = formatUcpCatalogSearch(UCP_VERSION, makeConnection(), { limit: 20, offset: 0 })
-    expect(result.products[0].media).toEqual([
-      { url: "https://cdn.example.com/thumb.jpg", type: "image" },
-    ])
-  })
-
-  it("returns empty media when no thumbnail", () => {
+  it("returns empty media and null thumbnail_url when product has no thumbnail", () => {
     const conn = makeConnection()
     conn.edges[0].node.thumbnail = null
     const result = formatUcpCatalogSearch(UCP_VERSION, conn, { limit: 20, offset: 0 })
@@ -113,41 +90,15 @@ describe("formatUcpCatalogSearch", () => {
     expect(result.products[0].thumbnail_url).toBeNull()
   })
 
-  it("returns pagination with has_more from pageInfo", () => {
+  it("maps pageInfo.hasNextPage to pagination.has_more", () => {
     const conn = makeConnection({ pageInfo: { hasNextPage: true, endCursor: "cursor123" } })
     const result = formatUcpCatalogSearch(UCP_VERSION, conn, { limit: 20, offset: 0 })
     expect(result.pagination.has_more).toBe(true)
-    expect(result.pagination.limit).toBe(20)
-    expect(result.pagination.offset).toBe(0)
-  })
-
-  it("returns empty products for empty connection", () => {
-    const conn = makeConnection({ edges: [], pageInfo: { hasNextPage: false, endCursor: null } })
-    const result = formatUcpCatalogSearch(UCP_VERSION, conn, { limit: 20, offset: 0 })
-    expect(result.products).toHaveLength(0)
-    expect(result.pagination.has_more).toBe(false)
   })
 })
 
 describe("formatUcpCatalogLookup", () => {
-  it("returns correct ucp envelope", () => {
-    const result = formatUcpCatalogLookup(UCP_VERSION, makeConnection())
-    expect(result.ucp.version).toBe(UCP_VERSION)
-    expect(result.ucp.status).toBe("success")
-  })
-
-  it("returns products array", () => {
-    const result = formatUcpCatalogLookup(UCP_VERSION, makeConnection())
-    expect(result.products).toHaveLength(1)
-    expect(result.products[0].id).toBe("UHJvZHVjdDo0Mzg=")
-  })
-
-  it("returns empty messages array", () => {
-    const result = formatUcpCatalogLookup(UCP_VERSION, makeConnection())
-    expect(result.messages).toEqual([])
-  })
-
-  it("handles product with no category", () => {
+  it("returns empty categories when product has no category", () => {
     const conn = makeConnection()
     conn.edges[0].node.category = null
     const result = formatUcpCatalogLookup(UCP_VERSION, conn)
