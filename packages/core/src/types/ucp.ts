@@ -351,6 +351,54 @@ export type UcpAdjustment = {
 }
 
 // =====================================================
+// Catalog (search + lookup)
+// =====================================================
+
+export type UcpCatalogProductVariant = {
+  id: string
+  title: string
+  sku: string | null
+  price: { amount: number; currency: string } | null
+}
+
+export type UcpCatalogProductMedia = {
+  url: string
+  type: "image"
+}
+
+export type UcpCatalogProduct = {
+  id: string
+  title: string
+  description: string
+  handle: string
+  categories: string[]
+  price_range: {
+    min: { amount: number; currency: string }
+    max: { amount: number; currency: string }
+  } | null
+  variants: UcpCatalogProductVariant[]
+  media: UcpCatalogProductMedia[]
+  thumbnail_url: string | null
+}
+
+export type UcpCatalogSearchResponse = {
+  ucp: { version: string; status: "success" | "error" }
+  products: UcpCatalogProduct[]
+  pagination: {
+    total: number
+    limit: number
+    offset: number
+    has_more: boolean
+  }
+}
+
+export type UcpCatalogLookupResponse = {
+  ucp: { version: string; status: "success" | "error" }
+  products: UcpCatalogProduct[]
+  messages: unknown[]
+}
+
+// =====================================================
 // Error Response (HTTP-level errors)
 // =====================================================
 

@@ -5,7 +5,7 @@
  * Spec: https://ucp.dev/2026-04-08/specification/overview
  */
 
-import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine } from "../../types/saleor.js"
+import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine, SaleorProduct, SaleorProductConnection } from "../../types/saleor.js"
 import type {
   UcpCheckoutSession,
   UcpOrder,
@@ -19,6 +19,9 @@ import type {
   UcpOrderFulfillment,
   UcpFulfillmentExpectation,
   UcpOrderConfirmation,
+  UcpCatalogProduct,
+  UcpCatalogSearchResponse,
+  UcpCatalogLookupResponse,
 } from "../../types/ucp.js"
 import { saleorToUcpAddress } from "../address-translator.js"
 import { resolveUcpCheckoutStatus, normalizeOrderStatus } from "../status-maps.js"
@@ -52,6 +55,8 @@ export async function formatUcpProfile(
       capabilities: {
         "dev.ucp.shopping.checkout": [{ version: ctx.ucpVersion }],
         "dev.ucp.shopping.order": [{ version: ctx.ucpVersion }],
+        "dev.ucp.shopping.catalog.search": [{ version: ctx.ucpVersion }],
+        "dev.ucp.shopping.catalog.lookup": [{ version: ctx.ucpVersion }],
       },
       payment_handlers: paymentHandlers,
     },
@@ -353,4 +358,96 @@ function deliveryDaysToIso(days: number): string {
   const date = new Date()
   date.setDate(date.getDate() + days)
   return date.toISOString()
+}
+
+// =====================================================
+// Catalog
+// =====================================================
+
+export function formatUcpCatalogSearch(
+  ucpVersion: string,
+  connection: SaleorProductConnection,
+  opts: { limit: number; offset: number },
+): UcpCatalogSearchResponse {
+  const products = connection.edges.map((e) => formatCatalogProduct(e.node))
+  const total = products.length + opts.offset // approximate — Saleor cursor pagination has no total
+  return {
+    ucp: { version: ucpVersion, status: "success" },
+    products,
+    pagination: {
+      total,
+      limit: opts.limit,
+      offset: opts.offset,
+      has_more: connection.pageInfo.hasNextPage,
+    },
+  }
+}
+
+export function formatUcpCatalogLookup(
+  ucpVersion: string,
+  connection: SaleorProductConnection,
+): UcpCatalogLookupResponse {
+  const products = connection.edges.map((e) => formatCatalogProduct(e.node))
+  return {
+    ucp: { version: ucpVersion, status: "success" },
+    products,
+    messages: [],
+  }
+}
+
+function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
+  const variants = product.variants.map((v) => ({
+    id: v.id,
+    title: v.name,
+    sku: v.sku,
+    price: v.pricing?.price
+      ? {
+          amount: toMinor(v.pricing.price.gross.amount),
+          currency: v.pricing.price.gross.currency.toLowerCase(),
+        }
+      : null,
+  }))
+
+  const variantAmounts = variants
+    .map((v) => v.price?.amount)
+    .filter((a): a is number => a != null)
+
+  const currency = product.pricing?.priceRange.start.gross.currency.toLowerCase()
+    ?? (variants[0]?.price?.currency ?? "usd")
+
+  const priceRange =
+    variantAmounts.length > 0
+      ? {
+          min: { amount: Math.min(...variantAmounts), currency },
+          max: { amount: Math.max(...variantAmounts), currency },
+        }
+      : null
+
+  const media = product.thumbnail ? [{ url: product.thumbnail.url, type: "image" as const }] : []
+
+  return {
+    id: product.id,
+    title: product.name,
+    description: stripEditorjsToPlainText(product.description),
+    handle: product.slug,
+    categories: product.category ? [product.category.name] : [],
+    price_range: priceRange,
+    variants,
+    media,
+    thumbnail_url: product.thumbnail?.url ?? null,
+  }
+}
+
+function stripEditorjsToPlainText(raw: string | null): string {
+  if (!raw) return ""
+  try {
+    const parsed = JSON.parse(raw) as { blocks?: { data?: { text?: string } }[] }
+    if (!Array.isArray(parsed.blocks)) return raw
+    return parsed.blocks
+      .map((b) => b.data?.text ?? "")
+      .filter(Boolean)
+      .join(" ")
+  } catch {
+    return raw
+  }
 }
