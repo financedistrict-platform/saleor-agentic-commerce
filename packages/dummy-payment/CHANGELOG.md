@@ -1,5 +1,12 @@
 # @financedistrict/saleor-dummy-payment
 
+## 1.0.0
+
+### Patch Changes
+
+- Updated dependencies [[`05c4837`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/05c483711ce2de1a699494377b4060b5877451a3)]:
+  - @financedistrict/saleor-agentic-commerce-core@0.7.0
+
 ## 0.6.1
 
 ### Patch Changes
