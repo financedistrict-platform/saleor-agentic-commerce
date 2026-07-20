@@ -102,6 +102,46 @@ export type SaleorOrder = {
   metadata: SaleorMetadataItem[]
 }
 
+// =====================================================
+// Catalog types (for UCP catalog/search and catalog/lookup)
+// =====================================================
+
+export type SaleorProductVariant = {
+  id: string
+  name: string
+  sku: string | null
+  pricing: {
+    price: {
+      gross: SaleorMoney
+    }
+  } | null
+}
+
+export type SaleorProduct = {
+  id: string
+  name: string
+  slug: string
+  /** Editorjs JSON string — strip to plain text before returning to agents */
+  description: string | null
+  thumbnail: { url: string } | null
+  category: { id: string; name: string } | null
+  pricing: {
+    priceRange: {
+      start: { gross: SaleorMoney }
+      stop: { gross: SaleorMoney }
+    }
+  } | null
+  variants: SaleorProductVariant[]
+}
+
+export type SaleorProductConnection = {
+  edges: { node: SaleorProduct }[]
+  pageInfo: {
+    hasNextPage: boolean
+    endCursor: string | null
+  }
+}
+
 export type SaleorOrderLine = {
   id: string
   productName: string

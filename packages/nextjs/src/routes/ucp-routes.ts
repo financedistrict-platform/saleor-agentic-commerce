@@ -30,6 +30,8 @@ import {
   formatUcpCheckoutSession,
   formatUcpCompleteResponse,
   formatUcpOrder,
+  formatUcpCatalogSearch,
+  formatUcpCatalogLookup,
   formatUcpError,
   ucpToSaleorAddress,
   metadataToRecord,
@@ -65,6 +67,14 @@ export type UcpRouteHandlers = {
   /** GET /api/ucp/orders/[id] */
   order: {
     GET: (request: Request, context: { params: Promise<{ id: string }> }) => Promise<Response>
+  }
+  /** POST /api/ucp/catalog/search */
+  catalogSearch: {
+    POST: (request: Request) => Promise<Response>
+  }
+  /** POST /api/ucp/catalog/lookup */
+  catalogLookup: {
+    POST: (request: Request) => Promise<Response>
   }
 }
 
@@ -506,6 +516,71 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const order = formatUcpOrder(formatterContext, result.data)
         return Response.json(order)
+      },
+    },
+
+    // =====================================================
+    // Catalog Search — POST /api/ucp/catalog/search
+    // =====================================================
+    catalogSearch: {
+      async POST(request: Request) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
+        let body: any
+        try {
+          body = await request.json()
+        } catch {
+          return ucpError("invalid_body", "Request body must be valid JSON", 400)
+        }
+
+        const query: string = body.query ?? ""
+        const limit: number = Math.min(body.pagination?.limit ?? 20, 100)
+        const offset: number = body.pagination?.offset ?? 0
+
+        // Saleor uses cursor-based pagination; we accept cursor on repeat calls.
+        // When offset > 0 but no cursor is given, we can't reliably skip records —
+        // callers should pass pagination.cursor from the previous response instead.
+        const cursor: string | null = body.pagination?.cursor ?? null
+
+        const result = await saleorClient.searchProducts({
+          query,
+          limit,
+          cursor,
+        })
+
+        if (!result.ok) return ucpError("catalog_search_failed", result.error, 422)
+
+        const response = formatUcpCatalogSearch(config.ucpVersion, result.data, { limit, offset })
+        return Response.json(response)
+      },
+    },
+
+    // =====================================================
+    // Catalog Lookup — POST /api/ucp/catalog/lookup
+    // =====================================================
+    catalogLookup: {
+      async POST(request: Request) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
+        let body: any
+        try {
+          body = await request.json()
+        } catch {
+          return ucpError("invalid_body", "Request body must be valid JSON", 400)
+        }
+
+        const ids: string[] = Array.isArray(body.ids) ? body.ids : []
+        if (ids.length === 0) {
+          return ucpError("missing_ids", "ids array is required and must not be empty", 400)
+        }
+
+        const result = await saleorClient.getProducts({ ids })
+        if (!result.ok) return ucpError("catalog_lookup_failed", result.error, 422)
+
+        const response = formatUcpCatalogLookup(config.ucpVersion, result.data)
+        return Response.json(response)
       },
     },
   }

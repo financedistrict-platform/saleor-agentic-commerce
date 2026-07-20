@@ -12,6 +12,7 @@ import type {
   SaleorCheckout,
   SaleorOrder,
   SaleorAddress,
+  SaleorProductConnection,
 } from "../types/saleor.js"
 
 // =====================================================
@@ -222,6 +223,47 @@ export class SaleorClient {
     const { order, errors } = result.data.checkoutComplete
     if (errors.length > 0) return { ok: false, error: errors[0].message, errors }
     return { ok: true, data: order }
+  }
+
+  // -------------------------------------------------
+  // Catalog Operations
+  // -------------------------------------------------
+
+  async searchProducts(options: {
+    query: string
+    limit?: number
+    cursor?: string | null
+    channel?: string
+  }): Promise<SaleorResult<SaleorProductConnection>> {
+    const result = await this.execute<{ products: SaleorProductConnection }>(
+      PRODUCTS_SEARCH_QUERY,
+      {
+        search: options.query,
+        first: options.limit ?? 20,
+        after: options.cursor ?? null,
+        channel: options.channel ?? this.channel,
+      },
+    )
+
+    if (!result.ok) return result
+    return { ok: true, data: result.data.products }
+  }
+
+  async getProducts(options: {
+    ids: string[]
+    channel?: string
+  }): Promise<SaleorResult<SaleorProductConnection>> {
+    const result = await this.execute<{ products: SaleorProductConnection }>(
+      PRODUCTS_LOOKUP_QUERY,
+      {
+        ids: options.ids,
+        first: 50,
+        channel: options.channel ?? this.channel,
+      },
+    )
+
+    if (!result.ok) return result
+    return { ok: true, data: result.data.products }
   }
 
   // -------------------------------------------------
@@ -511,6 +553,40 @@ const ORDER_QUERY = `
         city countryArea postalCode country { code country } phone
       }
       metadata { key value }
+    }
+  }
+`
+
+const PRODUCT_FIELDS = `
+  id name slug description
+  thumbnail { url }
+  category { id name }
+  pricing {
+    priceRange {
+      start { gross { amount currency } }
+      stop { gross { amount currency } }
+    }
+  }
+  variants {
+    id name sku
+    pricing { price { gross { amount currency } } }
+  }
+`
+
+const PRODUCTS_SEARCH_QUERY = `
+  query ProductSearch($search: String!, $first: Int!, $after: String, $channel: String!) {
+    products(search: $search, first: $first, after: $after, channel: $channel) {
+      edges { node { ${PRODUCT_FIELDS} } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+`
+
+const PRODUCTS_LOOKUP_QUERY = `
+  query ProductLookup($ids: [ID!]!, $first: Int!, $channel: String!) {
+    products(where: { ids: $ids }, first: $first, channel: $channel) {
+      edges { node { ${PRODUCT_FIELDS} } }
+      pageInfo { hasNextPage endCursor }
     }
   }
 `

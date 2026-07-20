@@ -43,6 +43,11 @@ export type {
   UcpErrorSeverity,
   UcpOrderFulfillment,
   UcpAdjustment,
+  UcpCatalogProduct,
+  UcpCatalogProductVariant,
+  UcpCatalogProductMedia,
+  UcpCatalogSearchResponse,
+  UcpCatalogLookupResponse,
 } from "./types/ucp.js"
 
 // Types — ACP Protocol
@@ -86,6 +91,9 @@ export type {
   SaleorTaxedMoney,
   SaleorMetadataItem,
   SaleorShippingMethod,
+  SaleorProduct,
+  SaleorProductVariant,
+  SaleorProductConnection,
 } from "./types/saleor.js"
 
 // Payment Handler Registry
@@ -96,7 +104,7 @@ export { SaleorClient } from "./lib/saleor-client.js"
 export type { SaleorClientOptions, SaleorResult, SaleorAddressInput } from "./lib/saleor-client.js"
 
 // Formatters — UCP
-export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder } from "./lib/formatters/ucp.js"
+export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup } from "./lib/formatters/ucp.js"
 
 // Formatters — ACP
 export { formatAcpCheckoutSession, formatAcpCompleteResponse } from "./lib/formatters/acp.js"
