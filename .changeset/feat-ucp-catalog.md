@@ -5,4 +5,4 @@
 
 Add UCP catalog routes: `POST /api/ucp/catalog/search` and `POST /api/ucp/catalog/lookup`
 
-Implements the `dev.ucp.shopping.catalog.search` and `dev.ucp.shopping.catalog.lookup` capabilities per UCP spec 2026-04-08. Discovery document now advertises both capabilities. Saleor Editorjs JSON descriptions are stripped to plain text before exposure via the catalog API.
+Implements the `dev.ucp.shopping.catalog.search` and `dev.ucp.shopping.catalog.lookup` capabilities per UCP spec
