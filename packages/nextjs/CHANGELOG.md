@@ -1,5 +1,18 @@
 # @financedistrict/saleor-agentic-commerce-nextjs
 
+## 1.0.0
+
+### Minor Changes
+
+- [#56](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/56) [`05c4837`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/05c483711ce2de1a699494377b4060b5877451a3) Thanks [@Mani-fdt](https://github.com/Mani-fdt)! - Add UCP catalog routes: `POST /api/ucp/catalog/search` and `POST /api/ucp/catalog/lookup`
+
+  Implements the `dev.ucp.shopping.catalog.search` and `dev.ucp.shopping.catalog.lookup` capabilities per UCP spec
+
+### Patch Changes
+
+- Updated dependencies [[`05c4837`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/05c483711ce2de1a699494377b4060b5877451a3)]:
+  - @financedistrict/saleor-agentic-commerce-core@0.7.0
+
 ## 0.6.6
 
 ### Patch Changes
