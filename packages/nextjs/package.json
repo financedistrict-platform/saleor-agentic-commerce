@@ -69,7 +69,7 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@financedistrict/saleor-agentic-commerce-core": "^0.7.0",
+    "@financedistrict/saleor-agentic-commerce-core": "^0.7.1",
     "next": ">=14.0.0"
   },
   "peerDependenciesMeta": {
