@@ -39,24 +39,26 @@ export async function formatUcpProfile(
 ): Promise<UcpProfile> {
   const paymentHandlers = await ctx.paymentHandlers.getUcpDiscoveryHandlers()
 
+  const v = ctx.ucpVersion
   return {
     ucp: {
-      version: ctx.ucpVersion,
+      version: v,
       services: {
         "dev.ucp.shopping": [
           {
-            version: ctx.ucpVersion,
-            spec: `https://ucp.dev/${ctx.ucpVersion}/specification/overview`,
+            version: v,
+            spec: `https://ucp.dev/${v}/specification/overview`,
+            schema: `https://ucp.dev/${v}/services/shopping/rest.openapi.json`,
             transport: "rest" as const,
             endpoint: endpointBaseUrl,
           },
         ],
       },
       capabilities: {
-        "dev.ucp.shopping.checkout": [{ version: ctx.ucpVersion }],
-        "dev.ucp.shopping.order": [{ version: ctx.ucpVersion }],
-        "dev.ucp.shopping.catalog.search": [{ version: ctx.ucpVersion }],
-        "dev.ucp.shopping.catalog.lookup": [{ version: ctx.ucpVersion }],
+        "dev.ucp.shopping.checkout": [{ version: v, spec: `https://ucp.dev/${v}/specification/checkout/`, schema: `https://ucp.dev/${v}/schemas/shopping/checkout.json` }],
+        "dev.ucp.shopping.order": [{ version: v, spec: `https://ucp.dev/${v}/specification/order/`, schema: `https://ucp.dev/${v}/schemas/shopping/order.json` }],
+        "dev.ucp.shopping.catalog.search": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog.json` }],
+        "dev.ucp.shopping.catalog.lookup": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog.json` }],
       },
       payment_handlers: paymentHandlers,
     },
