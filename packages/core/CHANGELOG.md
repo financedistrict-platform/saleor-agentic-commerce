@@ -1,5 +1,11 @@
 # @financedistrict/saleor-agentic-commerce-core
 
+## 0.7.1
+
+### Patch Changes
+
+- [#58](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/58) [`6b153bf`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/6b153bf8112a829fa212b876fa73a557dbf3a979) Thanks [@Mani-fdt](https://github.com/Mani-fdt)! - Fix discovery profile to include required `spec` and `schema` fields on all capability entries, and `schema` on the service block, per UCP spec (REST transport requires `schema`; all capabilities require `version`, `spec`, and `schema`).
+
 ## 0.7.0
 
 ### Minor Changes
