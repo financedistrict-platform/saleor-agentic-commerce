@@ -576,6 +576,7 @@ const PRODUCT_FIELDS = `
 const PRODUCTS_SEARCH_QUERY = `
   query ProductSearch($search: String!, $first: Int!, $after: String, $channel: String!) {
     products(search: $search, first: $first, after: $after, channel: $channel) {
+      totalCount
       edges { node { ${PRODUCT_FIELDS} } }
       pageInfo { hasNextPage endCursor }
     }

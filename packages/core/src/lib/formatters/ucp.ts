@@ -22,6 +22,7 @@ import type {
   UcpCatalogProduct,
   UcpCatalogSearchResponse,
   UcpCatalogLookupResponse,
+  UcpDescription,
 } from "../../types/ucp.js"
 import { saleorToUcpAddress } from "../address-translator.js"
 import { resolveUcpCheckoutStatus } from "../status-maps.js"
@@ -369,18 +370,21 @@ function deliveryDaysToIso(days: number): string {
 export function formatUcpCatalogSearch(
   ucpVersion: string,
   connection: SaleorProductConnection,
-  opts: { limit: number; offset: number },
 ): UcpCatalogSearchResponse {
   const products = connection.edges.map((e) => formatCatalogProduct(e.node))
-  const total = products.length + opts.offset // approximate — Saleor cursor pagination has no total
+  const hasNextPage = connection.pageInfo.hasNextPage
   return {
     ucp: { version: ucpVersion, status: "success" },
     products,
     pagination: {
-      total,
-      limit: opts.limit,
-      offset: opts.offset,
-      has_more: connection.pageInfo.hasNextPage,
+      has_next_page: hasNextPage,
+      // pagination.json: cursor MUST be present when has_next_page is true
+      ...(hasNextPage && connection.pageInfo.endCursor
+        ? { cursor: connection.pageInfo.endCursor }
+        : {}),
+      // Real total from Saleor's connection when selected — replaces the old
+      // `products.length + offset` fabrication (U-4).
+      ...(connection.totalCount != null ? { total_count: connection.totalCount } : {}),
     },
   }
 }
@@ -398,14 +402,21 @@ export function formatUcpCatalogLookup(
 }
 
 function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
+  // Saleor has no per-variant description; variants inherit the product's.
+  // variant.json requires `description`, an object per description.json.
+  const description = descriptionObject(product.description)
+
   const variants = product.variants.map((v) => ({
     id: v.id,
     title: v.name,
-    sku: v.sku,
+    description,
+    // sku is an optional string in variant.json — omit rather than emit null.
+    ...(v.sku ? { sku: v.sku } : {}),
     price: v.pricing?.price
       ? {
           amount: toMinor(v.pricing.price.gross.amount),
-          currency: v.pricing.price.gross.currency.toLowerCase(),
+          // price.json requires ISO 4217 uppercase (`^[A-Z]{3}$`).
+          currency: v.pricing.price.gross.currency.toUpperCase(),
         }
       : null,
   }))
@@ -414,8 +425,11 @@ function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
     .map((v) => v.price?.amount)
     .filter((a): a is number => a != null)
 
-  const currency = product.pricing?.priceRange.start.gross.currency.toLowerCase()
-    ?? (variants[0]?.price?.currency ?? "usd")
+  const currency = (
+    product.pricing?.priceRange.start.gross.currency
+    ?? variants[0]?.price?.currency
+    ?? "USD"
+  ).toUpperCase()
 
   const priceRange =
     variantAmounts.length > 0
@@ -430,7 +444,7 @@ function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
   return {
     id: product.id,
     title: product.name,
-    description: stripEditorjsToPlainText(product.description),
+    description,
     handle: product.slug,
     categories: product.category ? [product.category.name] : [],
     price_range: priceRange,
@@ -438,6 +452,12 @@ function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
     media,
     thumbnail_url: product.thumbnail?.url ?? null,
   }
+}
+
+// A UCP description object (description.json requires at least one of
+// plain/html/markdown). Saleor stores rich text as Editorjs JSON — flatten it.
+function descriptionObject(raw: string | null): UcpDescription {
+  return { plain: stripEditorjsToPlainText(raw) }
 }
 
 function stripEditorjsToPlainText(raw: string | null): string {

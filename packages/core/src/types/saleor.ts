@@ -136,6 +136,7 @@ export type SaleorProduct = {
 
 export type SaleorProductConnection = {
   edges: { node: SaleorProduct }[]
+  totalCount?: number
   pageInfo: {
     hasNextPage: boolean
     endCursor: string | null

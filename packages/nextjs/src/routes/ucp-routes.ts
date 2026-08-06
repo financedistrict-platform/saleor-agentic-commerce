@@ -536,11 +536,10 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const query: string = body.query ?? ""
         const limit: number = Math.min(body.pagination?.limit ?? 20, 100)
-        const offset: number = body.pagination?.offset ?? 0
 
-        // Saleor uses cursor-based pagination; we accept cursor on repeat calls.
-        // When offset > 0 but no cursor is given, we can't reliably skip records —
-        // callers should pass pagination.cursor from the previous response instead.
+        // Saleor pagination is cursor-based. Callers page by passing
+        // pagination.cursor from the previous response's pagination.cursor
+        // (offset is not supported — see U-4).
         const cursor: string | null = body.pagination?.cursor ?? null
 
         const result = await saleorClient.searchProducts({
@@ -551,7 +550,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         if (!result.ok) return ucpError("catalog_search_failed", result.error, 422)
 
-        const response = formatUcpCatalogSearch(config.ucpVersion, result.data, { limit, offset })
+        const response = formatUcpCatalogSearch(config.ucpVersion, result.data)
         return Response.json(response)
       },
     },

@@ -354,10 +354,17 @@ export type UcpAdjustment = {
 // Catalog (search + lookup)
 // =====================================================
 
+export type UcpDescription = {
+  plain?: string
+  html?: string
+  markdown?: string
+}
+
 export type UcpCatalogProductVariant = {
   id: string
   title: string
-  sku: string | null
+  description: UcpDescription
+  sku?: string
   price: { amount: number; currency: string } | null
 }
 
@@ -369,7 +376,7 @@ export type UcpCatalogProductMedia = {
 export type UcpCatalogProduct = {
   id: string
   title: string
-  description: string
+  description: UcpDescription
   handle: string
   categories: string[]
   price_range: {
@@ -385,10 +392,9 @@ export type UcpCatalogSearchResponse = {
   ucp: { version: string; status: "success" | "error" }
   products: UcpCatalogProduct[]
   pagination: {
-    total: number
-    limit: number
-    offset: number
-    has_more: boolean
+    has_next_page: boolean
+    cursor?: string
+    total_count?: number
   }
 }
 
