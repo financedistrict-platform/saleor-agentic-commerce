@@ -438,6 +438,7 @@ const CHECKOUT_FIELDS = `
   deliveryMethod {
     ... on ShippingMethod { id name }
   }
+  transactions { pspReference }
   metadata { key value }
   privateMetadata { key value }
 `

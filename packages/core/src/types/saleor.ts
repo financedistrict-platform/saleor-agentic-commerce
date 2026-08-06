@@ -20,6 +20,7 @@ export type SaleorCheckout = {
   billingAddress: SaleorAddress | null
   shippingMethods: SaleorShippingMethod[]
   deliveryMethod: SaleorDeliveryMethod | null
+  transactions: { pspReference: string | null }[]
   metadata: SaleorMetadataItem[]
   privateMetadata: SaleorMetadataItem[]
 }

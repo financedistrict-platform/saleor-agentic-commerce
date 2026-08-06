@@ -45,6 +45,12 @@ import {
 import type { AgenticCommerceInstance } from "../config.js"
 import type { UcpErrorSeverity } from "@financedistrict/saleor-agentic-commerce-core"
 
+// Checkout privateMetadata key holding the settlement record (SAC-2): the tx
+// reference + amount, written the moment a payment settles — BEFORE the Saleor
+// writes that can fail. Turns a settle-then-fail into a recoverable, auditable
+// state, and lets a retried complete skip re-settling. Must match acp-routes.ts.
+const SETTLEMENT_METADATA_KEY = "agentic_commerce__settlement"
+
 export type UcpRouteHandlers = {
   /** GET /.well-known/ucp */
   discovery: {
@@ -467,38 +473,108 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           }
         }
 
-        // Settle payment via the appropriate handler
-        const settleResult = await paymentHandlers.settlePayment({
-          checkoutId: id,
-          handlerId: selectedInstrument.handler_id,
-          credential: selectedInstrument.credential,
-          checkoutMetadata: metadata,
-        })
+        // --- Settle + record (SAC-2) ----------------------------------------
+        // A prior `complete` may have settled on-chain (irreversible) and then
+        // failed before the order was recorded. To make that recoverable rather
+        // than a silent charged-no-order, the settlement is written to checkout
+        // privateMetadata the instant it succeeds, BEFORE the Saleor writes that
+        // can fail. On a retry we find that record and skip re-settling.
+        const priorSettlement = metadata[SETTLEMENT_METADATA_KEY] as
+          | { reference?: string }
+          | undefined
 
-        if (!settleResult.success) {
-          return ucpError("payment_failed", settleResult.error || "Payment settlement failed", 422)
-        }
+        let reference: string | undefined
+        if (priorSettlement?.reference) {
+          // Retry-to-recover: the money already moved (the EIP-3009 nonce makes a
+          // repeat settle a no-op anyway). Don't settle again — resume bookkeeping.
+          reference = priorSettlement.reference
+        } else {
+          const settleResult = await paymentHandlers.settlePayment({
+            checkoutId: id,
+            handlerId: selectedInstrument.handler_id,
+            credential: selectedInstrument.credential,
+            checkoutMetadata: metadata,
+          })
+          if (!settleResult.success) {
+            return ucpError("payment_failed", settleResult.error || "Payment settlement failed", 422, "recoverable")
+          }
+          reference = settleResult.transactionReference
 
-        // Register the settled payment with Saleor before completing, otherwise
-        // Saleor sees the checkout as unpaid and returns CHECKOUT_NOT_FULLY_PAID.
-        if (settleResult.transactionReference) {
-          const handler = paymentHandlers.getAdapter(selectedInstrument.handler_id)
-          const txResult = await saleorClient.createCheckoutTransaction(id, {
-            name: handler?.name ?? selectedInstrument.handler_id,
-            pspReference: settleResult.transactionReference,
-            amountCharged: {
+          // Record the settlement BEFORE createCheckoutTransaction/completeCheckout
+          // (either can fail). Saleor's per-checkout privateMetadata is the direct
+          // analog of Shopware's settlement table; the response is stored opaquely.
+          if (reference) {
+            const record = {
+              handlerId: selectedInstrument.handler_id,
+              reference,
               amount: checkout.totalPrice.gross.amount,
               currency: checkout.totalPrice.gross.currency,
-            },
-          })
-          if (!txResult.ok) {
-            return ucpError("transaction_create_failed", txResult.error, 422)
+              settledAt: new Date().toISOString(),
+            }
+            const recResult = await saleorClient.updatePrivateMetadata(id, [
+              { key: SETTLEMENT_METADATA_KEY, value: JSON.stringify(record) },
+            ])
+            if (!recResult.ok) {
+              // Settled but the marker did not persist. Refuse to go further and
+              // lose the trail — return an HONEST, recoverable error naming the
+              // settled payment; a retry re-persists (the nonce blocks any
+              // double-charge).
+              console.error(`[ucp-routes] settled ${reference} but failed to record settlement on ${id}: ${recResult.error}`)
+              return ucpError(
+                "settlement_not_recorded",
+                `Payment settled on-chain (reference ${reference}) but recording it failed — the order was not created. Retry to reconcile.`,
+                422,
+                "recoverable",
+              )
+            }
+          }
+        }
+
+        // Register the settled payment as a Saleor transaction — unless it is
+        // already recorded (retry after a later failure), which would otherwise
+        // double the charged amount on the checkout.
+        if (reference) {
+          const alreadyRecorded = (checkout.transactions ?? []).some((t) => t.pspReference === reference)
+          if (!alreadyRecorded) {
+            const handler = paymentHandlers.getAdapter(selectedInstrument.handler_id)
+            const txResult = await saleorClient.createCheckoutTransaction(id, {
+              name: handler?.name ?? selectedInstrument.handler_id,
+              pspReference: reference,
+              amountCharged: {
+                amount: checkout.totalPrice.gross.amount,
+                currency: checkout.totalPrice.gross.currency,
+              },
+            })
+            if (!txResult.ok) {
+              // Honest reporting (SAC-2): the PAYMENT succeeded; recording the
+              // order failed — not payment_failed. Settlement is recorded, so a
+              // retry resumes here.
+              return ucpError(
+                "order_not_recorded_after_settlement",
+                `Payment settled (reference ${reference}) but recording the order failed: ${txResult.error}. Retry to complete the order.`,
+                422,
+                "recoverable",
+              )
+            }
           }
         }
 
         // Complete checkout in Saleor
         const orderResult = await saleorClient.completeCheckout(id)
-        if (!orderResult.ok) return ucpSaleorError("checkout_complete_failed", 422, orderResult)
+        if (!orderResult.ok) {
+          // Honest reporting (SAC-2): if a settlement exists, the payment
+          // succeeded and only order placement failed (e.g. stock/voucher at
+          // commit) — say so, and let a retry resume without re-charging.
+          if (reference) {
+            return ucpError(
+              "order_not_completed_after_settlement",
+              `Payment settled (reference ${reference}) but completing the order failed: ${orderResult.error}. Retry to complete the order.`,
+              422,
+              "recoverable",
+            )
+          }
+          return ucpSaleorError("checkout_complete_failed", 422, orderResult)
+        }
 
         // Return checkout session with completed status and order confirmation
         const orderConfirmation = {
