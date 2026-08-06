@@ -91,6 +91,23 @@ wget -q -O /dev/null http://localhost:3001/api/manifest || exit 1
     -d '{"query":"mutation($url:String!){ appFetchManifest(manifestUrl:$url){ errors{field message code} } }","variables":{"url":"https://agentic-app.example.com/api/manifest"}}'
   ```
 
+### Gotcha: local HTTP dev under a custom hostname requires a Secure Context override
+
+`@saleor/app-sdk`'s App Bridge calls `crypto.randomUUID()`-backed action-ID
+generation, which browsers only allow in a Secure Context (HTTPS, or the
+literal hostnames `localhost`/`127.0.0.1`). If you run the App locally under
+a custom hostname — e.g. a Docker Compose network alias like
+`agentic-commerce-app.local`, needed so both your browser and Saleor's
+containers can resolve the App consistently — Chrome will throw:
+
+    Error: Failed to generate action ID, likely as your browser doesn't
+    consider current session as Secure Context.
+
+Fix: add the origin to `chrome://flags/#unsafely-treat-insecure-origin-as-secure`
+(paste e.g. `http://agentic-commerce-app.local:3001`, set to Enabled, relaunch
+Chrome). This is a local-dev-only workaround — production deployments behind
+HTTPS never hit this. (saleor-agentic-commerce#61)
+
 ## APL choice
 
 The Auth Persistence Layer stores the registration token Saleor returns at install time. Three options:
