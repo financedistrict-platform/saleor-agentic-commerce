@@ -130,6 +130,11 @@ export type SaleorProductVariant = {
   } | null
 }
 
+/** A variant returned by a variant-id lookup, carrying its parent product. */
+export type SaleorLookupVariant = SaleorProductVariant & {
+  product: SaleorProduct
+}
+
 export type SaleorProduct = {
   id: string
   name: string

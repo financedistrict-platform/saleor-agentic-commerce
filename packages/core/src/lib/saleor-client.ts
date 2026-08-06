@@ -12,7 +12,9 @@ import type {
   SaleorCheckout,
   SaleorOrder,
   SaleorAddress,
+  SaleorProduct,
   SaleorProductConnection,
+  SaleorLookupVariant,
 } from "../types/saleor.js"
 
 // =====================================================
@@ -264,6 +266,40 @@ export class SaleorClient {
 
     if (!result.ok) return result
     return { ok: true, data: result.data.products }
+  }
+
+  /**
+   * Resolve a lookup by mixed product/variant GIDs. Sends the same id list to
+   * both `products(where:{ids})` and `productVariants(ids)`; Saleor matches
+   * each id where it belongs, so product GIDs come back as products and variant
+   * GIDs as variants (with their parent product). The formatter dedups and
+   * attaches inputs[] correlations (SAC-8: variant-id lookup).
+   */
+  async lookupProductsAndVariants(options: {
+    ids: string[]
+    channel?: string
+  }): Promise<SaleorResult<{ products: SaleorProduct[]; variants: SaleorLookupVariant[] }>> {
+    const channel = options.channel ?? this.channel
+    const [pRes, vRes] = await Promise.all([
+      this.execute<{ products: SaleorProductConnection }>(PRODUCTS_LOOKUP_QUERY, {
+        ids: options.ids,
+        first: 100,
+        channel,
+      }),
+      this.execute<{ productVariants: { edges: { node: SaleorLookupVariant }[] } }>(
+        PRODUCT_VARIANTS_LOOKUP_QUERY,
+        { ids: options.ids, first: 100, channel },
+      ),
+    ])
+    if (!pRes.ok) return pRes
+    if (!vRes.ok) return vRes
+    return {
+      ok: true,
+      data: {
+        products: pRes.data.products.edges.map((e) => e.node),
+        variants: vRes.data.productVariants.edges.map((e) => e.node),
+      },
+    }
   }
 
   // -------------------------------------------------
@@ -592,6 +628,20 @@ const PRODUCTS_LOOKUP_QUERY = `
     products(where: { ids: $ids }, first: $first, channel: $channel) {
       edges { node { ${PRODUCT_FIELDS} } }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+`
+
+const PRODUCT_VARIANTS_LOOKUP_QUERY = `
+  query ProductVariantLookup($ids: [ID!], $first: Int!, $channel: String!) {
+    productVariants(ids: $ids, first: $first, channel: $channel) {
+      edges {
+        node {
+          id name sku
+          pricing { price { gross { amount currency } } }
+          product { ${PRODUCT_FIELDS} }
+        }
+      }
     }
   }
 `

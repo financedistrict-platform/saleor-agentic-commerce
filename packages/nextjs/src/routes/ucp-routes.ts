@@ -575,7 +575,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           return ucpError("missing_ids", "ids array is required and must not be empty", 400)
         }
 
-        const result = await saleorClient.getProducts({ ids })
+        const result = await saleorClient.lookupProductsAndVariants({ ids })
         if (!result.ok) return ucpError("catalog_lookup_failed", result.error, 422)
 
         const response = formatUcpCatalogLookup(config.ucpVersion, result.data)

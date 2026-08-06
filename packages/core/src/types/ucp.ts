@@ -398,9 +398,22 @@ export type UcpCatalogSearchResponse = {
   }
 }
 
+export type UcpInputCorrelation = {
+  id: string
+  match?: "exact" | "featured" | string
+}
+
+export type UcpLookupVariant = UcpCatalogProductVariant & {
+  inputs: UcpInputCorrelation[]
+}
+
+export type UcpLookupProduct = Omit<UcpCatalogProduct, "variants"> & {
+  variants: UcpLookupVariant[]
+}
+
 export type UcpCatalogLookupResponse = {
   ucp: { version: string; status: "success" | "error" }
-  products: UcpCatalogProduct[]
+  products: UcpLookupProduct[]
   messages: unknown[]
 }
 

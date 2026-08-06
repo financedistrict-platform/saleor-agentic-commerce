@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { formatUcpCatalogSearch, formatUcpCatalogLookup, formatUcpOrder } from "./ucp.js"
-import type { SaleorProductConnection, SaleorOrder } from "../../types/saleor.js"
+import type { SaleorProductConnection, SaleorOrder, SaleorProduct, SaleorLookupVariant } from "../../types/saleor.js"
 import type { FormatterContext } from "./types.js"
 
 const UCP_VERSION = "2026-04-08"
@@ -90,6 +90,10 @@ function makeConnection(overrides: Partial<SaleorProductConnection> = {}): Saleo
     pageInfo: { hasNextPage: false, endCursor: null },
     ...overrides,
   }
+}
+
+function sampleProduct(): SaleorProduct {
+  return makeConnection().edges[0].node
 }
 
 describe("formatUcpCatalogSearch — product/variant conformance (SAC-8)", () => {
@@ -182,17 +186,54 @@ describe("formatUcpCatalogSearch — cursor pagination (SAC-8 / U-4)", () => {
   })
 })
 
-describe("formatUcpCatalogLookup", () => {
+describe("formatUcpCatalogLookup — variant-id resolution + inputs[] (SAC-8)", () => {
   it("returns empty categories when product has no category", () => {
-    const conn = makeConnection()
-    conn.edges[0].node.category = null
-    const result = formatUcpCatalogLookup(UCP_VERSION, conn)
+    const p = sampleProduct()
+    p.category = null
+    const result = formatUcpCatalogLookup(UCP_VERSION, { products: [p], variants: [] })
     expect(result.products[0].categories).toEqual([])
   })
 
   it("emits product description as an object", () => {
-    const result = formatUcpCatalogLookup(UCP_VERSION, makeConnection())
+    const result = formatUcpCatalogLookup(UCP_VERSION, { products: [sampleProduct()], variants: [] })
     expect(result.products[0].description).toEqual({ plain: "A delicious loaf. Baked fresh." })
+  })
+
+  it("resolves a product GID to its featured variant with match 'featured'", () => {
+    const p = sampleProduct()
+    const result = formatUcpCatalogLookup(UCP_VERSION, { products: [p], variants: [] })
+    expect(result.products[0].variants).toHaveLength(1)
+    expect(result.products[0].variants[0].id).toBe("UHJvZHVjdFZhcmlhbnQ6MjE0")
+    expect(result.products[0].variants[0].inputs).toEqual([{ id: p.id, match: "featured" }])
+  })
+
+  it("resolves a variant GID to that exact variant with match 'exact'", () => {
+    const p = sampleProduct()
+    const lv: SaleorLookupVariant = { ...p.variants[0], product: p }
+    const result = formatUcpCatalogLookup(UCP_VERSION, { products: [], variants: [lv] })
+    expect(result.products).toHaveLength(1)
+    expect(result.products[0].id).toBe(p.id)
+    expect(result.products[0].variants).toHaveLength(1)
+    expect(result.products[0].variants[0].inputs).toEqual([{ id: lv.id, match: "exact" }])
+  })
+
+  it("dedups a product hit by both its product GID and its variant GID (one product, one variant, two inputs)", () => {
+    const p = sampleProduct()
+    const lv: SaleorLookupVariant = { ...p.variants[0], product: p }
+    const result = formatUcpCatalogLookup(UCP_VERSION, { products: [p], variants: [lv] })
+    expect(result.products).toHaveLength(1)
+    expect(result.products[0].variants).toHaveLength(1)
+    expect(result.products[0].variants[0].inputs).toEqual([
+      { id: p.id, match: "featured" },
+      { id: lv.id, match: "exact" },
+    ])
+  })
+
+  it("skips products with no variants (lookup_variant requires a variant)", () => {
+    const p = sampleProduct()
+    p.variants = []
+    const result = formatUcpCatalogLookup(UCP_VERSION, { products: [p], variants: [] })
+    expect(result.products).toHaveLength(0)
   })
 })
 

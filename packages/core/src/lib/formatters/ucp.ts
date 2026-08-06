@@ -5,7 +5,7 @@
  * Spec: https://ucp.dev/2026-04-08/specification/overview
  */
 
-import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine, SaleorProduct, SaleorProductConnection } from "../../types/saleor.js"
+import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine, SaleorProduct, SaleorProductVariant, SaleorProductConnection, SaleorLookupVariant } from "../../types/saleor.js"
 import type {
   UcpCheckoutSession,
   UcpOrder,
@@ -24,6 +24,10 @@ import type {
   UcpCatalogSearchResponse,
   UcpCatalogLookupResponse,
   UcpDescription,
+  UcpInputCorrelation,
+  UcpLookupProduct,
+  UcpLookupVariant,
+  UcpCatalogProductVariant,
 } from "../../types/ucp.js"
 import { saleorToUcpAddress } from "../address-translator.js"
 import { resolveUcpCheckoutStatus } from "../status-maps.js"
@@ -439,11 +443,69 @@ export function formatUcpCatalogSearch(
   }
 }
 
+/**
+ * Format a catalog lookup. Per catalog_lookup.json / lookup.md, a lookup
+ * response contains only *resolved* variants, each carrying an `inputs[]`
+ * correlation back to the request id(s) that matched it:
+ *   - a product GID resolves to the product's single featured variant
+ *     (`match: "featured"`);
+ *   - a variant GID resolves to that exact variant (`match: "exact"`).
+ * Products are deduped (returned once); variants are deduped, and a variant hit
+ * by both its product GID and its own variant GID carries both inputs.
+ */
 export function formatUcpCatalogLookup(
   ucpVersion: string,
-  connection: SaleorProductConnection,
+  input: { products: SaleorProduct[]; variants: SaleorLookupVariant[] },
 ): UcpCatalogLookupResponse {
-  const products = connection.edges.map((e) => formatCatalogProduct(e.node))
+  type Acc = {
+    product: SaleorProduct
+    variants: Map<string, { node: SaleorProductVariant; inputs: UcpInputCorrelation[] }>
+  }
+  const byProduct = new Map<string, Acc>()
+
+  const ensure = (product: SaleorProduct): Acc => {
+    let acc = byProduct.get(product.id)
+    if (!acc) {
+      acc = { product, variants: new Map() }
+      byProduct.set(product.id, acc)
+    }
+    return acc
+  }
+
+  const addVariant = (acc: Acc, node: SaleorProductVariant, correlation: UcpInputCorrelation): void => {
+    const existing = acc.variants.get(node.id)
+    if (existing) {
+      existing.inputs.push(correlation)
+      return
+    }
+    acc.variants.set(node.id, { node, inputs: [correlation] })
+  }
+
+  // Product-ID matches → the product's featured (first) variant only.
+  for (const product of input.products) {
+    const featured = product.variants[0]
+    if (!featured) continue // lookup_variant requires a variant; skip variant-less products
+    addVariant(ensure(product), featured, { id: product.id, match: "featured" })
+  }
+
+  // Variant-ID matches → that exact variant, grouped under its parent product.
+  for (const v of input.variants) {
+    addVariant(
+      ensure(v.product),
+      { id: v.id, name: v.name, sku: v.sku, pricing: v.pricing },
+      { id: v.id, match: "exact" },
+    )
+  }
+
+  const products: UcpLookupProduct[] = [...byProduct.values()].map(({ product, variants }) => {
+    const base = formatCatalogProduct(product)
+    const resolved: UcpLookupVariant[] = [...variants.values()].map(({ node, inputs }) => ({
+      ...formatCatalogVariant(node, base.description),
+      inputs,
+    }))
+    return { ...base, variants: resolved }
+  })
+
   return {
     ucp: { version: ucpVersion, status: "success" },
     products,
@@ -456,20 +518,7 @@ function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
   // variant.json requires `description`, an object per description.json.
   const description = descriptionObject(product.description)
 
-  const variants = product.variants.map((v) => ({
-    id: v.id,
-    title: v.name,
-    description,
-    // sku is an optional string in variant.json — omit rather than emit null.
-    ...(v.sku ? { sku: v.sku } : {}),
-    price: v.pricing?.price
-      ? {
-          amount: toMinor(v.pricing.price.gross.amount),
-          // price.json requires ISO 4217 uppercase (`^[A-Z]{3}$`).
-          currency: v.pricing.price.gross.currency.toUpperCase(),
-        }
-      : null,
-  }))
+  const variants = product.variants.map((v) => formatCatalogVariant(v, description))
 
   const variantAmounts = variants
     .map((v) => v.price?.amount)
@@ -501,6 +550,26 @@ function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
     variants,
     media,
     thumbnail_url: product.thumbnail?.url ?? null,
+  }
+}
+
+// Format a single Saleor variant to the UCP variant shape (SAC-8: required
+// description object, uppercase ISO-4217 currency, sku omitted when null).
+function formatCatalogVariant(
+  v: SaleorProductVariant,
+  description: UcpDescription,
+): UcpCatalogProductVariant {
+  return {
+    id: v.id,
+    title: v.name,
+    description,
+    ...(v.sku ? { sku: v.sku } : {}),
+    price: v.pricing?.price
+      ? {
+          amount: toMinor(v.pricing.price.gross.amount),
+          currency: v.pricing.price.gross.currency.toUpperCase(),
+        }
+      : null,
   }
 }
 
