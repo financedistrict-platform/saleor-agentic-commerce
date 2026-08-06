@@ -39,6 +39,7 @@ import {
   extractSignedSummary,
   readStoredPrismAccepts,
   validateSignedAgainstStored,
+  planCartReplacement,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 
@@ -322,14 +323,36 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           }
         }
 
-        // Update line items if provided
+        // Update line items if provided. UCP PUT is a FULL replacement of the
+        // checkout resource (checkout.md → Update Checkout), so line_items is
+        // the complete desired cart: add new variants, update changed
+        // quantities, and DELETE variants the agent omitted. The prior code
+        // only ran checkoutLinesUpdate, so omitted lines were silently retained
+        // and an agent could never remove an item (U-2).
         if (body.line_items && Array.isArray(body.line_items)) {
-          const lines = body.line_items.map((item: any) => ({
+          const desired = body.line_items.map((item: any) => ({
             variantId: item.item?.id || item.id,
-            quantity: item.quantity || 1,
+            quantity: item.quantity ?? 1,
           }))
-          const result = await saleorClient.updateCheckoutLines(id, lines)
-          if (!result.ok) return ucpError("items_update_failed", result.error, 422)
+          const current = cancelGuard.data.lines.map((l) => ({
+            id: l.id,
+            variantId: l.variant.id,
+            quantity: l.quantity,
+          }))
+          const plan = planCartReplacement(current, desired)
+
+          if (plan.toDelete.length > 0) {
+            const del = await saleorClient.deleteCheckoutLines(id, plan.toDelete)
+            if (!del.ok) return ucpError("items_update_failed", del.error, 422)
+          }
+          if (plan.toAdd.length > 0) {
+            const add = await saleorClient.addCheckoutLines(id, plan.toAdd)
+            if (!add.ok) return ucpError("items_update_failed", add.error, 422)
+          }
+          if (plan.toUpdate.length > 0) {
+            const upd = await saleorClient.updateCheckoutLines(id, plan.toUpdate)
+            if (!upd.ok) return ucpError("items_update_failed", upd.error, 422)
+          }
         }
 
         // Re-fetch and prepare payment

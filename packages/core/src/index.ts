@@ -48,6 +48,10 @@ export type {
   UcpCatalogProductMedia,
   UcpCatalogSearchResponse,
   UcpCatalogLookupResponse,
+  UcpDescription,
+  UcpInputCorrelation,
+  UcpLookupProduct,
+  UcpLookupVariant,
 } from "./types/ucp.js"
 
 // Types — ACP Protocol
@@ -94,6 +98,8 @@ export type {
   SaleorProduct,
   SaleorProductVariant,
   SaleorProductConnection,
+  SaleorLookupVariant,
+  SaleorFulfillment,
 } from "./types/saleor.js"
 
 // Payment Handler Registry
@@ -120,6 +126,10 @@ export {
   saleorToAcpAddress,
   acpToSaleorAddress,
 } from "./lib/address-translator.js"
+
+// Cart planning (UCP PUT full-replacement)
+export { planCartReplacement } from "./lib/cart-diff.js"
+export type { CurrentCartLine, DesiredCartLine, CartReplacementPlan } from "./lib/cart-diff.js"
 
 // Status Maps
 export {
