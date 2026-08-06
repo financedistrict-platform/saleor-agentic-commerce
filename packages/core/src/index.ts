@@ -143,8 +143,14 @@ export {
   formatAcpError,
   formatUcpError,
   httpStatusToAcpType,
+  saleorErrorsToUcpMessages,
 } from "./lib/error-formatters.js"
-export type { AcpErrorResponse, AcpErrorType, UcpErrorResponse } from "./lib/error-formatters.js"
+export type {
+  AcpErrorResponse,
+  AcpErrorType,
+  UcpErrorResponse,
+  UcpErrorMessageInput,
+} from "./lib/error-formatters.js"
 
 // Metadata Utilities
 export {
