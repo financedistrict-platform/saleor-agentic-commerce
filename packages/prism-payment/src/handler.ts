@@ -189,7 +189,13 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
 
     try {
       const result = await this.client.settle({
-        paymentPayload: credential,
+        // SAC-3: agents submit the wallet's whole x402 wrapper
+        // ({ x402Version, paymentPayload, paymentRequirements }); Prism's
+        // /settle wants the INNER paymentPayload (carrying accepted/payload).
+        // Unwrap it — matching pickAcceptsEntryForCredential and
+        // validate-signed-amount, which already accept both shapes. A flat
+        // payload passes through unchanged.
+        paymentPayload: unwrapCredentialForSettle(credential),
         paymentRequirements: requirements,
       })
 
@@ -287,6 +293,20 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       "accepts" in value
     )
   }
+}
+
+/**
+ * Unwrap the settle credential (SAC-3). Agents submit the wallet's whole x402
+ * authorization wrapper `{ x402Version, paymentPayload, paymentRequirements }`,
+ * but Prism's `/settle` expects the inner `paymentPayload` (with accepted /
+ * payload). Return that inner object when present; pass a flat payload — or a
+ * non-object — through unchanged.
+ */
+export function unwrapCredentialForSettle(credential: unknown): unknown {
+  if (credential && typeof credential === "object" && "paymentPayload" in credential) {
+    return (credential as { paymentPayload: unknown }).paymentPayload
+  }
+  return credential
 }
 
 /**
