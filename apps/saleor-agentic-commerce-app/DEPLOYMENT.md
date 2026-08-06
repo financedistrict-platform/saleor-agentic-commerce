@@ -178,6 +178,7 @@ The full sequence to produce a permanently-registered App.
 | Dashboard install spinner times out / 503 from App                                                            | App's ECS tasks cycling because of health check failure.                                               | Check `HOSTNAME=0.0.0.0` is set and health check uses GET.                            |
 | **"Unexpected token '<', '<html> <h'... is not valid JSON"** in dashboard                                    | Saleor's call to App returned HTML (likely 5xx error page from infra), dashboard can't parse it.       | Check App is reachable and returning JSON; usually downstream of one of the above.   |
 | Tasks stable but install hangs                                                                                | Saleor worker can reach App but App can't reach Saleor (e.g. no egress from container subnet).         | Verify outbound HTTPS from the App's subnet to the Saleor public URL.                |
+| Install "succeeds" but checkout later fails with opaque GraphQL permission-denied errors                      | The App was created/installed with the `permissions` argument omitted — `appInstall`/`appCreate` silently grant **zero** permissions and return no error. | Always pass `permissions` explicitly (`MANAGE_CHECKOUTS` + `MANAGE_ORDERS` + `HANDLE_PAYMENTS`); verify post-install with `{ app { permissions { code } } }`. (saleor-agentic-commerce#60) |
 
 ## Steady-state operations
 
