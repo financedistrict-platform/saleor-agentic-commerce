@@ -63,8 +63,8 @@ export async function formatUcpProfile(
       capabilities: {
         "dev.ucp.shopping.checkout": [{ version: v, spec: `https://ucp.dev/${v}/specification/checkout/`, schema: `https://ucp.dev/${v}/schemas/shopping/checkout.json` }],
         "dev.ucp.shopping.order": [{ version: v, spec: `https://ucp.dev/${v}/specification/order/`, schema: `https://ucp.dev/${v}/schemas/shopping/order.json` }],
-        "dev.ucp.shopping.catalog.search": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog.json` }],
-        "dev.ucp.shopping.catalog.lookup": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog.json` }],
+        "dev.ucp.shopping.catalog.search": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog_search.json` }],
+        "dev.ucp.shopping.catalog.lookup": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog_lookup.json` }],
       },
       payment_handlers: paymentHandlers,
     },
