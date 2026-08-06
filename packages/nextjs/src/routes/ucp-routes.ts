@@ -40,8 +40,10 @@ import {
   readStoredPrismAccepts,
   validateSignedAgainstStored,
   planCartReplacement,
+  saleorErrorsToUcpMessages,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
+import type { UcpErrorSeverity } from "@financedistrict/saleor-agentic-commerce-core"
 
 export type UcpRouteHandlers = {
   /** GET /.well-known/ucp */
@@ -82,8 +84,33 @@ export type UcpRouteHandlers = {
 export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHandlers {
   const { saleorClient, paymentHandlers, formatterContext, config } = instance
 
-  function ucpError(code: string, content: string, status: number): Response {
-    return Response.json(formatUcpError({ ucpVersion: config.ucpVersion, code, content }), { status })
+  function ucpError(
+    code: string,
+    content: string,
+    status: number,
+    severity?: UcpErrorSeverity,
+  ): Response {
+    return Response.json(
+      formatUcpError({ ucpVersion: config.ucpVersion, code, content, severity }),
+      { status },
+    )
+  }
+
+  // Surface a failed Saleor mutation with its structured field errors — one UCP
+  // message per error, field preserved — instead of collapsing to errors[0]
+  // (SAC-5). Defaults to recoverable: validation errors are fixable input.
+  function ucpSaleorError(
+    code: string,
+    status: number,
+    result: { error: string; errors?: unknown },
+    severity: UcpErrorSeverity = "recoverable",
+  ): Response {
+    const messages = saleorErrorsToUcpMessages(result.errors, {
+      code,
+      severity,
+      fallbackContent: result.error,
+    })
+    return Response.json(formatUcpError({ ucpVersion: config.ucpVersion, messages }), { status })
   }
 
   /**
@@ -188,7 +215,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const lineItems = body.line_items
         if (!Array.isArray(lineItems) || lineItems.length === 0) {
-          return ucpError("missing_line_items", "line_items array is required", 400)
+          return ucpError("missing_line_items", "line_items array is required", 400, "recoverable")
         }
 
         // Map UCP line items to Saleor checkout lines
@@ -217,7 +244,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         })
 
         if (!checkoutResult.ok) {
-          return ucpError("checkout_create_failed", checkoutResult.error, 422)
+          return ucpSaleorError("checkout_create_failed", 422, checkoutResult)
         }
 
         // If a shipping address was supplied but Saleor returns no usable
@@ -228,6 +255,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             "unsupported_shipping_destination",
             `No shipping methods available for destination country '${shippingAddress.country ?? "unknown"}'`,
             422,
+            "requires_buyer_input",
           )
         }
 
@@ -283,7 +311,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // Update buyer email
         if (body.buyer?.email) {
           const result = await saleorClient.updateCheckoutEmail(id, body.buyer.email)
-          if (!result.ok) return ucpError("email_update_failed", result.error, 422)
+          if (!result.ok) return ucpSaleorError("email_update_failed", 422, result)
         }
 
         // Update fulfillment: extract destination address and selected option
@@ -295,12 +323,13 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             if (dest) {
               const addr = ucpToSaleorAddress(dest)
               const result = await saleorClient.updateCheckoutShippingAddress(id, addr)
-              if (!result.ok) return ucpError("shipping_address_update_failed", result.error, 422)
+              if (!result.ok) return ucpSaleorError("shipping_address_update_failed", 422, result)
               if (result.data.shippingMethods.length === 0) {
                 return ucpError(
                   "unsupported_shipping_destination",
                   `No shipping methods available for destination country '${addr.country ?? "unknown"}'`,
                   422,
+                  "requires_buyer_input",
                 )
               }
               // Mirror billing if it hasn't been set yet (UCP has no
@@ -309,7 +338,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
               if (!result.data.billingAddress) {
                 const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
                 if (!billingResult.ok) {
-                  return ucpError("billing_address_update_failed", billingResult.error, 422)
+                  return ucpSaleorError("billing_address_update_failed", 422, billingResult)
                 }
               }
             }
@@ -318,7 +347,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             const selectedOptionId = method.groups?.[0]?.selected_option_id
             if (selectedOptionId) {
               const result = await saleorClient.updateCheckoutDeliveryMethod(id, selectedOptionId)
-              if (!result.ok) return ucpError("delivery_method_update_failed", result.error, 422)
+              if (!result.ok) return ucpSaleorError("delivery_method_update_failed", 422, result)
             }
           }
         }
@@ -343,15 +372,15 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
           if (plan.toDelete.length > 0) {
             const del = await saleorClient.deleteCheckoutLines(id, plan.toDelete)
-            if (!del.ok) return ucpError("items_update_failed", del.error, 422)
+            if (!del.ok) return ucpSaleorError("items_update_failed", 422, del)
           }
           if (plan.toAdd.length > 0) {
             const add = await saleorClient.addCheckoutLines(id, plan.toAdd)
-            if (!add.ok) return ucpError("items_update_failed", add.error, 422)
+            if (!add.ok) return ucpSaleorError("items_update_failed", 422, add)
           }
           if (plan.toUpdate.length > 0) {
             const upd = await saleorClient.updateCheckoutLines(id, plan.toUpdate)
-            if (!upd.ok) return ucpError("items_update_failed", upd.error, 422)
+            if (!upd.ok) return ucpSaleorError("items_update_failed", 422, upd)
           }
         }
 
@@ -386,12 +415,12 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // Extract payment instrument
         const payment = body.payment
         if (!payment?.instruments || !Array.isArray(payment.instruments)) {
-          return ucpError("missing_payment", "payment.instruments array is required", 400)
+          return ucpError("missing_payment", "payment.instruments array is required", 400, "recoverable")
         }
 
         const selectedInstrument = payment.instruments.find((i: any) => i.selected) || payment.instruments[0]
         if (!selectedInstrument) {
-          return ucpError("no_instrument_selected", "At least one payment instrument must be provided", 400)
+          return ucpError("no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
         }
 
         // Fetch checkout for metadata
@@ -417,7 +446,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           const addr = ucpToSaleorAddress(selectedInstrument.billing_address)
           const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
           if (!billingResult.ok) {
-            return ucpError("billing_address_update_failed", billingResult.error, 422)
+            return ucpSaleorError("billing_address_update_failed", 422, billingResult)
           }
         }
 
@@ -469,7 +498,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         // Complete checkout in Saleor
         const orderResult = await saleorClient.completeCheckout(id)
-        if (!orderResult.ok) return ucpError("checkout_complete_failed", orderResult.error, 422)
+        if (!orderResult.ok) return ucpSaleorError("checkout_complete_failed", 422, orderResult)
 
         // Return checkout session with completed status and order confirmation
         const orderConfirmation = {
