@@ -24,7 +24,7 @@ import type {
   UcpCatalogLookupResponse,
 } from "../../types/ucp.js"
 import { saleorToUcpAddress } from "../address-translator.js"
-import { resolveUcpCheckoutStatus, normalizeOrderStatus } from "../status-maps.js"
+import { resolveUcpCheckoutStatus } from "../status-maps.js"
 import { metadataToRecord } from "../metadata.js"
 import type { FormatterContext } from "./types.js"
 import { toMinor } from "./types.js"
