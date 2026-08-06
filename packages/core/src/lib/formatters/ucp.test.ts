@@ -1,8 +1,59 @@
 import { describe, it, expect } from "vitest"
-import { formatUcpCatalogSearch, formatUcpCatalogLookup } from "./ucp.js"
-import type { SaleorProductConnection } from "../../types/saleor.js"
+import { formatUcpCatalogSearch, formatUcpCatalogLookup, formatUcpOrder } from "./ucp.js"
+import type { SaleorProductConnection, SaleorOrder } from "../../types/saleor.js"
+import type { FormatterContext } from "./types.js"
 
 const UCP_VERSION = "2026-04-08"
+
+const CTX: FormatterContext = {
+  storeName: "Test Store",
+  storefrontUrl: "https://shop.example.com",
+  ucpVersion: UCP_VERSION,
+  acpVersion: UCP_VERSION,
+  paymentHandlers: {} as FormatterContext["paymentHandlers"],
+}
+
+function money(amount: number) {
+  return {
+    gross: { amount, currency: "USD" },
+    net: { amount, currency: "USD" },
+    tax: { amount: 0, currency: "USD" },
+  }
+}
+
+function makeOrder(overrides: Partial<SaleorOrder> = {}): SaleorOrder {
+  return {
+    id: "T3JkZXI6MQ==",
+    number: "1001",
+    status: "UNFULFILLED",
+    created: "2026-08-01T00:00:00Z",
+    updated: "2026-08-01T00:00:00Z",
+    userEmail: "b@example.com",
+    checkoutId: "Q2hlY2tvdXQ6YWJj",
+    channel: { slug: "default-channel" },
+    total: money(20),
+    subtotal: money(20),
+    shippingPrice: money(0),
+    discount: null,
+    lines: [
+      {
+        id: "line-1",
+        productName: "Widget",
+        variantName: "Blue",
+        quantity: 2,
+        unitPrice: money(10),
+        totalPrice: money(20),
+        variant: { id: "var-1", product: { id: "p1", slug: "widget", thumbnail: null } },
+        thumbnail: null,
+      },
+    ],
+    shippingAddress: null,
+    billingAddress: null,
+    fulfillments: [],
+    metadata: [],
+    ...overrides,
+  }
+}
 
 function makeConnection(overrides: Partial<SaleorProductConnection> = {}): SaleorProductConnection {
   return {
@@ -142,5 +193,91 @@ describe("formatUcpCatalogLookup", () => {
   it("emits product description as an object", () => {
     const result = formatUcpCatalogLookup(UCP_VERSION, makeConnection())
     expect(result.products[0].description).toEqual({ plain: "A delicious loaf. Baked fresh." })
+  })
+})
+
+describe("formatUcpOrder — checkout_id + fulfilment (SAC-6, SAC-7)", () => {
+  it("returns the checkout id (not the order id) as checkout_id", () => {
+    const o = formatUcpOrder(CTX, makeOrder())
+    expect(o.checkout_id).toBe("Q2hlY2tvdXQ6YWJj")
+    expect(o.checkout_id).not.toBe(o.id)
+  })
+
+  it("falls back to the order id when checkoutId is null", () => {
+    const o = formatUcpOrder(CTX, makeOrder({ checkoutId: null }))
+    expect(o.checkout_id).toBe(o.id)
+  })
+
+  it("reports 'processing' with fulfilled 0 when there are no fulfillments", () => {
+    const o = formatUcpOrder(CTX, makeOrder())
+    expect(o.line_items[0].quantity.fulfilled).toBe(0)
+    expect(o.line_items[0].status).toBe("processing")
+  })
+
+  it("derives 'fulfilled' and the fulfilled quantity from fulfillments", () => {
+    const o = formatUcpOrder(
+      CTX,
+      makeOrder({
+        fulfillments: [
+          {
+            id: "ff1", status: "FULFILLED", trackingNumber: "TRK1", created: "2026-08-02T00:00:00Z",
+            lines: [{ quantity: 2, orderLine: { id: "line-1" } }],
+          },
+        ],
+      }),
+    )
+    expect(o.line_items[0].quantity.fulfilled).toBe(2)
+    expect(o.line_items[0].status).toBe("fulfilled")
+  })
+
+  it("derives 'partial' when only some quantity is fulfilled", () => {
+    const o = formatUcpOrder(
+      CTX,
+      makeOrder({
+        fulfillments: [
+          {
+            id: "ff1", status: "FULFILLED", trackingNumber: null, created: "2026-08-02T00:00:00Z",
+            lines: [{ quantity: 1, orderLine: { id: "line-1" } }],
+          },
+        ],
+      }),
+    )
+    expect(o.line_items[0].quantity.fulfilled).toBe(1)
+    expect(o.line_items[0].status).toBe("partial")
+  })
+
+  it("ignores cancelled fulfillments when counting fulfilled quantity", () => {
+    const o = formatUcpOrder(
+      CTX,
+      makeOrder({
+        fulfillments: [
+          {
+            id: "ff1", status: "CANCELED", trackingNumber: null, created: "2026-08-02T00:00:00Z",
+            lines: [{ quantity: 2, orderLine: { id: "line-1" } }],
+          },
+        ],
+      }),
+    )
+    expect(o.line_items[0].quantity.fulfilled).toBe(0)
+    expect(o.line_items[0].status).toBe("processing")
+  })
+
+  it("maps Saleor fulfillments to fulfillment events", () => {
+    const o = formatUcpOrder(
+      CTX,
+      makeOrder({
+        fulfillments: [
+          {
+            id: "ff1", status: "FULFILLED", trackingNumber: "TRK1", created: "2026-08-02T00:00:00Z",
+            lines: [{ quantity: 2, orderLine: { id: "line-1" } }],
+          },
+        ],
+      }),
+    )
+    expect(o.fulfillment.events).toHaveLength(1)
+    expect(o.fulfillment.events[0]).toMatchObject({
+      id: "ff1", type: "FULFILLED", tracking_number: "TRK1", occurred_at: "2026-08-02T00:00:00Z",
+    })
+    expect(o.fulfillment.events[0].line_items).toEqual([{ id: "line-1", quantity: 2 }])
   })
 })

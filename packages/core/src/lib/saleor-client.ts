@@ -536,7 +536,7 @@ const UPDATE_PRIVATE_METADATA = `
 const ORDER_QUERY = `
   query Order($id: ID!) {
     order(id: $id) {
-      id number status created userEmail
+      id number status created userEmail checkoutId
       channel { slug }
       total { gross { amount currency } net { amount currency } tax { amount currency } }
       subtotal { gross { amount currency } net { amount currency } tax { amount currency } }
@@ -551,6 +551,10 @@ const ORDER_QUERY = `
       shippingAddress {
         firstName lastName streetAddress1 streetAddress2
         city countryArea postalCode country { code country } phone
+      }
+      fulfillments {
+        id status trackingNumber created
+        lines { quantity orderLine { id } }
       }
       metadata { key value }
     }

@@ -18,6 +18,7 @@ import type {
   UcpOrderLineItem,
   UcpOrderFulfillment,
   UcpFulfillmentExpectation,
+  UcpFulfillmentEvent,
   UcpOrderConfirmation,
   UcpCatalogProduct,
   UcpCatalogSearchResponse,
@@ -171,14 +172,18 @@ export function formatUcpOrder(
 
   totals.push({ type: "total", amount: toMinor(order.total.gross.amount) })
 
-  const lineItems = formatOrderLineItems(order.lines, currency)
+  const fulfilledByLine = fulfilledQtyByLine(order)
+  const lineItems = formatOrderLineItems(order.lines, fulfilledByLine)
   const fulfillment = formatOrderFulfillment(order, lineItems)
 
   return {
     ucp: ucpEnvelope(ctx, false),
     id: order.id,
     label: order.number ?? undefined,
-    checkout_id: order.id, // Saleor doesn't expose the checkout ID on order
+    // The checkout that produced this order (Saleor Order.checkoutId), so an
+    // agent can correlate the order back to its UCP checkout session. Falls
+    // back to the order id only for orders not created from a checkout (SAC-6).
+    checkout_id: order.checkoutId ?? order.id,
     permalink_url: `${ctx.storefrontUrl}/orders/${order.id}`,
     currency,
     line_items: lineItems,
@@ -305,27 +310,60 @@ function formatCheckoutFulfillment(
 // Order Line Items
 // =====================================================
 
-function formatOrderLineItems(lines: SaleorOrderLine[], currency: string): UcpOrderLineItem[] {
-  return lines.map((line) => ({
-    id: line.id,
-    item: {
-      id: line.variant?.id || line.id,
-      title: `${line.productName} - ${line.variantName}`,
-      price: toMinor(line.unitPrice.gross.amount),
-      ...(line.thumbnail?.url || line.variant?.product.thumbnail?.url
-        ? { image_url: line.thumbnail?.url || line.variant?.product.thumbnail?.url }
-        : {}),
-    },
-    quantity: {
-      original: line.quantity,
-      total: line.quantity,
-      fulfilled: 0, // Saleor tracks this separately on fulfillment objects
-    },
-    totals: [
-      { type: "total" as const, amount: toMinor(line.totalPrice.gross.amount) },
-    ],
-    status: "processing" as const,
-  }))
+function formatOrderLineItems(
+  lines: SaleorOrderLine[],
+  fulfilledByLine: Map<string, number>,
+): UcpOrderLineItem[] {
+  return lines.map((line) => {
+    const total = line.quantity
+    const fulfilled = Math.min(fulfilledByLine.get(line.id) ?? 0, total)
+    return {
+      id: line.id,
+      item: {
+        id: line.variant?.id || line.id,
+        title: `${line.productName} - ${line.variantName}`,
+        price: toMinor(line.unitPrice.gross.amount),
+        ...(line.thumbnail?.url || line.variant?.product.thumbnail?.url
+          ? { image_url: line.thumbnail?.url || line.variant?.product.thumbnail?.url }
+          : {}),
+      },
+      quantity: {
+        original: line.quantity,
+        total,
+        fulfilled,
+      },
+      totals: [
+        { type: "total" as const, amount: toMinor(line.totalPrice.gross.amount) },
+      ],
+      status: deriveOrderLineStatus(total, fulfilled),
+    }
+  })
+}
+
+// order.md → Status Derivation (order_line_item.json `status` is required).
+function deriveOrderLineStatus(
+  total: number,
+  fulfilled: number,
+): "processing" | "partial" | "fulfilled" | "removed" {
+  if (total === 0) return "removed"
+  if (fulfilled >= total) return "fulfilled"
+  if (fulfilled > 0) return "partial"
+  return "processing"
+}
+
+// Sum fulfilled quantity per order line, ignoring fulfillments that don't
+// represent delivered goods (cancelled / returned / replaced).
+function fulfilledQtyByLine(order: SaleorOrder): Map<string, number> {
+  const map = new Map<string, number>()
+  for (const f of order.fulfillments ?? []) {
+    if (f.status === "CANCELED" || f.status === "RETURNED" || f.status === "REPLACED") continue
+    for (const fl of f.lines ?? []) {
+      const id = fl.orderLine?.id
+      if (!id) continue
+      map.set(id, (map.get(id) ?? 0) + fl.quantity)
+    }
+  }
+  return map
 }
 
 // =====================================================
@@ -347,9 +385,21 @@ function formatOrderFulfillment(
     })
   }
 
+  // Map each Saleor fulfillment to a UCP fulfillment event. fulfillment_event
+  // `type` is an open string, so Saleor's own status names pass through (SAC-7).
+  const events: UcpFulfillmentEvent[] = (order.fulfillments ?? []).map((f) => ({
+    id: f.id,
+    occurred_at: f.created,
+    type: f.status,
+    line_items: (f.lines ?? [])
+      .filter((fl) => fl.orderLine != null)
+      .map((fl) => ({ id: fl.orderLine!.id, quantity: fl.quantity })),
+    ...(f.trackingNumber ? { tracking_number: f.trackingNumber } : {}),
+  }))
+
   return {
     expectations,
-    events: [],
+    events,
   }
 }
 
