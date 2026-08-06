@@ -136,6 +136,11 @@ describe("formatUcpCatalogSearch — product/variant conformance (SAC-8)", () =>
     })
   })
 
+  it("passes a non-null sku through unchanged", () => {
+    const result = formatUcpCatalogSearch(UCP_VERSION, makeConnection())
+    expect(result.products[0].variants[0].sku).toBe("LOAF-001")
+  })
+
   it("omits sku entirely when Saleor reports null (never emits sku: null)", () => {
     const conn = makeConnection()
     conn.edges[0].node.variants = [{ id: "v1", name: "No sku", sku: null, pricing: null }]
