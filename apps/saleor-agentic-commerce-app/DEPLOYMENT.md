@@ -49,21 +49,20 @@ Required at runtime:
 | `NODE_ENV`                       | `production`                                                           |
 | `PORT`                           | `3001`                                                                 |
 | **`HOSTNAME`**                   | **`0.0.0.0`** — see gotcha below                                       |
-| `APL`                            | `file` (first deploy) or `env` (steady state) — see install flow       |
+| `APL`                            | Token store backend: `redis` / `dynamodb` / `upstash` (production) or `file` (local dev only). **No default — unknown/missing refuses to start.** Set it (and its connection var below) *before* installing. See **APL choice**. |
 | `APP_URL`                        | Public URL of THIS service, e.g. `https://agentic-app.example.com`     |
 | `SALEOR_API_URL`                 | `https://saleor.example.com/graphql/`                                  |
 | `NEXT_PUBLIC_SALEOR_API_URL`     | Same as above (also baked into the client bundle at build time)        |
 | `NEXT_PUBLIC_STOREFRONT_URL`     | `https://saleor.example.com/`                                          |
-| `SALEOR_APP_TOKEN`               | Populated post-install (Secrets Manager / Vault). Empty until install. |
-| `SALEOR_APP_ID`                  | Same.                                                                  |
 
 Optional:
 
 | Var                              | Purpose                                                                |
 |----------------------------------|------------------------------------------------------------------------|
 | `ALLOWED_SALEOR_URLS`            | Comma-separated allow-list of Saleor instances. **Leave unset** for an open-tenant install. Setting it makes the App reject any Saleor whose `saleor-api-url` header isn't an exact string match — error: *"This app expects to be installed only in allowed Saleor instances"*. |
-| `PRINT_AUTH_DATA_ON_REGISTER`    | `true` during the install dance to log received token + appId to stdout. Drop after capturing. |
-| `UPSTASH_URL` / `UPSTASH_TOKEN`  | Only if using `APL=upstash` (multi-tenant production).                |
+| `REDIS_URL`                      | Required when `APL=redis` — e.g. `redis://cache:6379/2`. Use a **db number distinct** from Saleor's cache, on an instance with persistence and no all-keys eviction (see caveats). |
+| `DYNAMODB_TABLE`                 | Required when `APL=dynamodb` — the table name (PK/SK schema; auth via the AWS IAM environment). |
+| `UPSTASH_URL` / `UPSTASH_TOKEN`  | Required when `APL=upstash` (serverless / one-click).                  |
 | `LOG_LEVEL`                      | `info` default; `debug` during diagnosis.                              |
 
 ### Gotcha: `HOSTNAME=0.0.0.0` is required
@@ -110,28 +109,56 @@ HTTPS never hit this. (saleor-agentic-commerce#61)
 
 ## APL choice
 
-The Auth Persistence Layer stores the registration token Saleor returns at install time. Three options:
+The APL stores the auth token Saleor issues **once**, at install. Losing it takes
+the App offline until it's reinstalled (GH-62), so the store must be durable.
+Choose the backend by **what you already run** — set `APL` explicitly. There is no
+default, and an unknown/missing value makes the App **refuse to start** (it never
+silently degrades to a throwaway file).
 
-| APL       | When to use                                              | Persistence                                  |
-|-----------|----------------------------------------------------------|----------------------------------------------|
-| `file`    | Local development, throwaway test installs               | Container-local `/.auth-data.json`. Lost on every container replace. |
-| `env`     | Single-tenant production (one Saleor instance)           | Read from env vars at boot. Operator captures token once, stores in secrets. |
-| `upstash` | Multi-tenant production (many Saleor instances per App)  | Upstash Redis. App writes on every register.  |
+| `APL` | Use when | Needs | Persistence |
+|-------|----------|-------|-------------|
+| `redis` | Self-hosted with Redis/Valkey in the stack (**recommended** for self-hosters — Saleor's own reference stack ships a Valkey) | `REDIS_URL` | Durable Redis; needs persistence + no all-keys eviction (caveat 2). |
+| `dynamodb` | On AWS (ECS/Lambda), IAM available | `DYNAMODB_TABLE` | DynamoDB — durable by design, no eviction, IAM auth (no connection string). |
+| `upstash` | Serverless / Vercel / no persistent infra | `UPSTASH_URL`, `UPSTASH_TOKEN` | Hosted Upstash Redis. |
+| `file` | **Local development only** | — | Container-local `.auth-data.json`; lost on every restart/replace. Refuses to run under `NODE_ENV=production`. |
 
-**For single-tenant production, use `env`.** It survives task replaces because the secrets are external. `file` is only useful for the install dance itself if you don't want to set `PRINT_AUTH_DATA_ON_REGISTER`.
+`env` (a hard-coded token in env vars) has been **removed**: Saleor calls it
+"highly discouraged in any production environment — it breaks if the app token is
+regenerated", and the `printAuthDataOnRegister` capture flow it relied on is
+deprecated in the SDK. If you were on `APL=env`, switch to a backend above and
+reinstall (caveat 1).
+
+**Ordering — set `APL` before you install (not optional).** The token is issued
+exactly once:
+
+1. Set `APL` + its connection var → deploy. At startup the App runs a **boot
+   canary** (write/read/delete against the store) and refuses to start if it
+   fails, so misconfiguration surfaces at deploy — not weeks later at a restart.
+2. Install the App in the Saleor Dashboard via the manifest URL.
+3. Saleor POSTs the token to `/api/register` → the App writes it to the
+   already-proven store.
+
+Installing first and configuring storage after silently burns the one token you get.
+
+**Caveats:**
+
+1. **Changing `APL` strands the token.** Nothing migrates it between backends;
+   switching (e.g. `file` → `redis`) requires **reinstalling** the App. Undocumented,
+   it looks identical to the bug above.
+2. **Redis eviction can reproduce the bug.** `maxmemory` + an eviction policy is
+   instance-wide, not per-db — pointing `redis` at the same instance that serves
+   Saleor's `CACHE_URL` risks the token being evicted under memory pressure
+   (`allkeys-lru` etc.); a separate db number does **not** protect against it. Use
+   a Redis with persistence and no all-keys eviction, or prefer `dynamodb`.
 
 ## First-install flow (one-time, per environment)
 
-The full sequence to produce a permanently-registered App.
+The sequence to produce a permanently-registered App. With a durable APL the
+token persists itself — there is no token-capture-and-redeploy dance.
 
-1. **Pre-deploy.** Confirm Saleor's worker has `PUBLIC_URL` set (see prerequisites). Confirm DNS for the App's `APP_URL` resolves and serves HTTPS.
+1. **Pre-deploy.** Confirm Saleor's worker has `PUBLIC_URL` set (see prerequisites), and that DNS for the App's `APP_URL` resolves and serves HTTPS.
 
-2. **Initial deploy.** Service comes up with:
-   - `APL=env`
-   - `PRINT_AUTH_DATA_ON_REGISTER=true`
-   - `SALEOR_APP_TOKEN`, `SALEOR_APP_ID` as placeholders in your secrets store
-
-   The App responds 200 to manifest + register requests with placeholder creds. Authenticated calls back to Saleor would fail at this point, but install itself doesn't need them.
+2. **Deploy with a durable APL already configured.** Set `APL` + its connection var (`APL=redis` + `REDIS_URL`, `APL=dynamodb` + `DYNAMODB_TABLE`, or `APL=upstash` + `UPSTASH_URL`/`UPSTASH_TOKEN`). On boot the App runs the APL canary; if the store is unreachable it refuses to start — check logs for `[apl] BOOT CANARY FAILED`. A healthy start logs `[apl] boot canary OK — APL=<backend>`.
 
 3. **Verify reachability.**
    ```bash
@@ -139,34 +166,20 @@ The full sequence to produce a permanently-registered App.
    # Expect: HTTP/2 200, Content-Type: application/json
    ```
 
-4. **Install via Saleor dashboard.**
+4. **Install via the Saleor dashboard.**
    - Open `https://saleor.example.com/dashboard/`
    - **Extensions** → **Add Extension** → **Install with Manifest URL**
    - Manifest URL: `https://agentic-app.example.com/api/manifest`
    - Approve the listed permissions
 
-   Should complete with **"Agentic Commerce is ready to be used"**.
+   Should complete with **"Agentic Commerce is ready to be used"**. Saleor POSTs the token to `/api/register`; the App writes it straight to the APL store — no capture, no secrets to populate, no redeploy.
 
-5. **Capture the token + appId from logs.**
-   The SDK's EnvAPL with `printAuthDataOnRegister=true` logs the auth payload to stdout. Look in the App's container log stream for a JSON line containing `token`, `appId`, `saleorApiUrl`. Example (pseudo):
-   ```
-   [Saleor App SDK] Auth data received { token: "abc…", appId: "QXBwOjE=", saleorApiUrl: "https://saleor.example.com/graphql/" }
-   ```
-
-6. **Write captured values to your secrets store.**
-   ```bash
-   aws secretsmanager put-secret-value --secret-id fd-saleor-agentic-app/<env>/SALEOR_APP_TOKEN --secret-string "<token>"
-   aws secretsmanager put-secret-value --secret-id fd-saleor-agentic-app/<env>/SALEOR_APP_ID --secret-string "<appId>"
-   ```
-
-7. **Drop `PRINT_AUTH_DATA_ON_REGISTER`** from the env block (or set `false`) so subsequent registers don't leak to logs.
-
-8. **Redeploy.** New task picks up real secrets from Secrets Manager. EnvAPL initializes with working creds. App is permanently registered; subsequent task replaces don't lose state.
-
-9. **Verify.**
-   - Saleor dashboard → **Extensions** → **Installed** → "Agentic Commerce" should open the App's UI without re-prompting.
+5. **Verify.**
+   - Saleor dashboard → **Extensions** → **Installed** → "Agentic Commerce" opens the App's UI without re-prompting.
    - Logs should not contain `App not registered for ${saleorApiUrl}` errors.
-   - Trigger a test order in Saleor; webhooks should reach the App's `/api/webhooks/order-created` and similar (visible in App logs).
+   - Confirm the token landed — e.g. for redis: `redis-cli -u "$REDIS_URL" HGETALL saleor_app_auth` is non-empty.
+   - **The GH-62 check:** restart/replace the App container, then reload the Installed app — it must still work (`/api/config-public` returns 200, not 503). With a durable APL the token survives the restart; with `APL=file` it would not.
+   - Trigger a test order; webhooks should reach `/api/webhooks/order-created` (visible in the App logs).
 
 ## Common install failures
 
