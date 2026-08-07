@@ -28,7 +28,11 @@ FROM node:20-alpine AS base
 RUN apk add --no-cache libc6-compat
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
-RUN corepack enable
+# Pin pnpm to v9 (matches ci.yml + lockfileVersion 9.0). Without a pin, corepack
+# pulls the current `latest` pnpm (now v11), which requires `node:sqlite` — a
+# builtin only present on Node >=22.5, so it crashes on this node:20 base with
+# ERR_UNKNOWN_BUILTIN_MODULE during `pnpm install`.
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 # ----------------------------------------------------------------------------
 # deps — install workspace dependencies for the app's transitive set
