@@ -326,10 +326,18 @@ type CacheEntry = {
   loadedAt: number
 }
 
-let cache: CacheEntry | null = null
+// Keyed by (apiUrl, token). Was a single global entry keyed on nothing, so a
+// process serving two Saleor instances or two tokens got whichever config
+// loaded first, for the whole TTL (U-5). Multi-tenant hosts need isolation.
+const cache = new Map<string, CacheEntry>()
+
+function cacheKey(apiUrl: string, token: string): string {
+  return `${apiUrl} ${token}`
+}
 
 /**
- * Load config with caching. Returns cached config if within TTL.
+ * Load config with caching. Returns cached config if within TTL. The cache is
+ * isolated per (apiUrl, token) so tenants never see each other's config.
  *
  * @param apiUrl  - Saleor GraphQL API URL
  * @param token   - Saleor App Token
@@ -343,20 +351,22 @@ export async function loadConfigFromAppCached(
   options: LoadConfigOptions = {}
 ): Promise<AppConfig> {
   const now = Date.now()
+  const key = cacheKey(apiUrl, token)
 
-  if (cache && now - cache.loadedAt < ttlMs) {
-    return cache.config
+  const entry = cache.get(key)
+  if (entry && now - entry.loadedAt < ttlMs) {
+    return entry.config
   }
 
   const config = await loadConfigFromApp(apiUrl, token, options)
-  cache = { config, loadedAt: now }
+  cache.set(key, { config, loadedAt: now })
 
   return config
 }
 
 /**
- * Clear the config cache. Useful for testing or forced refresh.
+ * Clear the config cache (all tenants). Useful for testing or forced refresh.
  */
 export function clearAppConfigCache(): void {
-  cache = null
+  cache.clear()
 }

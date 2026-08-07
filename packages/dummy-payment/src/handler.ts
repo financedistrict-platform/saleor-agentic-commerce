@@ -24,7 +24,12 @@ import type {
 
 export const DUMMY_HANDLER_ID = "xyz.fd.dummy_payment"
 
-/** Metadata key where prepared dummy payment config gets stored on a cart. */
+/**
+ * Legacy metadata key. The registry stores prepared config under the adapter
+ * id (DUMMY_HANDLER_ID), NOT this key, so reads must use the adapter id — the
+ * mismatch was U-1 (checkout advertised nothing yet still settled). Kept only
+ * for back-compat with readers of older checkout metadata.
+ */
 export const DUMMY_CHECKOUT_CONFIG_KEY = "dummy_checkout_config"
 
 /** Stable version stamp for the dummy spec — bump when the wire shape changes. */
@@ -132,7 +137,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
     const { checkoutId, total, currencyCode, checkoutMetadata } = input
 
     // Idempotency — return prior config if amount unchanged.
-    const existing = checkoutMetadata?.[DUMMY_CHECKOUT_CONFIG_KEY] as
+    const existing = checkoutMetadata?.[DUMMY_HANDLER_ID] as
       | { _prepared_amount?: number }
       | undefined
     if (existing && existing._prepared_amount === total) {
@@ -192,7 +197,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   getUcpCheckoutHandlers(
     checkoutMetadata?: Record<string, unknown>,
   ): Record<string, unknown[]> {
-    const stored = checkoutMetadata?.[DUMMY_CHECKOUT_CONFIG_KEY] as
+    const stored = checkoutMetadata?.[DUMMY_HANDLER_ID] as
       | { id?: string; version?: string; config?: unknown }
       | undefined
     if (!stored?.config) return {}
@@ -211,7 +216,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   getAcpCheckoutHandlers(
     checkoutMetadata?: Record<string, unknown>,
   ): unknown[] {
-    const stored = checkoutMetadata?.[DUMMY_CHECKOUT_CONFIG_KEY] as
+    const stored = checkoutMetadata?.[DUMMY_HANDLER_ID] as
       | { id?: string; version?: string; config?: unknown }
       | undefined
     if (!stored?.config) return []

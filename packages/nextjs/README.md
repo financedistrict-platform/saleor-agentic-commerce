@@ -120,7 +120,7 @@ curl http://localhost:3000/.well-known/ucp
 createAgenticCommerce({
   // Required
   saleorApiUrl: string,        // Saleor GraphQL endpoint
-  saleorAuthToken: string,     // App token (MANAGE_CHECKOUTS + MANAGE_ORDERS)
+  saleorAuthToken: string,     // App token (MANAGE_CHECKOUTS + MANAGE_ORDERS + HANDLE_PAYMENTS)
   storefrontUrl: string,       // Public storefront URL
   storeName: string,           // Store name for discovery profiles
 

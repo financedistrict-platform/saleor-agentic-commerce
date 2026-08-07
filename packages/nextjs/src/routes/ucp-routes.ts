@@ -39,8 +39,17 @@ import {
   extractSignedSummary,
   readStoredPrismAccepts,
   validateSignedAgainstStored,
+  planCartReplacement,
+  saleorErrorsToUcpMessages,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
+import type { UcpErrorSeverity } from "@financedistrict/saleor-agentic-commerce-core"
+
+// Checkout privateMetadata key holding the settlement record (SAC-2): the tx
+// reference + amount, written the moment a payment settles — BEFORE the Saleor
+// writes that can fail. Turns a settle-then-fail into a recoverable, auditable
+// state, and lets a retried complete skip re-settling. Must match acp-routes.ts.
+const SETTLEMENT_METADATA_KEY = "agentic_commerce__settlement"
 
 export type UcpRouteHandlers = {
   /** GET /.well-known/ucp */
@@ -81,8 +90,33 @@ export type UcpRouteHandlers = {
 export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHandlers {
   const { saleorClient, paymentHandlers, formatterContext, config } = instance
 
-  function ucpError(code: string, content: string, status: number): Response {
-    return Response.json(formatUcpError({ ucpVersion: config.ucpVersion, code, content }), { status })
+  function ucpError(
+    code: string,
+    content: string,
+    status: number,
+    severity?: UcpErrorSeverity,
+  ): Response {
+    return Response.json(
+      formatUcpError({ ucpVersion: config.ucpVersion, code, content, severity }),
+      { status },
+    )
+  }
+
+  // Surface a failed Saleor mutation with its structured field errors — one UCP
+  // message per error, field preserved — instead of collapsing to errors[0]
+  // (SAC-5). Defaults to recoverable: validation errors are fixable input.
+  function ucpSaleorError(
+    code: string,
+    status: number,
+    result: { error: string; errors?: unknown },
+    severity: UcpErrorSeverity = "recoverable",
+  ): Response {
+    const messages = saleorErrorsToUcpMessages(result.errors, {
+      code,
+      severity,
+      fallbackContent: result.error,
+    })
+    return Response.json(formatUcpError({ ucpVersion: config.ucpVersion, messages }), { status })
   }
 
   /**
@@ -187,7 +221,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const lineItems = body.line_items
         if (!Array.isArray(lineItems) || lineItems.length === 0) {
-          return ucpError("missing_line_items", "line_items array is required", 400)
+          return ucpError("missing_line_items", "line_items array is required", 400, "recoverable")
         }
 
         // Map UCP line items to Saleor checkout lines
@@ -216,7 +250,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         })
 
         if (!checkoutResult.ok) {
-          return ucpError("checkout_create_failed", checkoutResult.error, 422)
+          return ucpSaleorError("checkout_create_failed", 422, checkoutResult)
         }
 
         // If a shipping address was supplied but Saleor returns no usable
@@ -227,6 +261,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             "unsupported_shipping_destination",
             `No shipping methods available for destination country '${shippingAddress.country ?? "unknown"}'`,
             422,
+            "requires_buyer_input",
           )
         }
 
@@ -282,7 +317,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // Update buyer email
         if (body.buyer?.email) {
           const result = await saleorClient.updateCheckoutEmail(id, body.buyer.email)
-          if (!result.ok) return ucpError("email_update_failed", result.error, 422)
+          if (!result.ok) return ucpSaleorError("email_update_failed", 422, result)
         }
 
         // Update fulfillment: extract destination address and selected option
@@ -294,12 +329,13 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             if (dest) {
               const addr = ucpToSaleorAddress(dest)
               const result = await saleorClient.updateCheckoutShippingAddress(id, addr)
-              if (!result.ok) return ucpError("shipping_address_update_failed", result.error, 422)
+              if (!result.ok) return ucpSaleorError("shipping_address_update_failed", 422, result)
               if (result.data.shippingMethods.length === 0) {
                 return ucpError(
                   "unsupported_shipping_destination",
                   `No shipping methods available for destination country '${addr.country ?? "unknown"}'`,
                   422,
+                  "requires_buyer_input",
                 )
               }
               // Mirror billing if it hasn't been set yet (UCP has no
@@ -308,7 +344,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
               if (!result.data.billingAddress) {
                 const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
                 if (!billingResult.ok) {
-                  return ucpError("billing_address_update_failed", billingResult.error, 422)
+                  return ucpSaleorError("billing_address_update_failed", 422, billingResult)
                 }
               }
             }
@@ -317,19 +353,41 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             const selectedOptionId = method.groups?.[0]?.selected_option_id
             if (selectedOptionId) {
               const result = await saleorClient.updateCheckoutDeliveryMethod(id, selectedOptionId)
-              if (!result.ok) return ucpError("delivery_method_update_failed", result.error, 422)
+              if (!result.ok) return ucpSaleorError("delivery_method_update_failed", 422, result)
             }
           }
         }
 
-        // Update line items if provided
+        // Update line items if provided. UCP PUT is a FULL replacement of the
+        // checkout resource (checkout.md → Update Checkout), so line_items is
+        // the complete desired cart: add new variants, update changed
+        // quantities, and DELETE variants the agent omitted. The prior code
+        // only ran checkoutLinesUpdate, so omitted lines were silently retained
+        // and an agent could never remove an item (U-2).
         if (body.line_items && Array.isArray(body.line_items)) {
-          const lines = body.line_items.map((item: any) => ({
+          const desired = body.line_items.map((item: any) => ({
             variantId: item.item?.id || item.id,
-            quantity: item.quantity || 1,
+            quantity: item.quantity ?? 1,
           }))
-          const result = await saleorClient.updateCheckoutLines(id, lines)
-          if (!result.ok) return ucpError("items_update_failed", result.error, 422)
+          const current = cancelGuard.data.lines.map((l) => ({
+            id: l.id,
+            variantId: l.variant.id,
+            quantity: l.quantity,
+          }))
+          const plan = planCartReplacement(current, desired)
+
+          if (plan.toDelete.length > 0) {
+            const del = await saleorClient.deleteCheckoutLines(id, plan.toDelete)
+            if (!del.ok) return ucpSaleorError("items_update_failed", 422, del)
+          }
+          if (plan.toAdd.length > 0) {
+            const add = await saleorClient.addCheckoutLines(id, plan.toAdd)
+            if (!add.ok) return ucpSaleorError("items_update_failed", 422, add)
+          }
+          if (plan.toUpdate.length > 0) {
+            const upd = await saleorClient.updateCheckoutLines(id, plan.toUpdate)
+            if (!upd.ok) return ucpSaleorError("items_update_failed", 422, upd)
+          }
         }
 
         // Re-fetch and prepare payment
@@ -363,12 +421,12 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // Extract payment instrument
         const payment = body.payment
         if (!payment?.instruments || !Array.isArray(payment.instruments)) {
-          return ucpError("missing_payment", "payment.instruments array is required", 400)
+          return ucpError("missing_payment", "payment.instruments array is required", 400, "recoverable")
         }
 
         const selectedInstrument = payment.instruments.find((i: any) => i.selected) || payment.instruments[0]
         if (!selectedInstrument) {
-          return ucpError("no_instrument_selected", "At least one payment instrument must be provided", 400)
+          return ucpError("no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
         }
 
         // Fetch checkout for metadata
@@ -394,7 +452,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           const addr = ucpToSaleorAddress(selectedInstrument.billing_address)
           const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
           if (!billingResult.ok) {
-            return ucpError("billing_address_update_failed", billingResult.error, 422)
+            return ucpSaleorError("billing_address_update_failed", 422, billingResult)
           }
         }
 
@@ -415,38 +473,108 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           }
         }
 
-        // Settle payment via the appropriate handler
-        const settleResult = await paymentHandlers.settlePayment({
-          checkoutId: id,
-          handlerId: selectedInstrument.handler_id,
-          credential: selectedInstrument.credential,
-          checkoutMetadata: metadata,
-        })
+        // --- Settle + record (SAC-2) ----------------------------------------
+        // A prior `complete` may have settled on-chain (irreversible) and then
+        // failed before the order was recorded. To make that recoverable rather
+        // than a silent charged-no-order, the settlement is written to checkout
+        // privateMetadata the instant it succeeds, BEFORE the Saleor writes that
+        // can fail. On a retry we find that record and skip re-settling.
+        const priorSettlement = metadata[SETTLEMENT_METADATA_KEY] as
+          | { reference?: string }
+          | undefined
 
-        if (!settleResult.success) {
-          return ucpError("payment_failed", settleResult.error || "Payment settlement failed", 422)
-        }
+        let reference: string | undefined
+        if (priorSettlement?.reference) {
+          // Retry-to-recover: the money already moved (the EIP-3009 nonce makes a
+          // repeat settle a no-op anyway). Don't settle again — resume bookkeeping.
+          reference = priorSettlement.reference
+        } else {
+          const settleResult = await paymentHandlers.settlePayment({
+            checkoutId: id,
+            handlerId: selectedInstrument.handler_id,
+            credential: selectedInstrument.credential,
+            checkoutMetadata: metadata,
+          })
+          if (!settleResult.success) {
+            return ucpError("payment_failed", settleResult.error || "Payment settlement failed", 422, "recoverable")
+          }
+          reference = settleResult.transactionReference
 
-        // Register the settled payment with Saleor before completing, otherwise
-        // Saleor sees the checkout as unpaid and returns CHECKOUT_NOT_FULLY_PAID.
-        if (settleResult.transactionReference) {
-          const handler = paymentHandlers.getAdapter(selectedInstrument.handler_id)
-          const txResult = await saleorClient.createCheckoutTransaction(id, {
-            name: handler?.name ?? selectedInstrument.handler_id,
-            pspReference: settleResult.transactionReference,
-            amountCharged: {
+          // Record the settlement BEFORE createCheckoutTransaction/completeCheckout
+          // (either can fail). Saleor's per-checkout privateMetadata is the direct
+          // analog of Shopware's settlement table; the response is stored opaquely.
+          if (reference) {
+            const record = {
+              handlerId: selectedInstrument.handler_id,
+              reference,
               amount: checkout.totalPrice.gross.amount,
               currency: checkout.totalPrice.gross.currency,
-            },
-          })
-          if (!txResult.ok) {
-            return ucpError("transaction_create_failed", txResult.error, 422)
+              settledAt: new Date().toISOString(),
+            }
+            const recResult = await saleorClient.updatePrivateMetadata(id, [
+              { key: SETTLEMENT_METADATA_KEY, value: JSON.stringify(record) },
+            ])
+            if (!recResult.ok) {
+              // Settled but the marker did not persist. Refuse to go further and
+              // lose the trail — return an HONEST, recoverable error naming the
+              // settled payment; a retry re-persists (the nonce blocks any
+              // double-charge).
+              console.error(`[ucp-routes] settled ${reference} but failed to record settlement on ${id}: ${recResult.error}`)
+              return ucpError(
+                "settlement_not_recorded",
+                `Payment settled on-chain (reference ${reference}) but recording it failed — the order was not created. Retry to reconcile.`,
+                422,
+                "recoverable",
+              )
+            }
+          }
+        }
+
+        // Register the settled payment as a Saleor transaction — unless it is
+        // already recorded (retry after a later failure), which would otherwise
+        // double the charged amount on the checkout.
+        if (reference) {
+          const alreadyRecorded = (checkout.transactions ?? []).some((t) => t.pspReference === reference)
+          if (!alreadyRecorded) {
+            const handler = paymentHandlers.getAdapter(selectedInstrument.handler_id)
+            const txResult = await saleorClient.createCheckoutTransaction(id, {
+              name: handler?.name ?? selectedInstrument.handler_id,
+              pspReference: reference,
+              amountCharged: {
+                amount: checkout.totalPrice.gross.amount,
+                currency: checkout.totalPrice.gross.currency,
+              },
+            })
+            if (!txResult.ok) {
+              // Honest reporting (SAC-2): the PAYMENT succeeded; recording the
+              // order failed — not payment_failed. Settlement is recorded, so a
+              // retry resumes here.
+              return ucpError(
+                "order_not_recorded_after_settlement",
+                `Payment settled (reference ${reference}) but recording the order failed: ${txResult.error}. Retry to complete the order.`,
+                422,
+                "recoverable",
+              )
+            }
           }
         }
 
         // Complete checkout in Saleor
         const orderResult = await saleorClient.completeCheckout(id)
-        if (!orderResult.ok) return ucpError("checkout_complete_failed", orderResult.error, 422)
+        if (!orderResult.ok) {
+          // Honest reporting (SAC-2): if a settlement exists, the payment
+          // succeeded and only order placement failed (e.g. stock/voucher at
+          // commit) — say so, and let a retry resume without re-charging.
+          if (reference) {
+            return ucpError(
+              "order_not_completed_after_settlement",
+              `Payment settled (reference ${reference}) but completing the order failed: ${orderResult.error}. Retry to complete the order.`,
+              422,
+              "recoverable",
+            )
+          }
+          return ucpSaleorError("checkout_complete_failed", 422, orderResult)
+        }
 
         // Return checkout session with completed status and order confirmation
         const orderConfirmation = {
@@ -536,11 +664,10 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const query: string = body.query ?? ""
         const limit: number = Math.min(body.pagination?.limit ?? 20, 100)
-        const offset: number = body.pagination?.offset ?? 0
 
-        // Saleor uses cursor-based pagination; we accept cursor on repeat calls.
-        // When offset > 0 but no cursor is given, we can't reliably skip records —
-        // callers should pass pagination.cursor from the previous response instead.
+        // Saleor pagination is cursor-based. Callers page by passing
+        // pagination.cursor from the previous response's pagination.cursor
+        // (offset is not supported — see U-4).
         const cursor: string | null = body.pagination?.cursor ?? null
 
         const result = await saleorClient.searchProducts({
@@ -551,7 +678,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         if (!result.ok) return ucpError("catalog_search_failed", result.error, 422)
 
-        const response = formatUcpCatalogSearch(config.ucpVersion, result.data, { limit, offset })
+        const response = formatUcpCatalogSearch(config.ucpVersion, result.data)
         return Response.json(response)
       },
     },
@@ -576,7 +703,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           return ucpError("missing_ids", "ids array is required and must not be empty", 400)
         }
 
-        const result = await saleorClient.getProducts({ ids })
+        const result = await saleorClient.lookupProductsAndVariants({ ids })
         if (!result.ok) return ucpError("catalog_lookup_failed", result.error, 422)
 
         const response = formatUcpCatalogLookup(config.ucpVersion, result.data)

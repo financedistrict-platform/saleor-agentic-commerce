@@ -5,7 +5,7 @@
  * Spec: https://ucp.dev/2026-04-08/specification/overview
  */
 
-import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine, SaleorProduct, SaleorProductConnection } from "../../types/saleor.js"
+import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine, SaleorProduct, SaleorProductVariant, SaleorProductConnection, SaleorLookupVariant } from "../../types/saleor.js"
 import type {
   UcpCheckoutSession,
   UcpOrder,
@@ -18,13 +18,19 @@ import type {
   UcpOrderLineItem,
   UcpOrderFulfillment,
   UcpFulfillmentExpectation,
+  UcpFulfillmentEvent,
   UcpOrderConfirmation,
   UcpCatalogProduct,
   UcpCatalogSearchResponse,
   UcpCatalogLookupResponse,
+  UcpDescription,
+  UcpInputCorrelation,
+  UcpLookupProduct,
+  UcpLookupVariant,
+  UcpCatalogProductVariant,
 } from "../../types/ucp.js"
 import { saleorToUcpAddress } from "../address-translator.js"
-import { resolveUcpCheckoutStatus, normalizeOrderStatus } from "../status-maps.js"
+import { resolveUcpCheckoutStatus } from "../status-maps.js"
 import { metadataToRecord } from "../metadata.js"
 import type { FormatterContext } from "./types.js"
 import { toMinor } from "./types.js"
@@ -57,8 +63,8 @@ export async function formatUcpProfile(
       capabilities: {
         "dev.ucp.shopping.checkout": [{ version: v, spec: `https://ucp.dev/${v}/specification/checkout/`, schema: `https://ucp.dev/${v}/schemas/shopping/checkout.json` }],
         "dev.ucp.shopping.order": [{ version: v, spec: `https://ucp.dev/${v}/specification/order/`, schema: `https://ucp.dev/${v}/schemas/shopping/order.json` }],
-        "dev.ucp.shopping.catalog.search": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog.json` }],
-        "dev.ucp.shopping.catalog.lookup": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog.json` }],
+        "dev.ucp.shopping.catalog.search": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog_search.json` }],
+        "dev.ucp.shopping.catalog.lookup": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog_lookup.json` }],
       },
       payment_handlers: paymentHandlers,
     },
@@ -170,14 +176,18 @@ export function formatUcpOrder(
 
   totals.push({ type: "total", amount: toMinor(order.total.gross.amount) })
 
-  const lineItems = formatOrderLineItems(order.lines, currency)
+  const fulfilledByLine = fulfilledQtyByLine(order)
+  const lineItems = formatOrderLineItems(order.lines, fulfilledByLine)
   const fulfillment = formatOrderFulfillment(order, lineItems)
 
   return {
     ucp: ucpEnvelope(ctx, false),
     id: order.id,
     label: order.number ?? undefined,
-    checkout_id: order.id, // Saleor doesn't expose the checkout ID on order
+    // The checkout that produced this order (Saleor Order.checkoutId), so an
+    // agent can correlate the order back to its UCP checkout session. Falls
+    // back to the order id only for orders not created from a checkout (SAC-6).
+    checkout_id: order.checkoutId ?? order.id,
     permalink_url: `${ctx.storefrontUrl}/orders/${order.id}`,
     currency,
     line_items: lineItems,
@@ -304,27 +314,60 @@ function formatCheckoutFulfillment(
 // Order Line Items
 // =====================================================
 
-function formatOrderLineItems(lines: SaleorOrderLine[], currency: string): UcpOrderLineItem[] {
-  return lines.map((line) => ({
-    id: line.id,
-    item: {
-      id: line.variant?.id || line.id,
-      title: `${line.productName} - ${line.variantName}`,
-      price: toMinor(line.unitPrice.gross.amount),
-      ...(line.thumbnail?.url || line.variant?.product.thumbnail?.url
-        ? { image_url: line.thumbnail?.url || line.variant?.product.thumbnail?.url }
-        : {}),
-    },
-    quantity: {
-      original: line.quantity,
-      total: line.quantity,
-      fulfilled: 0, // Saleor tracks this separately on fulfillment objects
-    },
-    totals: [
-      { type: "total" as const, amount: toMinor(line.totalPrice.gross.amount) },
-    ],
-    status: "processing" as const,
-  }))
+function formatOrderLineItems(
+  lines: SaleorOrderLine[],
+  fulfilledByLine: Map<string, number>,
+): UcpOrderLineItem[] {
+  return lines.map((line) => {
+    const total = line.quantity
+    const fulfilled = Math.min(fulfilledByLine.get(line.id) ?? 0, total)
+    return {
+      id: line.id,
+      item: {
+        id: line.variant?.id || line.id,
+        title: `${line.productName} - ${line.variantName}`,
+        price: toMinor(line.unitPrice.gross.amount),
+        ...(line.thumbnail?.url || line.variant?.product.thumbnail?.url
+          ? { image_url: line.thumbnail?.url || line.variant?.product.thumbnail?.url }
+          : {}),
+      },
+      quantity: {
+        original: line.quantity,
+        total,
+        fulfilled,
+      },
+      totals: [
+        { type: "total" as const, amount: toMinor(line.totalPrice.gross.amount) },
+      ],
+      status: deriveOrderLineStatus(total, fulfilled),
+    }
+  })
+}
+
+// order.md → Status Derivation (order_line_item.json `status` is required).
+function deriveOrderLineStatus(
+  total: number,
+  fulfilled: number,
+): "processing" | "partial" | "fulfilled" | "removed" {
+  if (total === 0) return "removed"
+  if (fulfilled >= total) return "fulfilled"
+  if (fulfilled > 0) return "partial"
+  return "processing"
+}
+
+// Sum fulfilled quantity per order line, ignoring fulfillments that don't
+// represent delivered goods (cancelled / returned / replaced).
+function fulfilledQtyByLine(order: SaleorOrder): Map<string, number> {
+  const map = new Map<string, number>()
+  for (const f of order.fulfillments ?? []) {
+    if (f.status === "CANCELED" || f.status === "RETURNED" || f.status === "REPLACED") continue
+    for (const fl of f.lines ?? []) {
+      const id = fl.orderLine?.id
+      if (!id) continue
+      map.set(id, (map.get(id) ?? 0) + fl.quantity)
+    }
+  }
+  return map
 }
 
 // =====================================================
@@ -346,9 +389,21 @@ function formatOrderFulfillment(
     })
   }
 
+  // Map each Saleor fulfillment to a UCP fulfillment event. fulfillment_event
+  // `type` is an open string, so Saleor's own status names pass through (SAC-7).
+  const events: UcpFulfillmentEvent[] = (order.fulfillments ?? []).map((f) => ({
+    id: f.id,
+    occurred_at: f.created,
+    type: f.status,
+    line_items: (f.lines ?? [])
+      .filter((fl) => fl.orderLine != null)
+      .map((fl) => ({ id: fl.orderLine!.id, quantity: fl.quantity })),
+    ...(f.trackingNumber ? { tracking_number: f.trackingNumber } : {}),
+  }))
+
   return {
     expectations,
-    events: [],
+    events,
   }
 }
 
@@ -369,27 +424,88 @@ function deliveryDaysToIso(days: number): string {
 export function formatUcpCatalogSearch(
   ucpVersion: string,
   connection: SaleorProductConnection,
-  opts: { limit: number; offset: number },
 ): UcpCatalogSearchResponse {
   const products = connection.edges.map((e) => formatCatalogProduct(e.node))
-  const total = products.length + opts.offset // approximate — Saleor cursor pagination has no total
+  const hasNextPage = connection.pageInfo.hasNextPage
   return {
     ucp: { version: ucpVersion, status: "success" },
     products,
     pagination: {
-      total,
-      limit: opts.limit,
-      offset: opts.offset,
-      has_more: connection.pageInfo.hasNextPage,
+      has_next_page: hasNextPage,
+      // pagination.json: cursor MUST be present when has_next_page is true
+      ...(hasNextPage && connection.pageInfo.endCursor
+        ? { cursor: connection.pageInfo.endCursor }
+        : {}),
+      // Real total from Saleor's connection when selected — replaces the old
+      // `products.length + offset` fabrication (U-4).
+      ...(connection.totalCount != null ? { total_count: connection.totalCount } : {}),
     },
   }
 }
 
+/**
+ * Format a catalog lookup. Per catalog_lookup.json / lookup.md, a lookup
+ * response contains only *resolved* variants, each carrying an `inputs[]`
+ * correlation back to the request id(s) that matched it:
+ *   - a product GID resolves to the product's single featured variant
+ *     (`match: "featured"`);
+ *   - a variant GID resolves to that exact variant (`match: "exact"`).
+ * Products are deduped (returned once); variants are deduped, and a variant hit
+ * by both its product GID and its own variant GID carries both inputs.
+ */
 export function formatUcpCatalogLookup(
   ucpVersion: string,
-  connection: SaleorProductConnection,
+  input: { products: SaleorProduct[]; variants: SaleorLookupVariant[] },
 ): UcpCatalogLookupResponse {
-  const products = connection.edges.map((e) => formatCatalogProduct(e.node))
+  type Acc = {
+    product: SaleorProduct
+    variants: Map<string, { node: SaleorProductVariant; inputs: UcpInputCorrelation[] }>
+  }
+  const byProduct = new Map<string, Acc>()
+
+  const ensure = (product: SaleorProduct): Acc => {
+    let acc = byProduct.get(product.id)
+    if (!acc) {
+      acc = { product, variants: new Map() }
+      byProduct.set(product.id, acc)
+    }
+    return acc
+  }
+
+  const addVariant = (acc: Acc, node: SaleorProductVariant, correlation: UcpInputCorrelation): void => {
+    const existing = acc.variants.get(node.id)
+    if (existing) {
+      existing.inputs.push(correlation)
+      return
+    }
+    acc.variants.set(node.id, { node, inputs: [correlation] })
+  }
+
+  // Product-ID matches → the product's featured (first) variant only.
+  for (const product of input.products) {
+    const featured = product.variants[0]
+    if (!featured) continue // lookup_variant requires a variant; skip variant-less products
+    addVariant(ensure(product), featured, { id: product.id, match: "featured" })
+  }
+
+  // Variant-ID matches → that exact variant, grouped under its parent product.
+  for (const v of input.variants) {
+    addVariant(
+      ensure(v.product),
+      { id: v.id, name: v.name, sku: v.sku, pricing: v.pricing },
+      { id: v.id, match: "exact" },
+    )
+  }
+
+  const products: UcpLookupProduct[] = [...byProduct.values()].map(({ product, variants }) => {
+    const base = formatCatalogProduct(product)
+    const resolved: UcpLookupVariant[] = [...variants.values()].map(({ node, inputs }) => ({
+      ...formatCatalogVariant(node, base.description),
+      inputs,
+    }))
+    return { ...base, variants: resolved }
+  })
+
   return {
     ucp: { version: ucpVersion, status: "success" },
     products,
@@ -398,24 +514,21 @@ export function formatUcpCatalogLookup(
 }
 
 function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
-  const variants = product.variants.map((v) => ({
-    id: v.id,
-    title: v.name,
-    sku: v.sku,
-    price: v.pricing?.price
-      ? {
-          amount: toMinor(v.pricing.price.gross.amount),
-          currency: v.pricing.price.gross.currency.toLowerCase(),
-        }
-      : null,
-  }))
+  // Saleor has no per-variant description; variants inherit the product's.
+  // variant.json requires `description`, an object per description.json.
+  const description = descriptionObject(product.description)
+
+  const variants = product.variants.map((v) => formatCatalogVariant(v, description))
 
   const variantAmounts = variants
     .map((v) => v.price?.amount)
     .filter((a): a is number => a != null)
 
-  const currency = product.pricing?.priceRange.start.gross.currency.toLowerCase()
-    ?? (variants[0]?.price?.currency ?? "usd")
+  const currency = (
+    product.pricing?.priceRange.start.gross.currency
+    ?? variants[0]?.price?.currency
+    ?? "USD"
+  ).toUpperCase()
 
   const priceRange =
     variantAmounts.length > 0
@@ -430,7 +543,7 @@ function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
   return {
     id: product.id,
     title: product.name,
-    description: stripEditorjsToPlainText(product.description),
+    description,
     handle: product.slug,
     categories: product.category ? [product.category.name] : [],
     price_range: priceRange,
@@ -438,6 +551,32 @@ function formatCatalogProduct(product: SaleorProduct): UcpCatalogProduct {
     media,
     thumbnail_url: product.thumbnail?.url ?? null,
   }
+}
+
+// Format a single Saleor variant to the UCP variant shape (SAC-8: required
+// description object, uppercase ISO-4217 currency, sku omitted when null).
+function formatCatalogVariant(
+  v: SaleorProductVariant,
+  description: UcpDescription,
+): UcpCatalogProductVariant {
+  return {
+    id: v.id,
+    title: v.name,
+    description,
+    ...(v.sku ? { sku: v.sku } : {}),
+    price: v.pricing?.price
+      ? {
+          amount: toMinor(v.pricing.price.gross.amount),
+          currency: v.pricing.price.gross.currency.toUpperCase(),
+        }
+      : null,
+  }
+}
+
+// A UCP description object (description.json requires at least one of
+// plain/html/markdown). Saleor stores rich text as Editorjs JSON — flatten it.
+function descriptionObject(raw: string | null): UcpDescription {
+  return { plain: stripEditorjsToPlainText(raw) }
 }
 
 function stripEditorjsToPlainText(raw: string | null): string {

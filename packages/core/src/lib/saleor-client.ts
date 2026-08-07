@@ -12,7 +12,9 @@ import type {
   SaleorCheckout,
   SaleorOrder,
   SaleorAddress,
+  SaleorProduct,
   SaleorProductConnection,
+  SaleorLookupVariant,
 } from "../types/saleor.js"
 
 // =====================================================
@@ -266,6 +268,40 @@ export class SaleorClient {
     return { ok: true, data: result.data.products }
   }
 
+  /**
+   * Resolve a lookup by mixed product/variant GIDs. Sends the same id list to
+   * both `products(where:{ids})` and `productVariants(ids)`; Saleor matches
+   * each id where it belongs, so product GIDs come back as products and variant
+   * GIDs as variants (with their parent product). The formatter dedups and
+   * attaches inputs[] correlations (SAC-8: variant-id lookup).
+   */
+  async lookupProductsAndVariants(options: {
+    ids: string[]
+    channel?: string
+  }): Promise<SaleorResult<{ products: SaleorProduct[]; variants: SaleorLookupVariant[] }>> {
+    const channel = options.channel ?? this.channel
+    const [pRes, vRes] = await Promise.all([
+      this.execute<{ products: SaleorProductConnection }>(PRODUCTS_LOOKUP_QUERY, {
+        ids: options.ids,
+        first: 100,
+        channel,
+      }),
+      this.execute<{ productVariants: { edges: { node: SaleorLookupVariant }[] } }>(
+        PRODUCT_VARIANTS_LOOKUP_QUERY,
+        { ids: options.ids, first: 100, channel },
+      ),
+    ])
+    if (!pRes.ok) return pRes
+    if (!vRes.ok) return vRes
+    return {
+      ok: true,
+      data: {
+        products: pRes.data.products.edges.map((e) => e.node),
+        variants: vRes.data.productVariants.edges.map((e) => e.node),
+      },
+    }
+  }
+
   // -------------------------------------------------
   // Metadata Operations
   // -------------------------------------------------
@@ -402,6 +438,7 @@ const CHECKOUT_FIELDS = `
   deliveryMethod {
     ... on ShippingMethod { id name }
   }
+  transactions { pspReference }
   metadata { key value }
   privateMetadata { key value }
 `
@@ -536,7 +573,7 @@ const UPDATE_PRIVATE_METADATA = `
 const ORDER_QUERY = `
   query Order($id: ID!) {
     order(id: $id) {
-      id number status created userEmail
+      id number status created userEmail checkoutId
       channel { slug }
       total { gross { amount currency } net { amount currency } tax { amount currency } }
       subtotal { gross { amount currency } net { amount currency } tax { amount currency } }
@@ -551,6 +588,10 @@ const ORDER_QUERY = `
       shippingAddress {
         firstName lastName streetAddress1 streetAddress2
         city countryArea postalCode country { code country } phone
+      }
+      fulfillments {
+        id status trackingNumber created
+        lines { quantity orderLine { id } }
       }
       metadata { key value }
     }
@@ -576,6 +617,7 @@ const PRODUCT_FIELDS = `
 const PRODUCTS_SEARCH_QUERY = `
   query ProductSearch($search: String!, $first: Int!, $after: String, $channel: String!) {
     products(search: $search, first: $first, after: $after, channel: $channel) {
+      totalCount
       edges { node { ${PRODUCT_FIELDS} } }
       pageInfo { hasNextPage endCursor }
     }
@@ -587,6 +629,20 @@ const PRODUCTS_LOOKUP_QUERY = `
     products(where: { ids: $ids }, first: $first, channel: $channel) {
       edges { node { ${PRODUCT_FIELDS} } }
       pageInfo { hasNextPage endCursor }
+    }
+  }
+`
+
+const PRODUCT_VARIANTS_LOOKUP_QUERY = `
+  query ProductVariantLookup($ids: [ID!], $first: Int!, $channel: String!) {
+    productVariants(ids: $ids, first: $first, channel: $channel) {
+      edges {
+        node {
+          id name sku
+          pricing { price { gross { amount currency } } }
+          product { ${PRODUCT_FIELDS} }
+        }
+      }
     }
   }
 `
