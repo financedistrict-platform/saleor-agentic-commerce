@@ -14,6 +14,11 @@ import type { APL } from "@saleor/app-sdk/APL"
  * fallback chain. Unknown/missing THROWS rather than silently degrading to a
  * temp file (the failure mode GH-62 is about):
  *
+ *   env       single-tenant: token/appId/apiUrl come from the process env
+ *             (e.g. injected from a secrets manager at task start). Durable —
+ *             re-injected on every restart. Needs SALEOR_APP_TOKEN,
+ *             SALEOR_APP_ID, SALEOR_API_URL. This is what the FD test/prod
+ *             ECS deploys use.
  *   redis     durable Redis/Valkey (self-hosted default). Needs REDIS_URL.
  *   dynamodb  AWS DynamoDB (IAM auth). Needs DYNAMODB_TABLE.
  *   upstash   serverless Upstash Redis (Vercel/one-click). Needs UPSTASH_URL/TOKEN.
@@ -25,9 +30,9 @@ import type { APL } from "@saleor/app-sdk/APL"
  * the static/edge bundle (they must never be webpack-bundled for the edge
  * runtime). Changing APL after install strands the token — see DEPLOYMENT.md.
  */
-export type AplType = "redis" | "dynamodb" | "upstash" | "file"
+export type AplType = "env" | "redis" | "dynamodb" | "upstash" | "file"
 
-const VALID: AplType[] = ["redis", "dynamodb", "upstash", "file"]
+const VALID: AplType[] = ["env", "redis", "dynamodb", "upstash", "file"]
 
 function isProduction(): boolean {
   return process.env.NODE_ENV === "production"
@@ -40,6 +45,19 @@ function isProduction(): boolean {
  */
 export function resolveAplType(aplType: string | undefined = process.env.APL): AplType {
   switch (aplType) {
+    case "env": {
+      const missing = ["SALEOR_APP_TOKEN", "SALEOR_APP_ID", "SALEOR_API_URL"].filter(
+        (k) => !process.env[k],
+      )
+      if (missing.length > 0) {
+        throw new Error(
+          `APL="env" requires ${missing.join(", ")} (the App's auth data, typically injected ` +
+            "from a secrets manager at task start). See DEPLOYMENT.md.",
+        )
+      }
+      return "env"
+    }
+
     case "redis":
       if (!process.env.REDIS_URL) {
         throw new Error(
@@ -93,6 +111,21 @@ export function resolveAplType(aplType: string | undefined = process.env.APL): A
  */
 export async function buildApl(type: AplType = resolveAplType()): Promise<APL> {
   switch (type) {
+    case "env": {
+      const { EnvAPL } = await import("@saleor/app-sdk/APL/env")
+      return new EnvAPL({
+        env: {
+          token: process.env.SALEOR_APP_TOKEN!,
+          appId: process.env.SALEOR_APP_ID!,
+          saleorApiUrl: process.env.SALEOR_API_URL!,
+        },
+        // Prints the auth payload to stdout on /api/register so the one-time
+        // token can be captured (e.g. into Secrets Manager) at first install.
+        // Turn OFF once the token is stored — see the ENV APL note in DEPLOYMENT.md.
+        printAuthDataOnRegister: process.env.PRINT_AUTH_DATA_ON_REGISTER === "true",
+      })
+    }
+
     case "redis": {
       const [{ RedisAPL }, { createClient }] = await Promise.all([
         import("@saleor/app-sdk/APL/redis"),

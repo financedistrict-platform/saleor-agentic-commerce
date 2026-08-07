@@ -31,6 +31,22 @@ describe("resolveAplType — explicit selection, fail-fast (GH-62)", () => {
     expect(() => resolveAplType("file")).toThrow(/local-development only/)
   })
 
+  it("env requires the App auth data (token, appId, apiUrl)", () => {
+    delete process.env.SALEOR_APP_TOKEN
+    delete process.env.SALEOR_APP_ID
+    delete process.env.SALEOR_API_URL
+    expect(() => resolveAplType("env")).toThrow(/SALEOR_APP_TOKEN/)
+  })
+
+  it("accepts env when the App auth data is present (the FD test/prod deploy)", () => {
+    process.env.SALEOR_APP_TOKEN = "tok"
+    process.env.SALEOR_APP_ID = "app"
+    process.env.SALEOR_API_URL = "https://saleor.example/graphql/"
+    // env is a valid PRODUCTION backend — unlike file, it must not be refused.
+    vi.stubEnv("NODE_ENV", "production")
+    expect(resolveAplType("env")).toBe("env")
+  })
+
   it("redis requires REDIS_URL", () => {
     delete process.env.REDIS_URL
     expect(() => resolveAplType("redis")).toThrow(/REDIS_URL/)
