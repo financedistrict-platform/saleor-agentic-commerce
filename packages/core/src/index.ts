@@ -109,6 +109,10 @@ export { PaymentHandlerRegistry } from "./lib/payment-handler-registry.js"
 export { SaleorClient } from "./lib/saleor-client.js"
 export type { SaleorClientOptions, SaleorResult, SaleorAddressInput } from "./lib/saleor-client.js"
 
+// Checkout readiness — Saleor-authoritative validation probe → UCP status/messages
+export { evaluateReadiness, classifyCompleteErrors, PAYMENT_PENDING_CODE } from "./lib/checkout-readiness.js"
+export type { CheckoutReadiness } from "./lib/checkout-readiness.js"
+
 // Formatters — UCP
 export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup } from "./lib/formatters/ucp.js"
 
