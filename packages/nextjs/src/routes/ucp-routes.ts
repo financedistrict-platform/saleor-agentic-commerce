@@ -41,6 +41,7 @@ import {
   validateSignedAgainstStored,
   planCartReplacement,
   saleorErrorsToUcpMessages,
+  evaluateReadiness,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import type { UcpErrorSeverity } from "@financedistrict/saleor-agentic-commerce-core"
@@ -270,7 +271,8 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           checkoutResult.data.id, checkoutResult.data, baseUrl,
         )
 
-        const session = formatUcpCheckoutSession(formatterContext, finalCheckout)
+        const readiness = await evaluateReadiness(saleorClient, finalCheckout)
+        const session = formatUcpCheckoutSession(formatterContext, finalCheckout, readiness)
         return Response.json(session, { status: 201 })
       },
     },
@@ -287,12 +289,17 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         const result = await saleorClient.getCheckout(id)
         if (!result.ok) return ucpError("checkout_not_found", result.error, 404)
 
-        const session = formatUcpCheckoutSession(formatterContext, result.data)
         // metadataToRecord JSON.parses values, so the literal "true" written by
         // the cancel route comes back as boolean true (not the string "true").
         const canceled =
           metadataToRecord(result.data.privateMetadata).ucp_canceled === true
-        return Response.json(canceled ? { ...session, status: "canceled" } : session)
+        if (canceled) {
+          const session = formatUcpCheckoutSession(formatterContext, result.data)
+          return Response.json({ ...session, status: "canceled" })
+        }
+        const readiness = await evaluateReadiness(saleorClient, result.data)
+        const session = formatUcpCheckoutSession(formatterContext, result.data, readiness)
+        return Response.json(session)
       },
 
       async PUT(request: Request, context: { params: Promise<{ id: string }> }) {
@@ -397,7 +404,8 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         const baseUrl = endpointBaseUrl(request)
         const finalCheckout = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl)
 
-        const session = formatUcpCheckoutSession(formatterContext, finalCheckout)
+        const readiness = await evaluateReadiness(saleorClient, finalCheckout)
+        const session = formatUcpCheckoutSession(formatterContext, finalCheckout, readiness)
         return Response.json(session)
       },
     },
@@ -489,6 +497,15 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           // repeat settle a no-op anyway). Don't settle again — resume bookkeeping.
           reference = priorSettlement.reference
         } else {
+          // Settle only once Saleor confirms the sole outstanding requirement is
+          // payment; otherwise surface its status + messages and move no funds.
+          const readiness = await evaluateReadiness(saleorClient, checkout)
+          if (!readiness.ready) {
+            return Response.json(
+              formatUcpCheckoutSession(formatterContext, checkout, readiness),
+            )
+          }
+
           const settleResult = await paymentHandlers.settlePayment({
             checkoutId: id,
             handlerId: selectedInstrument.handler_id,

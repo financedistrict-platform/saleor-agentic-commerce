@@ -28,6 +28,8 @@ import type {
   UcpLookupProduct,
   UcpLookupVariant,
   UcpCatalogProductVariant,
+  UcpCheckoutStatus,
+  UcpMessage,
 } from "../../types/ucp.js"
 import { saleorToUcpAddress } from "../address-translator.js"
 import { resolveUcpCheckoutStatus } from "../status-maps.js"
@@ -103,9 +105,12 @@ function ucpEnvelope(
 export function formatUcpCheckoutSession(
   ctx: FormatterContext,
   checkout: SaleorCheckout,
+  // When omitted, status falls back to the presence-based resolver.
+  readiness?: { status: UcpCheckoutStatus; messages?: UcpMessage[] },
 ): UcpCheckoutSession {
   const currency = checkout.totalPrice.gross.currency.toLowerCase()
-  const status = resolveUcpCheckoutStatus(checkout)
+  const status = readiness?.status ?? resolveUcpCheckoutStatus(checkout)
+  const messages = readiness?.messages ?? []
   const metadata = metadataToRecord(checkout.privateMetadata)
 
   const lineItems = formatCheckoutLineItems(checkout.lines, currency)
@@ -122,6 +127,7 @@ export function formatUcpCheckoutSession(
     line_items: lineItems,
     totals,
     ...(fulfillment ? { fulfillment } : {}),
+    ...(messages.length > 0 ? { messages } : {}),
     links: [
       { type: "terms_of_service", url: `${ctx.storefrontUrl}/terms` },
       { type: "privacy_policy", url: `${ctx.storefrontUrl}/privacy` },
