@@ -1,0 +1,66 @@
+name: Publish RC snapshot
+
+# Every push to develop that carries a pending changeset publishes an rc
+# snapshot to npm under the `rc` dist-tag. Stable releases (main) remain a
+# manual dispatch in fd-deployments and are intentionally not touched here.
+#
+# This lives in the source repo rather than fd-deployments because a snapshot
+# publish needs no privileged credentials — it never commits, tags, or opens a
+# PR, only npm-publishes. NPM_TOKEN (already a repo secret) and the default
+# GITHUB_TOKEN are sufficient; the app-token-backed stable flow stays isolated.
+
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-rc
+  cancel-in-progress: false
+
+jobs:
+  rc:
+    name: Publish rc snapshot to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for pending changesets
+        id: changesets
+        shell: bash
+        run: |
+          pending=$(find .changeset -maxdepth 1 -name "*.md" ! -name "README.md" | wc -l)
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+          echo "Pending changesets: $pending"
+
+      - name: Publish rc snapshot
+        if: steps.changesets.outputs.pending != '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm changeset version --snapshot rc
+          pnpm -r build
+          pnpm changeset publish --no-git-tag --tag rc
