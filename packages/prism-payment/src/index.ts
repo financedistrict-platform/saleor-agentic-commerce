@@ -44,7 +44,7 @@ export const manifest: HandlerManifest = {
   displayName: "Finance District Prism",
   description:
     "Stablecoin payments via x402/EIP-3009. Configure chains, tokens, and settlement wallet in the Prism merchant dashboard.",
-  manageUrl: "https://prism.fd.xyz/",
+  manageUrl: "https://apps.fd.xyz/prism",
   configSchema: {
     $schema: "https://json-schema.org/draft/2020-12/schema",
     type: "object",
