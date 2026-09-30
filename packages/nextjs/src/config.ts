@@ -9,6 +9,7 @@
 import {
   SaleorClient,
   PaymentHandlerRegistry,
+  UCP_VERSION,
   loadConfigFromAppCached,
   type PaymentHandlerAdapter,
   type FormatterContext,
@@ -70,7 +71,7 @@ export type AgenticCommerceConfig = {
   storeName?: string
   /** Store description (overrides App config if both present) */
   storeDescription?: string
-  /** UCP protocol version (default: "2026-04-08") */
+  /** UCP protocol version (default: UCP_VERSION, "2026-08-25") */
   ucpVersion?: string
   /** ACP protocol version (default: "2026-01-30") */
   acpVersion?: string
@@ -212,7 +213,7 @@ function buildInstance(
   config: AgenticCommerceConfig,
   storeName: string
 ): AgenticCommerceInstance {
-  const ucpVersion = config.ucpVersion || "2026-04-08"
+  const ucpVersion = config.ucpVersion || UCP_VERSION
   const acpVersion = config.acpVersion || "2026-01-30"
 
   // Create Saleor client

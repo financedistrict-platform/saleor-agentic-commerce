@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { formatUcpError, saleorErrorsToUcpMessages } from "./error-formatters.js"
 
-const V = "2026-04-08"
+import { UCP_VERSION as V } from "./ucp-version.js"
 
 describe("formatUcpError (SAC-5)", () => {
   it("emits a single message, defaulting severity to unrecoverable", () => {
