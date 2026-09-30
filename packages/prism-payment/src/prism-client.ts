@@ -70,6 +70,7 @@ export type UcpHandlerDiscoveryEntry = {
   version: string
   spec: string
   schema: string
+  available_instruments: { type: string }[]
   config: unknown
 }
 

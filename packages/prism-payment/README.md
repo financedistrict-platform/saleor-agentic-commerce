@@ -62,7 +62,9 @@ const prepared = await prism.prepareCheckoutPayment({
 // Settle — submit the agent's signed payment credential
 const result = await prism.settlePayment({
   checkoutId: "checkout_123",
+  protocol: "ucp",
   handlerId: "xyz.fd.prism_payment",
+  instrumentType: "x402",
   amount: 5000,
   currency: "usd",
   credential: { type: "x402", token: "signed-eip3009-authorization" },

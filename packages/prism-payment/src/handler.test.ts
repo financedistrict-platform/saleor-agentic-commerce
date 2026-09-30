@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
 import { PrismPaymentHandler, PRISM_HANDLER_ID } from "./handler.js"
+import { samplePaymentHandlerConfig, sampleAcpHandler } from "./__tests__/acp-handler-fixture.js"
 import type {
   AcpHandler,
   PaymentHandlerConfig,
@@ -41,26 +42,12 @@ function makeHandler() {
 const sampleUcpDiscovery: UcpHandlersDiscoveryResponse = {
   "xyz.fd.prism_payment": [
     {
-      id: "x402",
-      version: "2026-01-15",
+      id: "xyz.fd.prism_payment",
+      version: "2026-10-07",
       spec: "https://test.example/ucp/prism.md",
       schema: "https://test.example/ucp/schema.json",
+      available_instruments: [{ type: "x402" }],
       config: {},
-    },
-  ],
-}
-
-const samplePaymentHandlerConfig: PaymentHandlerConfig = {
-  x402Version: 2,
-  resource: { url: "https://store.test/checkout/abc" },
-  accepts: [
-    {
-      scheme: "exact",
-      network: "base-sepolia",
-      payTo: "0xabc",
-      maxTimeoutSeconds: 600,
-      asset: "USDC",
-      amount: "1000000",
     },
   ],
 }
@@ -68,24 +55,11 @@ const samplePaymentHandlerConfig: PaymentHandlerConfig = {
 const sampleUcpPrepare: UcpCheckoutPrepareResponse = {
   "xyz.fd.prism_payment": [
     {
-      id: "x402",
-      version: "2026-01-15",
+      id: "xyz.fd.prism_payment",
+      version: "2026-10-07",
       config: samplePaymentHandlerConfig,
     },
   ],
-}
-
-const sampleAcpHandler: AcpHandler = {
-  id: "x402",
-  name: "xyz.fd.prism_payment",
-  version: "2026-01-15",
-  spec: "https://test.example/acp/spec.md",
-  requires_delegate_payment: false,
-  requires_pci_compliance: false,
-  psp: "prism",
-  config_schema: "https://test.example/acp/config_schema.json",
-  instrument_schemas: ["https://test.example/acp/instrument_schema.json"],
-  config: samplePaymentHandlerConfig,
 }
 
 const baseInput = {
@@ -140,6 +114,75 @@ describe("PrismPaymentHandler — discovery", () => {
     const result = await handler.getAcpDiscoveryHandlers()
 
     expect((result[0] as AcpHandler).requires_delegate_payment).toBe(true)
+  })
+
+  it("advertises nothing when the fetched entry is missing schema", async () => {
+    const { handler, mock } = makeHandler()
+    const { schema: _schema, ...withoutSchema } = sampleUcpDiscovery["xyz.fd.prism_payment"][0]
+    mock.fetchUcpHandlers.mockResolvedValue({ "xyz.fd.prism_payment": [withoutSchema] })
+
+    expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+  })
+
+  it("advertises nothing when the fetched entry has a non-contract id", async () => {
+    const { handler, mock } = makeHandler()
+    const entry = { ...sampleUcpDiscovery["xyz.fd.prism_payment"][0], id: "other" }
+    mock.fetchUcpHandlers.mockResolvedValue({ "xyz.fd.prism_payment": [entry] })
+
+    expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+  })
+
+  it("advertises only the validated Prism entry", async () => {
+    const { handler, mock } = makeHandler()
+    const entry = sampleUcpDiscovery["xyz.fd.prism_payment"][0]
+    mock.fetchUcpHandlers.mockResolvedValue({
+      "xyz.fd.prism_payment": [entry, { id: "other" }],
+      "com.example.extra": [{ id: "com.example.extra" }],
+    })
+
+    expect(await handler.getUcpDiscoveryHandlers()).toEqual({ "xyz.fd.prism_payment": [entry] })
+  })
+
+  it("advertises nothing when the first fetch is malformed", async () => {
+    const { handler, mock } = makeHandler()
+    mock.fetchUcpHandlers.mockResolvedValue({ "xyz.fd.prism_payment": [{ id: "xyz.fd.prism_payment" }] })
+
+    expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+  })
+
+  it("never serves a malformed refetch after the cached entry expires", async () => {
+    vi.useFakeTimers()
+    try {
+      const { handler, mock } = makeHandler()
+      mock.fetchUcpHandlers.mockResolvedValueOnce(sampleUcpDiscovery)
+      expect(await handler.getUcpDiscoveryHandlers()).toEqual(sampleUcpDiscovery)
+
+      vi.advanceTimersByTime(5 * 60 * 1000 + 1)
+      mock.fetchUcpHandlers.mockResolvedValueOnce({ "xyz.fd.prism_payment": [{ id: "other" }] })
+
+      expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("waits 60 s after a failed discovery before refetching", async () => {
+    vi.useFakeTimers()
+    try {
+      const { handler, mock } = makeHandler()
+      mock.fetchUcpHandlers.mockRejectedValueOnce(new Error("down"))
+      expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+
+      mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
+      expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+      expect(mock.fetchUcpHandlers).toHaveBeenCalledOnce()
+
+      vi.advanceTimersByTime(60 * 1000 + 1)
+      expect(await handler.getUcpDiscoveryHandlers()).toEqual(sampleUcpDiscovery)
+      expect(mock.fetchUcpHandlers).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("caches discovery responses (TTL)", async () => {
@@ -284,11 +327,13 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true, transactionHash: "0xdeadbeef" })
 
-    const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
+    const credential = { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
 
     const result = await handler.settlePayment({
       checkoutId: "abc",
+      protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
+      instrumentType: "x402",
       credential,
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
@@ -312,11 +357,13 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true })
 
-    const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
+    const credential = { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
 
     await handler.settlePayment({
       checkoutId: "abc",
+      protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
+      instrumentType: "x402",
       credential,
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
@@ -334,6 +381,34 @@ describe("PrismPaymentHandler — settlement", () => {
     })
   })
 
+  it("settles an ACP credential without applying the UCP type rule", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true })
+
+    const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
+
+    const result = await handler.settlePayment({
+      checkoutId: "abc",
+      protocol: "acp",
+      handlerId: PRISM_HANDLER_ID,
+      credential,
+      checkoutMetadata: {
+        [PRISM_HANDLER_ID]: {
+          ucp: null,
+          acp: sampleAcpHandler,
+          preparedAmount: 1099,
+          preparedResourceUrl: "https://store.test/checkout/abc",
+        },
+      },
+    })
+
+    expect(result.success).toBe(true)
+    expect(mock.settle).toHaveBeenCalledWith({
+      paymentPayload: credential,
+      paymentRequirements: samplePaymentHandlerConfig.accepts[0],
+    })
+  })
+
   it("picks the accepts entry matching the credential's network when multiple are offered", async () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true })
@@ -345,13 +420,15 @@ describe("PrismPaymentHandler — settlement", () => {
       accepts: [arbEntry, baseEntry],
     }
     const multiUcp: UcpCheckoutPrepareResponse = {
-      "xyz.fd.prism_payment": [{ id: "x402", version: "2026-01-15", config: multiAcceptsConfig }],
+      "xyz.fd.prism_payment": [{ id: "xyz.fd.prism_payment", version: "2026-10-07", config: multiAcceptsConfig }],
     }
 
     await handler.settlePayment({
       checkoutId: "abc",
+      protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
-      credential: { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} },
+      instrumentType: "x402",
+      credential: { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} },
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
           ucp: multiUcp,
@@ -368,13 +445,77 @@ describe("PrismPaymentHandler — settlement", () => {
     })
   })
 
+  const storedUcpOnly = {
+    [PRISM_HANDLER_ID]: {
+      ucp: sampleUcpPrepare,
+      acp: null,
+      preparedAmount: 1099,
+      preparedResourceUrl: "https://store.test/checkout/abc",
+    },
+  }
+
+  it("rejects an instrument whose type is not x402 without settling", async () => {
+    const { handler, mock } = makeHandler()
+
+    const result = await handler.settlePayment({
+      checkoutId: "abc",
+      protocol: "ucp",
+      handlerId: PRISM_HANDLER_ID,
+      instrumentType: "tokenized",
+      credential: { type: "x402", x402Version: 2, network: "base-sepolia", payload: {} },
+      checkoutMetadata: storedUcpOnly,
+    })
+
+    expect(result).toEqual({ success: false, error: 'Prism instrument and credential type must be "x402"' })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("rejects a credential whose type is not x402 without settling", async () => {
+    const { handler, mock } = makeHandler()
+
+    const result = await handler.settlePayment({
+      checkoutId: "abc",
+      protocol: "ucp",
+      handlerId: PRISM_HANDLER_ID,
+      instrumentType: "x402",
+      credential: { x402Version: 2, network: "base-sepolia", payload: {} },
+      checkoutMetadata: storedUcpOnly,
+    })
+
+    expect(result).toEqual({ success: false, error: 'Prism instrument and credential type must be "x402"' })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("settles a typed wrapper credential with only the inner paymentPayload", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+    const paymentPayload = { x402Version: 2, accepted: { network: "base-sepolia", asset: "USDC" }, payload: {} }
+
+    const result = await handler.settlePayment({
+      checkoutId: "abc",
+      protocol: "ucp",
+      handlerId: PRISM_HANDLER_ID,
+      instrumentType: "x402",
+      credential: { type: "x402", x402Version: 2, paymentPayload, paymentRequirements: {} },
+      checkoutMetadata: storedUcpOnly,
+    })
+
+    expect(result.success).toBe(true)
+    expect(mock.settle).toHaveBeenCalledWith({
+      paymentPayload,
+      paymentRequirements: samplePaymentHandlerConfig.accepts[0],
+    })
+  })
+
   it("fails clearly when no Prism config is stored", async () => {
     const { handler } = makeHandler()
 
     const result = await handler.settlePayment({
       checkoutId: "abc",
+      protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
-      credential: {},
+      instrumentType: "x402",
+      credential: { type: "x402" },
       checkoutMetadata: {},
     })
 
@@ -392,13 +533,15 @@ describe("PrismPaymentHandler — settlement", () => {
       accepts: [arbEntry, baseEntry],
     }
     const multiUcp: UcpCheckoutPrepareResponse = {
-      "xyz.fd.prism_payment": [{ id: "x402", version: "2026-01-15", config: multiAcceptsConfig }],
+      "xyz.fd.prism_payment": [{ id: "xyz.fd.prism_payment", version: "2026-10-07", config: multiAcceptsConfig }],
     }
 
     const result = await handler.settlePayment({
       checkoutId: "abc",
+      protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
-      credential: { x402Version: 2, scheme: "exact", network: "polygon-mumbai", payload: {} },
+      instrumentType: "x402",
+      credential: { type: "x402", x402Version: 2, scheme: "exact", network: "polygon-mumbai", payload: {} },
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
           ucp: multiUcp,

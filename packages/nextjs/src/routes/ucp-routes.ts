@@ -2,8 +2,8 @@
  * UCP Route Handlers
  *
  * Creates Next.js App Router route handlers for all UCP endpoints.
- * Based on UCP spec version 2026-04-08.
- * https://ucp.dev/2026-04-08/specification/overview
+ * Based on UCP spec version 2026-08-25.
+ * https://ucp.dev/2026-08-25/specification/overview
  *
  * Endpoints:
  * - GET  /.well-known/ucp                             — Discovery profile
@@ -42,6 +42,7 @@ import {
   planCartReplacement,
   saleorErrorsToUcpMessages,
   evaluateReadiness,
+  isWellFormedInstrument,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import type { UcpErrorSeverity } from "@financedistrict/saleor-agentic-commerce-core"
@@ -436,6 +437,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (!selectedInstrument) {
           return ucpError("no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
         }
+        if (!isWellFormedInstrument(selectedInstrument)) {
+          return ucpError("invalid_instrument", "Payment instrument requires string id, handler_id, type and credential.type", 400, "recoverable")
+        }
 
         // Fetch checkout for metadata
         const checkoutResult = await saleorClient.getCheckout(id)
@@ -508,7 +512,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
           const settleResult = await paymentHandlers.settlePayment({
             checkoutId: id,
+            protocol: "ucp",
             handlerId: selectedInstrument.handler_id,
+            instrumentType: selectedInstrument.type,
             credential: selectedInstrument.credential,
             checkoutMetadata: metadata,
           })

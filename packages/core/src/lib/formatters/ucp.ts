@@ -2,7 +2,7 @@
  * UCP Protocol Formatter
  *
  * Transforms Saleor internal objects into UCP-compliant response shapes.
- * Spec: https://ucp.dev/2026-04-08/specification/overview
+ * Spec: https://ucp.dev/2026-08-25/specification/overview
  */
 
 import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine, SaleorProduct, SaleorProductVariant, SaleorProductConnection, SaleorLookupVariant } from "../../types/saleor.js"
@@ -70,7 +70,6 @@ export async function formatUcpProfile(
       },
       payment_handlers: paymentHandlers,
     },
-    signing_keys: [],
   }
 }
 

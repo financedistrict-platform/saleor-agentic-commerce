@@ -3,7 +3,7 @@ import { formatUcpCatalogSearch, formatUcpCatalogLookup, formatUcpOrder } from "
 import type { SaleorProductConnection, SaleorOrder, SaleorProduct, SaleorLookupVariant } from "../../types/saleor.js"
 import type { FormatterContext } from "./types.js"
 
-const UCP_VERSION = "2026-04-08"
+import { UCP_VERSION } from "../ucp-version.js"
 
 const CTX: FormatterContext = {
   storeName: "Test Store",

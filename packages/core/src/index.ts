@@ -113,6 +113,9 @@ export type { SaleorClientOptions, SaleorResult, SaleorAddressInput } from "./li
 export { evaluateReadiness, classifyCompleteErrors, PAYMENT_PENDING_CODE } from "./lib/checkout-readiness.js"
 export type { CheckoutReadiness } from "./lib/checkout-readiness.js"
 
+export { UCP_VERSION } from "./lib/ucp-version.js"
+export { isWellFormedInstrument } from "./lib/ucp-instrument.js"
+
 // Formatters — UCP
 export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup } from "./lib/formatters/ucp.js"
 

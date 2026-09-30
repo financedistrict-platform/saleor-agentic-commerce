@@ -412,6 +412,7 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         } else {
           const settleResult = await paymentHandlers.settlePayment({
             checkoutId: id,
+            protocol: "acp",
             handlerId,
             credential,
             checkoutMetadata: metadata,
