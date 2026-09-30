@@ -132,6 +132,17 @@ describe("PrismPaymentHandler — discovery", () => {
     expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
   })
 
+  it("advertises only the validated Prism entry", async () => {
+    const { handler, mock } = makeHandler()
+    const entry = sampleUcpDiscovery["xyz.fd.prism_payment"][0]
+    mock.fetchUcpHandlers.mockResolvedValue({
+      "xyz.fd.prism_payment": [entry, { id: "other" }],
+      "com.example.extra": [{ id: "com.example.extra" }],
+    })
+
+    expect(await handler.getUcpDiscoveryHandlers()).toEqual({ "xyz.fd.prism_payment": [entry] })
+  })
+
   it("advertises nothing when the first fetch is malformed", async () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue({ "xyz.fd.prism_payment": [{ id: "xyz.fd.prism_payment" }] })

@@ -247,10 +247,11 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     if (cache && now < cache.expiry && isContractEntry(cache.data)) return cache.data
     if (now < this.ucpDiscoveryRetryAt) return {}
     try {
-      const data = await this.client.fetchUcpHandlers()
-      if (!isContractEntry(data)) {
+      const fetched = await this.client.fetchUcpHandlers()
+      if (!isContractEntry(fetched)) {
         throw new Error(`malformed ${PRISM_HANDLER_ID} entry (need id, version, spec, schema)`)
       }
+      const data = { [PRISM_HANDLER_ID]: [fetched[PRISM_HANDLER_ID][0]] }
       this.ucpDiscoveryCache = { data, expiry: now + this.DISCOVERY_TTL }
       return data
     } catch (error: unknown) {
