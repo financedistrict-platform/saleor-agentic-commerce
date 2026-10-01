@@ -14,3 +14,4 @@ Known differences from the original 0.7.1 release, kept from 1.0.0 / 2.0.0 on pu
 - The exported `UCP_VERSION` constant changes from `2026-08-25` to `2026-04-08`, the new default.
 - The Next.js integration needs the Node.js runtime (the agent profile fetch uses `node:https` and `node:dns`); the Edge runtime is not supported.
 - If you set `ucpVersion` explicitly, also set `ucpSupportedVersions`: the default supported list is `2026-08-25` and `2026-01-23`, so `ucpVersion: "2026-08-25"` alone leaves `2026-04-08` disabled.
+- The nextjs, prism-payment and dummy-payment packages now require `@financedistrict/saleor-agentic-commerce-core` `^1.1.0` as a peer: nextjs imports the version registry and the agent profile fetcher that core 1.1.0 adds.
