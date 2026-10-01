@@ -73,7 +73,6 @@ export type UcpRouteHandlers = {
   discovery: {
     GET: (request: Request) => Promise<Response>
   }
-  /** GET /.well-known/ucp/[version] */
   discoveryVersion: {
     GET: (request: Request, context: { params: Promise<{ version: string }> }) => Promise<Response>
   }
