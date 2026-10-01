@@ -1,0 +1,149 @@
+{
+  "ucp": {
+    "version": "2026-04-08",
+    "capabilities": {
+      "dev.ucp.shopping.checkout": [
+        {
+          "version": "2026-04-08"
+        }
+      ],
+      "dev.ucp.shopping.order": [
+        {
+          "version": "2026-04-08"
+        }
+      ]
+    },
+    "payment_handlers": {}
+  },
+  "id": "Q2hlY2tvdXQ6MQ==",
+  "status": "completed",
+  "currency": "usd",
+  "buyer": {
+    "email": "ada@example.com"
+  },
+  "line_items": [
+    {
+      "id": "Q2hlY2tvdXRMaW5lOj1",
+      "item": {
+        "id": "UHJvZHVjdFZhcmlhbnQ61",
+        "title": "Coffee Beans - 1kg",
+        "price": 2499,
+        "image_url": "https://cdn.store.test/p1.png"
+      },
+      "quantity": 1,
+      "totals": [
+        {
+          "type": "total",
+          "amount": 2499
+        }
+      ]
+    },
+    {
+      "id": "Q2hlY2tvdXRMaW5lOj2",
+      "item": {
+        "id": "UHJvZHVjdFZhcmlhbnQ62",
+        "title": "Tea Sampler - Large",
+        "price": 999
+      },
+      "quantity": 2,
+      "totals": [
+        {
+          "type": "total",
+          "amount": 1998
+        }
+      ]
+    }
+  ],
+  "totals": [
+    {
+      "type": "subtotal",
+      "amount": 4497
+    },
+    {
+      "type": "fulfillment",
+      "amount": 600
+    },
+    {
+      "type": "tax",
+      "amount": 400
+    },
+    {
+      "type": "total",
+      "amount": 5497
+    }
+  ],
+  "fulfillment": {
+    "methods": [
+      {
+        "id": "method_shipping",
+        "type": "shipping",
+        "line_item_ids": [
+          "Q2hlY2tvdXRMaW5lOj1",
+          "Q2hlY2tvdXRMaW5lOj2"
+        ],
+        "selected_destination_id": "dest_shipping",
+        "destinations": [
+          {
+            "id": "dest_shipping",
+            "first_name": "Ada",
+            "last_name": "Lovelace",
+            "street_address": "1 Main St",
+            "address_locality": "Springfield",
+            "address_region": "IL",
+            "postal_code": "62701",
+            "address_country": "US",
+            "phone_number": "+15555550100"
+          }
+        ],
+        "groups": [
+          {
+            "id": "group_default",
+            "line_item_ids": [
+              "Q2hlY2tvdXRMaW5lOj1",
+              "Q2hlY2tvdXRMaW5lOj2"
+            ],
+            "selected_option_id": "U2hpcHBpbmdNZXRob2Q6MQ==",
+            "options": [
+              {
+                "id": "U2hpcHBpbmdNZXRob2Q6MQ==",
+                "title": "Standard",
+                "totals": [
+                  {
+                    "type": "total",
+                    "amount": 600
+                  }
+                ]
+              },
+              {
+                "id": "U2hpcHBpbmdNZXRob2Q6Mg==",
+                "title": "Express",
+                "totals": [
+                  {
+                    "type": "total",
+                    "amount": 1500
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "links": [
+    {
+      "type": "terms_of_service",
+      "url": "https://store.test/terms"
+    },
+    {
+      "type": "privacy_policy",
+      "url": "https://store.test/privacy"
+    }
+  ],
+  "continue_url": "https://store.test/checkout/Q2hlY2tvdXQ6MQ==",
+  "order": {
+    "id": "T3JkZXI6MQ==",
+    "label": "1001",
+    "permalink_url": "https://store.test/orders/T3JkZXI6MQ=="
+  }
+}
