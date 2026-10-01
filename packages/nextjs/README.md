@@ -57,6 +57,14 @@ src/app/api/ucp/
 ```
 
 ```ts
+// src/app/.well-known/ucp/route.ts
+import { ucpRoutes } from "@/lib/agentic-commerce"
+export const { GET } = ucpRoutes.discovery
+
+// src/app/.well-known/ucp/[version]/route.ts
+import { ucpRoutes } from "@/lib/agentic-commerce"
+export const { GET } = ucpRoutes.discoveryVersion
+
 // src/app/api/ucp/checkout-sessions/route.ts
 import { ucpRoutes } from "@/lib/agentic-commerce"
 export const { POST } = ucpRoutes.checkoutSessions
@@ -127,12 +135,33 @@ createAgenticCommerce({
   // Optional
   channel?: string,            // Saleor channel slug (default: "default-channel")
   storeDescription?: string,   // Store description for discovery
-  ucpVersion?: string,         // UCP version (default: UCP_VERSION, "2026-08-25")
+  ucpVersion?: string,         // Current UCP version (default: UCP_VERSION, "2026-04-08")
+  ucpSupportedVersions?: string[],  // Extra UCP versions (default: ["2026-08-25", "2026-01-23"])
+  ucpVersionNegotiation?: "lenient" | "strict",  // default: "lenient"
   acpVersion?: string,         // ACP version (default: "2026-01-30")
   acpApiKey?: string,          // API key for ACP Bearer token auth
   paymentHandlers?: PaymentHandlerAdapter[],  // Payment handler adapters
 })
 ```
+
+## UCP versions
+
+The store serves `ucpVersion` (default `2026-04-08`) and every version in `ucpSupportedVersions`. `/.well-known/ucp` lists the extra versions under `ucp.supported_versions`, each linking to `/.well-known/ucp/<version>` (wire the `discoveryVersion` route shown above).
+
+Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 64 KiB cap and a 10 minute cache.
+
+| Agent profile | `lenient` (default) | `strict` |
+|---|---|---|
+| no `UCP-Agent` header | current version | current version |
+| unreachable | current version + warning | 424 `agent_profile_unavailable` |
+| no or malformed `ucp.version` | current version + warning | 422 `version_unsupported` |
+| unknown version | current version + warning | 422 `version_unsupported` |
+| known version that is not enabled | 422 `version_unsupported` | 422 `version_unsupported` |
+| enabled version | that version | that version |
+
+Lenient negotiation is a deliberate deviation from the UCP spec, which asks for a hard error: agents without a reachable profile keep working on the current version. A checkout session created by a matched agent keeps its version; another matched version on the same session answers 422, a fallback outcome serves the session version. Sessions created before this release are never pinned. Warnings are logged as one JSON line with the key `ucp_profile_resolution`.
+
+An unknown value in `ucpVersion`, `ucpSupportedVersions` or `ucpVersionNegotiation` makes `createAgenticCommerce` throw at boot.
 
 ## Middleware
 
