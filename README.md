@@ -39,6 +39,21 @@ AI agents are becoming the next commerce channel. Just like merchants once added
 
 The [`apps/saleor-agentic-commerce-app`](./apps/saleor-agentic-commerce-app) folder also contains an optional **Saleor Dashboard App** that acts as a control plane for the SDK — see [The App is Optional](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki/The-App-is-Optional) on the wiki for the three configuration paths.
 
+## Two things, not one
+
+This project ships **two separate pieces** — installing one does not install the other:
+
+| | What it is | Where it runs | Required? |
+|---|---|---|---|
+| **SDK packages** (`core`, `nextjs`, `prism-payment`, ...) | The actual `/.well-known/ucp`, `/api/ucp/*` HTTP endpoints agents call | Your Next.js storefront | **Yes, always** |
+| **The App** (`apps/saleor-agentic-commerce-app`) | A Dashboard control panel: store name, enabled protocols, payment handler settings | Deployed separately, installed into Saleor's Dashboard | Optional |
+
+Installing the App does **not** wire up any endpoints — it only gives you a UI
+to manage configuration instead of `.env` files. You still install the SDK
+packages in your storefront either way. With the App installed, pass
+`configFromApp: true` to `createAgenticCommerce()` so the storefront reads
+its settings from the App instead of environment variables.
+
 ## Documentation
 
 The [wiki](https://github.com/financedistrict-platform/saleor-agentic-commerce/wiki) is the canonical reference. Highlights:

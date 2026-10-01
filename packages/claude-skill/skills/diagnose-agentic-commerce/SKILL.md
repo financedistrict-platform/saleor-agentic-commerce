@@ -97,6 +97,12 @@ Check the response for:
 - Auth token might lack `MANAGE_CHECKOUTS` permission
 - Channel might not exist — check `channel` config or Saleor Dashboard
 
+**Payment settles but no order is created (`transaction_create_failed`):**
+- The App token is missing **`HANDLE_PAYMENTS`**. `transactionCreate` (called
+  after a successful settlement) is gated on it, so the payment settles on-chain
+  and then order creation fails — leaving the buyer charged with no order. The
+  token needs `MANAGE_CHECKOUTS` + `MANAGE_ORDERS` + **`HANDLE_PAYMENTS`**.
+
 **Payment handler not appearing in discovery:**
 - `paymentHandlers` array is empty in the config
 - Prism package not installed

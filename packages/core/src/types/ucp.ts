@@ -1,8 +1,8 @@
 /**
  * UCP (Universal Commerce Protocol) Types
  *
- * Based on UCP spec version 2026-04-08
- * https://ucp.dev/2026-04-08/specification/overview
+ * Based on UCP spec version 2026-08-25
+ * https://ucp.dev/2026-08-25/specification/overview
  */
 
 // =====================================================
@@ -17,7 +17,6 @@ export type UcpProfile = {
     payment_handlers?: Record<string, unknown[]>
     supported_versions?: Record<string, string>
   }
-  signing_keys: unknown[]
 }
 
 export type UcpService = {
@@ -354,10 +353,17 @@ export type UcpAdjustment = {
 // Catalog (search + lookup)
 // =====================================================
 
+export type UcpDescription = {
+  plain?: string
+  html?: string
+  markdown?: string
+}
+
 export type UcpCatalogProductVariant = {
   id: string
   title: string
-  sku: string | null
+  description: UcpDescription
+  sku?: string
   price: { amount: number; currency: string } | null
 }
 
@@ -369,7 +375,7 @@ export type UcpCatalogProductMedia = {
 export type UcpCatalogProduct = {
   id: string
   title: string
-  description: string
+  description: UcpDescription
   handle: string
   categories: string[]
   price_range: {
@@ -385,16 +391,28 @@ export type UcpCatalogSearchResponse = {
   ucp: { version: string; status: "success" | "error" }
   products: UcpCatalogProduct[]
   pagination: {
-    total: number
-    limit: number
-    offset: number
-    has_more: boolean
+    has_next_page: boolean
+    cursor?: string
+    total_count?: number
   }
+}
+
+export type UcpInputCorrelation = {
+  id: string
+  match?: "exact" | "featured" | string
+}
+
+export type UcpLookupVariant = UcpCatalogProductVariant & {
+  inputs: UcpInputCorrelation[]
+}
+
+export type UcpLookupProduct = Omit<UcpCatalogProduct, "variants"> & {
+  variants: UcpLookupVariant[]
 }
 
 export type UcpCatalogLookupResponse = {
   ucp: { version: string; status: "success" | "error" }
-  products: UcpCatalogProduct[]
+  products: UcpLookupProduct[]
   messages: unknown[]
 }
 

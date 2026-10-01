@@ -30,6 +30,7 @@ import {
 // =====================================================
 
 export const PRISM_HANDLER_ID = "xyz.fd.prism_payment"
+export const PRISM_INSTRUMENT_TYPE = "x402"
 
 /**
  * Re-exported for back-compat readers of older Saleor checkout metadata.
@@ -77,6 +78,8 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   /** Cached ACP discovery response (5 min TTL) */
   private acpDiscoveryCache: { data: AcpHandler[]; expiry: number } | null = null
   private readonly DISCOVERY_TTL = 5 * 60 * 1000
+  private ucpDiscoveryRetryAt = 0
+  private readonly DISCOVERY_FAILURE_TTL = 60 * 1000
 
   constructor(options: PrismPaymentHandlerOptions = {}) {
     const apiUrl = options.apiUrl || process.env.PRISM_API_URL || "https://prism-gw.fd.xyz"
@@ -165,6 +168,13 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
     const { credential, checkoutMetadata } = input
 
+    if (
+      input.protocol === "ucp" &&
+      (input.instrumentType !== PRISM_INSTRUMENT_TYPE || readString(credential, "type") !== PRISM_INSTRUMENT_TYPE)
+    ) {
+      return { success: false, error: `Prism instrument and credential type must be "${PRISM_INSTRUMENT_TYPE}"` }
+    }
+
     const config = this.extractPaymentConfig(checkoutMetadata)
     if (!config) {
       return { success: false, error: "No Prism payment config found on checkout" }
@@ -189,7 +199,13 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
 
     try {
       const result = await this.client.settle({
-        paymentPayload: credential,
+        // SAC-3: agents submit the wallet's whole x402 wrapper
+        // ({ x402Version, paymentPayload, paymentRequirements }); Prism's
+        // /settle wants the INNER paymentPayload (carrying accepted/payload).
+        // Unwrap it — matching pickAcceptsEntryForCredential and
+        // validate-signed-amount, which already accept both shapes. A flat
+        // payload passes through unchanged.
+        paymentPayload: unwrapCredentialForSettle(credential),
         paymentRequirements: requirements,
       })
 
@@ -227,16 +243,21 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
 
   private async fetchUcpDiscovery(): Promise<UcpHandlersDiscoveryResponse> {
     const now = Date.now()
-    if (this.ucpDiscoveryCache && now < this.ucpDiscoveryCache.expiry) {
-      return this.ucpDiscoveryCache.data
-    }
+    const cache = this.ucpDiscoveryCache
+    if (cache && now < cache.expiry && isContractEntry(cache.data)) return cache.data
+    if (now < this.ucpDiscoveryRetryAt) return {}
     try {
-      const data = await this.client.fetchUcpHandlers()
+      const fetched = await this.client.fetchUcpHandlers()
+      if (!isContractEntry(fetched)) {
+        throw new Error(`malformed ${PRISM_HANDLER_ID} entry (need id, version, spec, schema)`)
+      }
+      const data = { [PRISM_HANDLER_ID]: [fetched[PRISM_HANDLER_ID][0]] }
       this.ucpDiscoveryCache = { data, expiry: now + this.DISCOVERY_TTL }
       return data
     } catch (error: unknown) {
       console.error(`[prism-handler] UCP discovery failed: ${error}`)
-      return this.ucpDiscoveryCache?.data ?? {}
+      this.ucpDiscoveryRetryAt = now + this.DISCOVERY_FAILURE_TTL
+      return {}
     }
   }
 
@@ -287,6 +308,33 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       "accepts" in value
     )
   }
+}
+
+export function isContractEntry(data: unknown): data is UcpHandlersDiscoveryResponse {
+  if (typeof data !== "object" || data === null) return false
+  const entries = (data as Record<string, unknown>)[PRISM_HANDLER_ID]
+  if (!Array.isArray(entries) || entries.length === 0) return false
+  const entry: unknown = entries[0]
+  return (
+    readString(entry, "id") === PRISM_HANDLER_ID &&
+    readString(entry, "version") !== undefined &&
+    readString(entry, "spec") !== undefined &&
+    readString(entry, "schema") !== undefined
+  )
+}
+
+/**
+ * Unwrap the settle credential (SAC-3). Agents submit the wallet's whole x402
+ * authorization wrapper `{ x402Version, paymentPayload, paymentRequirements }`,
+ * but Prism's `/settle` expects the inner `paymentPayload` (with accepted /
+ * payload). Return that inner object when present; pass a flat payload — or a
+ * non-object — through unchanged.
+ */
+export function unwrapCredentialForSettle(credential: unknown): unknown {
+  if (credential && typeof credential === "object" && "paymentPayload" in credential) {
+    return (credential as { paymentPayload: unknown }).paymentPayload
+  }
+  return credential
 }
 
 /**

@@ -106,7 +106,7 @@ export type CheckoutPrepareInput = {
   checkoutMetadata?: Record<string, unknown>
 }
 
-export type PaymentSettleInput = {
+type PaymentSettleInputBase = {
   /** Saleor checkout ID */
   checkoutId: string
   /** The handler ID that the agent selected */
@@ -116,6 +116,10 @@ export type PaymentSettleInput = {
   /** Checkout metadata (may contain handler-specific state) */
   checkoutMetadata?: Record<string, unknown>
 }
+
+export type PaymentSettleInput =
+  | (PaymentSettleInputBase & { protocol: "ucp"; instrumentType: string })
+  | (PaymentSettleInputBase & { protocol: "acp" })
 
 export type PaymentSettleResult = {
   success: boolean

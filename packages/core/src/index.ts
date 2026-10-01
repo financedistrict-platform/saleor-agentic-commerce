@@ -48,6 +48,10 @@ export type {
   UcpCatalogProductMedia,
   UcpCatalogSearchResponse,
   UcpCatalogLookupResponse,
+  UcpDescription,
+  UcpInputCorrelation,
+  UcpLookupProduct,
+  UcpLookupVariant,
 } from "./types/ucp.js"
 
 // Types — ACP Protocol
@@ -94,6 +98,8 @@ export type {
   SaleorProduct,
   SaleorProductVariant,
   SaleorProductConnection,
+  SaleorLookupVariant,
+  SaleorFulfillment,
 } from "./types/saleor.js"
 
 // Payment Handler Registry
@@ -102,6 +108,13 @@ export { PaymentHandlerRegistry } from "./lib/payment-handler-registry.js"
 // Saleor GraphQL Client
 export { SaleorClient } from "./lib/saleor-client.js"
 export type { SaleorClientOptions, SaleorResult, SaleorAddressInput } from "./lib/saleor-client.js"
+
+// Checkout readiness — Saleor-authoritative validation probe → UCP status/messages
+export { evaluateReadiness, classifyCompleteErrors, PAYMENT_PENDING_CODE } from "./lib/checkout-readiness.js"
+export type { CheckoutReadiness } from "./lib/checkout-readiness.js"
+
+export { UCP_VERSION } from "./lib/ucp-version.js"
+export { isWellFormedInstrument } from "./lib/ucp-instrument.js"
 
 // Formatters — UCP
 export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup } from "./lib/formatters/ucp.js"
@@ -121,6 +134,10 @@ export {
   acpToSaleorAddress,
 } from "./lib/address-translator.js"
 
+// Cart planning (UCP PUT full-replacement)
+export { planCartReplacement } from "./lib/cart-diff.js"
+export type { CurrentCartLine, DesiredCartLine, CartReplacementPlan } from "./lib/cart-diff.js"
+
 // Status Maps
 export {
   resolveUcpCheckoutStatus,
@@ -133,8 +150,14 @@ export {
   formatAcpError,
   formatUcpError,
   httpStatusToAcpType,
+  saleorErrorsToUcpMessages,
 } from "./lib/error-formatters.js"
-export type { AcpErrorResponse, AcpErrorType, UcpErrorResponse } from "./lib/error-formatters.js"
+export type {
+  AcpErrorResponse,
+  AcpErrorType,
+  UcpErrorResponse,
+  UcpErrorMessageInput,
+} from "./lib/error-formatters.js"
 
 // Metadata Utilities
 export {

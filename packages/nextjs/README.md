@@ -120,14 +120,14 @@ curl http://localhost:3000/.well-known/ucp
 createAgenticCommerce({
   // Required
   saleorApiUrl: string,        // Saleor GraphQL endpoint
-  saleorAuthToken: string,     // App token (MANAGE_CHECKOUTS + MANAGE_ORDERS)
+  saleorAuthToken: string,     // App token (MANAGE_CHECKOUTS + MANAGE_ORDERS + HANDLE_PAYMENTS)
   storefrontUrl: string,       // Public storefront URL
   storeName: string,           // Store name for discovery profiles
 
   // Optional
   channel?: string,            // Saleor channel slug (default: "default-channel")
   storeDescription?: string,   // Store description for discovery
-  ucpVersion?: string,         // UCP version (default: "2026-04-08")
+  ucpVersion?: string,         // UCP version (default: UCP_VERSION, "2026-08-25")
   acpVersion?: string,         // ACP version (default: "2026-01-30")
   acpApiKey?: string,          // API key for ACP Bearer token auth
   paymentHandlers?: PaymentHandlerAdapter[],  // Payment handler adapters

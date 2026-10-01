@@ -20,6 +20,7 @@ export type SaleorCheckout = {
   billingAddress: SaleorAddress | null
   shippingMethods: SaleorShippingMethod[]
   deliveryMethod: SaleorDeliveryMethod | null
+  transactions: { pspReference: string | null }[]
   metadata: SaleorMetadataItem[]
   privateMetadata: SaleorMetadataItem[]
 }
@@ -91,6 +92,7 @@ export type SaleorOrder = {
   created: string
   updated: string
   userEmail: string | null
+  checkoutId: string | null
   channel: { slug: string }
   total: SaleorTaxedMoney
   subtotal: SaleorTaxedMoney
@@ -99,7 +101,19 @@ export type SaleorOrder = {
   lines: SaleorOrderLine[]
   shippingAddress: SaleorAddress | null
   billingAddress: SaleorAddress | null
+  fulfillments: SaleorFulfillment[]
   metadata: SaleorMetadataItem[]
+}
+
+export type SaleorFulfillment = {
+  id: string
+  status: string
+  trackingNumber: string | null
+  created: string
+  lines: {
+    quantity: number
+    orderLine: { id: string } | null
+  }[]
 }
 
 // =====================================================
@@ -115,6 +129,11 @@ export type SaleorProductVariant = {
       gross: SaleorMoney
     }
   } | null
+}
+
+/** A variant returned by a variant-id lookup, carrying its parent product. */
+export type SaleorLookupVariant = SaleorProductVariant & {
+  product: SaleorProduct
 }
 
 export type SaleorProduct = {
@@ -136,6 +155,7 @@ export type SaleorProduct = {
 
 export type SaleorProductConnection = {
   edges: { node: SaleorProduct }[]
+  totalCount?: number
   pageInfo: {
     hasNextPage: boolean
     endCursor: string | null

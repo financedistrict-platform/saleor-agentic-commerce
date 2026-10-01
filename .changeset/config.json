@@ -7,5 +7,6 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
+  "snapshot": { "useCalculatedVersion": true, "prereleaseTemplate": "{tag}-{datetime}" },
   "ignore": ["@financedistrict/saleor-agentic-commerce-app"]
 }

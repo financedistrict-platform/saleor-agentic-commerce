@@ -13,6 +13,10 @@ import { createManifest } from "@/lib/manifest"
  */
 export const GET = createManifestHandler({
   manifestFactory({ appBaseUrl }) {
-    return createManifest(appBaseUrl)
+    // On a first cloud deploy the operator hasn't set APP_URL yet. Fall back to
+    // the platform-provided public URL (Vercel sets VERCEL_URL) so the one-click
+    // deploy works without a manual env round-trip; APP_URL still wins if set.
+    const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined
+    return createManifest(process.env.APP_URL || vercelUrl || appBaseUrl)
   },
 })
