@@ -454,14 +454,14 @@ describe("PrismPaymentHandler — settlement", () => {
     },
   }
 
-  it("rejects an instrument whose type is not x402 without settling", async () => {
+  it("rejects an instrument whose type is not an x402-era type without settling", async () => {
     const { handler, mock } = makeHandler()
 
     const result = await handler.settlePayment({
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
-      instrumentType: "tokenized",
+      instrumentType: "card",
       credential: { type: "x402", x402Version: 2, network: "base-sepolia", payload: {} },
       checkoutMetadata: storedUcpOnly,
     })
@@ -478,7 +478,7 @@ describe("PrismPaymentHandler — settlement", () => {
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
       instrumentType: "x402",
-      credential: { x402Version: 2, network: "base-sepolia", payload: {} },
+      credential: { type: "card", x402Version: 2, network: "base-sepolia", payload: {} },
       checkoutMetadata: storedUcpOnly,
     })
 
