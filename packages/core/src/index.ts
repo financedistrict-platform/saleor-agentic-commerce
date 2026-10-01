@@ -124,6 +124,7 @@ export {
   createUcpVersionRegistry,
   isKnownUcpVersion,
   ucpWireFor,
+  ucpWireOf,
 } from "./lib/ucp-version-registry.js"
 export type {
   UcpVersionNegotiation,
@@ -138,7 +139,7 @@ export type {
 } from "./lib/ucp-wire/types.js"
 
 // Formatters — UCP
-export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup, ucpWireOf } from "./lib/formatters/ucp.js"
+export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup } from "./lib/formatters/ucp.js"
 
 // Formatters — ACP
 export { formatAcpCheckoutSession, formatAcpCompleteResponse } from "./lib/formatters/acp.js"

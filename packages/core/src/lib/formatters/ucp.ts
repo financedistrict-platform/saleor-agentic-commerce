@@ -34,9 +34,7 @@ import { saleorToUcpAddress } from "../address-translator.js"
 import { resolveUcpCheckoutStatus } from "../status-maps.js"
 import { metadataToRecord } from "../metadata.js"
 import type { FormatterContext } from "./types.js"
-import type { UcpWire } from "../ucp-wire/types.js"
-import { createLatestUcpWire } from "../ucp-wire/wire-2026-08-25.js"
-import { ucpWireFor } from "../ucp-version-registry.js"
+import { ucpWireFor, ucpWireOf } from "../ucp-version-registry.js"
 import { toMinor } from "./types.js"
 
 // =====================================================
@@ -52,10 +50,6 @@ export async function formatUcpProfile(
   const known = ucpWireFor(ctx.ucpVersion) !== undefined
   const paymentHandlers = await ctx.paymentHandlers.getUcpDiscoveryHandlers(known ? ctx.ucpVersion : undefined)
   return wire.profile({ endpoint: endpointBaseUrl, handlers: paymentHandlers, supportedVersions })
-}
-
-export function ucpWireOf(version: string): UcpWire {
-  return ucpWireFor(version) ?? createLatestUcpWire(version)
 }
 
 // =====================================================

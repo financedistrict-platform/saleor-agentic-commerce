@@ -1,7 +1,7 @@
 import type { UcpWire } from "./ucp-wire/types.js"
 import { wire20260123 } from "./ucp-wire/wire-2026-01-23.js"
 import { wire20260408 } from "./ucp-wire/wire-2026-04-08.js"
-import { wire20260825 } from "./ucp-wire/wire-2026-08-25.js"
+import { createLatestUcpWire, wire20260825 } from "./ucp-wire/wire-2026-08-25.js"
 
 export const DEFAULT_CURRENT_UCP_VERSION = "2026-04-08"
 export const DEFAULT_SUPPORTED_UCP_VERSIONS: readonly string[] = ["2026-08-25", "2026-01-23"]
@@ -41,6 +41,10 @@ export function isKnownUcpVersion(version: string): boolean {
 
 export function ucpWireFor(version: string): UcpWire | undefined {
   return isKnownUcpVersion(version) ? WIRES[version] : undefined
+}
+
+export function ucpWireOf(version: string): UcpWire {
+  return ucpWireFor(version) ?? createLatestUcpWire(version)
 }
 
 export function createUcpVersionRegistry(options: UcpVersionRegistryOptions = {}): UcpVersionRegistry {
