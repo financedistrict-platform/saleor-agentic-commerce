@@ -1,5 +1,27 @@
 # @financedistrict/saleor-agentic-commerce-core
 
+## 1.0.0
+
+### Major Changes
+
+- [#74](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/74) [`222720d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/222720d5db798dc2a76343f03b1ab042b283f9c9) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - Upgrade to UCP 2026-08-25.
+
+  - The `ucpVersion` option is kept; its default is now `UCP_VERSION` (`"2026-08-25"`), exported from core. The discovery profile no longer emits `signing_keys`.
+  - UCP checkout complete requires the selected instrument to carry string `id`, `handler_id` and `type`, and a sent `credential` to carry string `type`; otherwise it returns 400 `invalid_instrument`.
+  - The Prism handler id is `xyz.fd.prism_payment` and its entry version is `2026-10-07`. Prism settlement requires instrument `type` and `credential.type` to be `"x402"`. A Prism discovery entry without `id`, `version`, `spec` or `schema` is not advertised.
+  - `PaymentSettleInput` now requires `protocol`: `{ protocol: "ucp", instrumentType }` from the UCP complete route, `{ protocol: "acp" }` from the ACP complete route. ACP settlement behaviour is unchanged.
+
+### Patch Changes
+
+- [#74](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/74) [`222720d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/222720d5db798dc2a76343f03b1ab042b283f9c9) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - UCP/ACP conformance + money-safety fixes.
+
+  - **core** (response-shape changes → minor): catalog `description` now a `{plain,html,markdown}` object, uppercase currency, real `sku`, cursor pagination + `total_count` (SAC-8, U-4); `catalog/lookup` resolves product **and** variant ids with `inputs[]` correlation (SAC-8); order `checkout_id` from real `Order.checkoutId` (SAC-6); order line status/fulfilment derived from Saleor fulfillments (SAC-7); structured field errors with `path` + honest severity (SAC-5); full cart replacement on `PUT` (U-2); per-`(apiUrl, token)` config cache (U-5); correct catalog schema URLs in discovery (SAC-8 WARN).
+  - **nextjs**: record settlement to checkout metadata **before** any order write so a failed complete is recoverable and never double-charges on retry; honest error messages (SAC-2, UCP + ACP).
+  - **prism-payment**: unwrap the wallet credential wrapper at the settle boundary (SAC-3).
+  - **dummy-payment**: read prepared config under the adapter id the registry writes (U-1).
+
+- [#74](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/74) [`222720d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/222720d5db798dc2a76343f03b1ab042b283f9c9) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - Gate checkout completion on the commerce engine's own validation. The complete endpoint now confirms the checkout is completable before settling payment, so funds are captured only once the order can actually be placed. Checkout sessions expose readiness through `status` (`incomplete` / `ready_for_complete`) and surface the engine's validation errors as UCP `messages`.
+
 ## 0.7.1
 
 ### Patch Changes
