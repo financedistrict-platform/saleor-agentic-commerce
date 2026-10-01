@@ -5,9 +5,7 @@ function hasString(value: unknown, key: string): boolean {
 }
 
 export function isWellFormedInstrument(instrument: unknown): boolean {
-  if (!hasString(instrument, "id") || !hasString(instrument, "handler_id") || !hasString(instrument, "type")) {
-    return false
-  }
+  if (!hasString(instrument, "handler_id")) return false
   const credential = (instrument as Record<string, unknown>).credential
-  return credential === undefined || hasString(credential, "type")
+  return credential === undefined || (typeof credential === "object" && credential !== null)
 }

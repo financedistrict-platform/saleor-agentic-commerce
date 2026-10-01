@@ -43,7 +43,7 @@ export class PaymentHandlerRegistry {
   }
 
   getAdapter(id: string): PaymentHandlerAdapter | undefined {
-    return this.adapters.find((a) => a.id === id)
+    return this.adapters.find((a) => a.id === id) ?? this.adapters.find((a) => a.aliases?.includes(id))
   }
 
   getAdapterCount(): number {
@@ -54,11 +54,11 @@ export class PaymentHandlerRegistry {
   // Discovery
   // -------------------------------------------------
 
-  async getUcpDiscoveryHandlers(): Promise<Record<string, unknown[]>> {
+  async getUcpDiscoveryHandlers(ucpVersion?: string): Promise<Record<string, unknown[]>> {
     if (this.adapters.length === 0) return {}
 
     const results = await Promise.allSettled(
-      this.adapters.map((a) => a.getUcpDiscoveryHandlers()),
+      this.adapters.map((a) => a.getUcpDiscoveryHandlers(ucpVersion)),
     )
 
     const merged: Record<string, unknown[]> = {}
@@ -128,7 +128,7 @@ export class PaymentHandlerRegistry {
   // -------------------------------------------------
 
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
-    const adapter = this.adapters.find((a) => a.id === input.handlerId)
+    const adapter = this.getAdapter(input.handlerId)
     if (!adapter) {
       return {
         success: false,
@@ -136,7 +136,7 @@ export class PaymentHandlerRegistry {
       }
     }
 
-    return adapter.settlePayment(input)
+    return adapter.settlePayment({ ...input, handlerId: adapter.id })
   }
 
   // -------------------------------------------------

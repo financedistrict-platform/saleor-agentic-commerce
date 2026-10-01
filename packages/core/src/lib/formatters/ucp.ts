@@ -2,7 +2,6 @@
  * UCP Protocol Formatter
  *
  * Transforms Saleor internal objects into UCP-compliant response shapes.
- * Spec: https://ucp.dev/2026-08-25/specification/overview
  */
 
 import type { SaleorCheckout, SaleorOrder, SaleorCheckoutLine, SaleorOrderLine, SaleorProduct, SaleorProductVariant, SaleorProductConnection, SaleorLookupVariant } from "../../types/saleor.js"
@@ -35,6 +34,9 @@ import { saleorToUcpAddress } from "../address-translator.js"
 import { resolveUcpCheckoutStatus } from "../status-maps.js"
 import { metadataToRecord } from "../metadata.js"
 import type { FormatterContext } from "./types.js"
+import type { UcpWire } from "../ucp-wire/types.js"
+import { createLatestUcpWire } from "../ucp-wire/wire-2026-08-25.js"
+import { ucpWireFor } from "../ucp-version-registry.js"
 import { toMinor } from "./types.js"
 
 // =====================================================
@@ -44,33 +46,16 @@ import { toMinor } from "./types.js"
 export async function formatUcpProfile(
   ctx: FormatterContext,
   endpointBaseUrl: string,
+  supportedVersions: Record<string, string> = {},
 ): Promise<UcpProfile> {
-  const paymentHandlers = await ctx.paymentHandlers.getUcpDiscoveryHandlers()
+  const wire = ucpWireOf(ctx.ucpVersion)
+  const known = ucpWireFor(ctx.ucpVersion) !== undefined
+  const paymentHandlers = await ctx.paymentHandlers.getUcpDiscoveryHandlers(known ? ctx.ucpVersion : undefined)
+  return wire.profile({ endpoint: endpointBaseUrl, handlers: paymentHandlers, supportedVersions })
+}
 
-  const v = ctx.ucpVersion
-  return {
-    ucp: {
-      version: v,
-      services: {
-        "dev.ucp.shopping": [
-          {
-            version: v,
-            spec: `https://ucp.dev/${v}/specification/overview`,
-            schema: `https://ucp.dev/${v}/services/shopping/rest.openapi.json`,
-            transport: "rest" as const,
-            endpoint: endpointBaseUrl,
-          },
-        ],
-      },
-      capabilities: {
-        "dev.ucp.shopping.checkout": [{ version: v, spec: `https://ucp.dev/${v}/specification/checkout/`, schema: `https://ucp.dev/${v}/schemas/shopping/checkout.json` }],
-        "dev.ucp.shopping.order": [{ version: v, spec: `https://ucp.dev/${v}/specification/order/`, schema: `https://ucp.dev/${v}/schemas/shopping/order.json` }],
-        "dev.ucp.shopping.catalog.search": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog_search.json` }],
-        "dev.ucp.shopping.catalog.lookup": [{ version: v, spec: `https://ucp.dev/${v}/specification/catalog/`, schema: `https://ucp.dev/${v}/schemas/shopping/catalog_lookup.json` }],
-      },
-      payment_handlers: paymentHandlers,
-    },
-  }
+export function ucpWireOf(version: string): UcpWire {
+  return ucpWireFor(version) ?? createLatestUcpWire(version)
 }
 
 // =====================================================
@@ -82,17 +67,15 @@ function ucpEnvelope(
   includePayment: boolean,
   checkoutMetadata?: Record<string, unknown>,
 ): UcpEnvelope {
+  const wire = ucpWireOf(ctx.ucpVersion)
   const envelope: UcpEnvelope = {
     version: ctx.ucpVersion,
-    capabilities: {
-      "dev.ucp.shopping.checkout": [{ version: ctx.ucpVersion }],
-      "dev.ucp.shopping.order": [{ version: ctx.ucpVersion }],
-    },
+    capabilities: wire.envelopeCapabilities(),
   }
   if (includePayment) {
     // Checkout responses require payment_handlers per spec
     const handlers = ctx.paymentHandlers.getUcpCheckoutHandlers(checkoutMetadata)
-    envelope.payment_handlers = handlers
+    envelope.payment_handlers = wire.checkoutHandlers(handlers)
   }
   return envelope
 }

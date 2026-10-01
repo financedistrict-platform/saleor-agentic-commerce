@@ -12,6 +12,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./agent-profile-fetcher": {
+      "types": "./dist/lib/agent-profile-fetcher.d.ts",
+      "default": "./dist/lib/agent-profile-fetcher.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -63,6 +67,7 @@
   },
   "dependencies": {},
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
   }
 }

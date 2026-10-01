@@ -116,8 +116,29 @@ export type { CheckoutReadiness } from "./lib/checkout-readiness.js"
 export { UCP_VERSION } from "./lib/ucp-version.js"
 export { isWellFormedInstrument } from "./lib/ucp-instrument.js"
 
+export {
+  DEFAULT_CURRENT_UCP_VERSION,
+  DEFAULT_SUPPORTED_UCP_VERSIONS,
+  KNOWN_UCP_VERSIONS,
+  UCP_VERSION_NEGOTIATION_MODES,
+  createUcpVersionRegistry,
+  isKnownUcpVersion,
+  ucpWireFor,
+} from "./lib/ucp-version-registry.js"
+export type {
+  UcpVersionNegotiation,
+  UcpVersionRegistry,
+  UcpVersionRegistryOptions,
+} from "./lib/ucp-version-registry.js"
+export type {
+  UcpWire,
+  UcpWireCapability,
+  UcpWireErrorInput,
+  UcpProfileInput,
+} from "./lib/ucp-wire/types.js"
+
 // Formatters — UCP
-export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup } from "./lib/formatters/ucp.js"
+export { formatUcpProfile, formatUcpCheckoutSession, formatUcpCompleteResponse, formatUcpOrder, formatUcpCatalogSearch, formatUcpCatalogLookup, ucpWireOf } from "./lib/formatters/ucp.js"
 
 // Formatters — ACP
 export { formatAcpCheckoutSession, formatAcpCompleteResponse } from "./lib/formatters/acp.js"
