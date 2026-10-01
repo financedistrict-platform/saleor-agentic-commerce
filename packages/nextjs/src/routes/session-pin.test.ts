@@ -87,6 +87,17 @@ describe("checkout session version pin", () => {
     expect((await response.json()).ucp.version).toBe("2026-08-25")
   })
 
+  it("renders a malformed instrument error in the pinned version", async () => {
+    const { routes } = buildRoutes({ checkouts: [pinnedCheckout("2026-01-23")] })
+    const response = await routes.checkoutSessionComplete.POST(
+      ucpRequest(`${SESSIONS}/${CHECKOUT_ID}/complete`, { agent: AGENT_DOWN, body: { payment: { instruments: [{ id: "i1" }] } } }),
+      params({ id: CHECKOUT_ID }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ ucp: { version: "2026-01-23" }, status: "requires_escalation" })
+  })
+
   it("applies the pin on update and cancel", async () => {
     const { routes } = buildRoutes({ checkouts: [pinnedCheckout("2026-08-25")] })
     const update = await routes.checkoutSession.PUT(

@@ -16,10 +16,9 @@
  * full OpenAPI spec.
  */
 
-import { createRequire } from "node:module"
+import { PACKAGE_VERSION } from "./package-version.js"
 
-const PRISM_PACKAGE_VERSION = (createRequire(import.meta.url)("../package.json") as { version: string }).version
-const PRISM_USER_AGENT = `fd-saleor-prism/${PRISM_PACKAGE_VERSION}`
+const PRISM_USER_AGENT = `fd-saleor-prism/${PACKAGE_VERSION}`
 const PRISM_UCP_HANDLER_ID = "xyz.fd.prism_payment"
 const PRISM_UCP_HANDLER_IDS: readonly unknown[] = [PRISM_UCP_HANDLER_ID, "x402"]
 

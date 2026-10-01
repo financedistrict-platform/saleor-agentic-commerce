@@ -2,7 +2,7 @@ import { promises as dns } from "node:dns"
 import http from "node:http"
 import https from "node:https"
 import { BlockList, isIP } from "node:net"
-import { createRequire } from "node:module"
+import { PACKAGE_VERSION } from "../package-version.js"
 
 export const AGENT_PROFILE_CACHE_TTL_MS = 600_000
 export const AGENT_PROFILE_CACHE_MAX_ENTRIES = 1000
@@ -10,7 +10,6 @@ export const AGENT_PROFILE_MAX_IN_FLIGHT = 16
 export const AGENT_PROFILE_MAX_BYTES = 65_536
 export const AGENT_PROFILE_TIMEOUT_MS = 3_000
 
-const CORE_PACKAGE_VERSION = (createRequire(import.meta.url)("../../package.json") as { version: string }).version
 const VERSION_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const LOOPBACK_TEST_HOST = "127.0.0.1"
 
@@ -100,6 +99,8 @@ export function createAgentProfileFetcher(options: AgentProfileFetcherOptions = 
       inFlight++
       try {
         return remember(url, await fetchProfile(url, allowLoopback, lookupHost))
+      } catch {
+        return remember(url, { status: "failed" })
       } finally {
         inFlight--
       }
@@ -175,7 +176,7 @@ function download(url: URL, target: ResolvedAddress, loopback: boolean): Promise
       method: "GET",
       lookup: pinnedLookup as never,
       timeout: AGENT_PROFILE_TIMEOUT_MS,
-      headers: { "user-agent": `fd-saleor-ucp/${CORE_PACKAGE_VERSION}`, accept: "application/json" },
+      headers: { "user-agent": `fd-saleor-ucp/${PACKAGE_VERSION}`, accept: "application/json" },
     }, (response) => {
       if (response.statusCode !== 200) {
         response.resume()

@@ -163,6 +163,8 @@ Lenient negotiation is a deliberate deviation from the UCP spec, which asks for 
 
 An unknown value in `ucpVersion`, `ucpSupportedVersions` or `ucpVersionNegotiation` makes `createAgenticCommerce` throw at boot.
 
+If you set `ucpVersion`, also set `ucpSupportedVersions`; otherwise the default list (`2026-08-25`, `2026-01-23`) applies and the old default `2026-04-08` is disabled. The integration needs the Node.js runtime; the Edge runtime is not supported.
+
 ## Middleware
 
 UCP header parsing utilities for custom route handling:

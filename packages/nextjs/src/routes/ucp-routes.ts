@@ -544,9 +544,6 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (!selectedInstrument) {
           return ucpError(scope.wire, "no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
         }
-        if (!isWellFormedInstrument(selectedInstrument)) {
-          return ucpError(scope.wire, "invalid_instrument", "Payment instrument requires handler_id", 400, "recoverable")
-        }
 
         // Fetch checkout for metadata
         const checkoutResult = await saleorClient.getCheckout(id)
@@ -557,6 +554,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         const pinned = pinScope(scope, metadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
+        if (!isWellFormedInstrument(selectedInstrument)) {
+          return ucpError(scope.wire, "invalid_instrument", "Payment instrument requires handler_id", 400, "recoverable")
+        }
         const handlerId = paymentHandlers.getAdapter(selectedInstrument.handler_id)?.id ?? selectedInstrument.handler_id
 
         // Refuse to settle on a session the agent has already cancelled.
