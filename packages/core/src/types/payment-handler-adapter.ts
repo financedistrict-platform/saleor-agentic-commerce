@@ -43,14 +43,14 @@ export interface PaymentHandlerAdapter {
    * Keyed by handler namespace (e.g., "xyz.fd.prism_payment").
    * Return empty object if nothing to advertise.
    */
-  getUcpDiscoveryHandlers(ucpVersion?: string): Promise<Record<string, unknown[]>>
+  getUcpDiscoveryHandlers(ucpVersion: string): Promise<Record<string, unknown[]>>
 
   /**
    * Return ACP discovery handler entries.
    * Flat array of handler objects for capabilities.payment.handlers.
    * Return empty array if nothing to advertise.
    */
-  getAcpDiscoveryHandlers(): Promise<unknown[]>
+  getAcpDiscoveryHandlers(ucpVersion: string): Promise<unknown[]>
 
   /**
    * Prepare payment requirements for a checkout session.
@@ -104,6 +104,7 @@ export type CheckoutPrepareInput = {
   checkoutBaseUrl: string
   /** Human-readable store name for payment descriptions */
   storeName: string
+  ucpVersion: string
   /** Existing checkout metadata (for idempotency checks) */
   checkoutMetadata?: Record<string, unknown>
 }
@@ -113,6 +114,7 @@ type PaymentSettleInputBase = {
   checkoutId: string
   /** The handler ID that the agent selected */
   handlerId: string
+  ucpVersion: string
   /** Handler-specific payment credential submitted by the agent */
   credential: unknown
   /** Checkout metadata (may contain handler-specific state) */

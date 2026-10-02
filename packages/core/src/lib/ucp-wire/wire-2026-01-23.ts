@@ -21,7 +21,7 @@ export const wire20260123: UcpWire = {
     return {
       ucp: {
         version: VERSION,
-        services: shoppingService(VERSION, input.endpoint),
+        services: shoppingService(VERSION, input.endpoint, "openapi.json"),
         capabilities: {
           "dev.ucp.shopping.checkout": capability(VERSION, "checkout/", "checkout.json"),
           "dev.ucp.shopping.order": capability(VERSION, "order/", "order.json"),

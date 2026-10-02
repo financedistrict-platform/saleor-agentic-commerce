@@ -80,7 +80,6 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   private readonly apiUrl: string
 
   private ucpDiscoveryCache = new Map<string, { data: UcpHandlersDiscoveryResponse; expiry: number }>()
-  /** Cached ACP discovery response (5 min TTL) */
   private acpDiscoveryCache: { data: AcpHandler[]; expiry: number } | null = null
   private readonly DISCOVERY_TTL = 5 * 60 * 1000
   private ucpDiscoveryRetryAt = new Map<string, number>()
@@ -99,12 +98,12 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // Discovery
   // -------------------------------------------------
 
-  async getUcpDiscoveryHandlers(ucpVersion?: string): Promise<UcpHandlersDiscoveryResponse> {
+  async getUcpDiscoveryHandlers(ucpVersion: string): Promise<UcpHandlersDiscoveryResponse> {
     return this.fetchUcpDiscovery(ucpVersion)
   }
 
-  async getAcpDiscoveryHandlers(): Promise<AcpHandler[]> {
-    return this.fetchAcpDiscovery()
+  async getAcpDiscoveryHandlers(ucpVersion: string): Promise<AcpHandler[]> {
+    return this.fetchAcpDiscovery(ucpVersion)
   }
 
   // -------------------------------------------------
@@ -112,7 +111,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // -------------------------------------------------
 
   async prepareCheckoutPayment(input: CheckoutPrepareInput): Promise<PrismCheckoutData | null> {
-    const { checkoutId, total, currencyCode, checkoutBaseUrl, storeName, checkoutMetadata } = input
+    const { checkoutId, total, currencyCode, checkoutBaseUrl, storeName, checkoutMetadata, ucpVersion } = input
     const resourceUrl = `${checkoutBaseUrl}/${checkoutId}`
 
     // Idempotency — return existing blob if we already prepared for this
@@ -128,6 +127,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
 
     const prepareInput = {
+      ucpVersion,
       amount: total,
       currency: currencyCode,
       resourceUrl,
@@ -172,7 +172,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // -------------------------------------------------
 
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
-    const { credential, checkoutMetadata } = input
+    const { credential, checkoutMetadata, ucpVersion } = input
 
     if (
       input.protocol !== "acp" &&
@@ -206,6 +206,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
 
     try {
       const result = await this.client.settle({
+        ucpVersion,
         // SAC-3: agents submit the wallet's whole x402 wrapper
         // ({ x402Version, paymentPayload, paymentRequirements }); Prism's
         // /settle wants the INNER paymentPayload (carrying accepted/payload).
@@ -248,9 +249,9 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // Internal
   // -------------------------------------------------
 
-  private async fetchUcpDiscovery(ucpVersion?: string): Promise<UcpHandlersDiscoveryResponse> {
+  private async fetchUcpDiscovery(ucpVersion: string): Promise<UcpHandlersDiscoveryResponse> {
     const now = Date.now()
-    const key = `${this.apiUrl}|${ucpVersion ?? ""}`
+    const key = `${this.apiUrl}|${ucpVersion}`
     const cache = this.ucpDiscoveryCache.get(key)
     if (cache && now < cache.expiry) return cache.data
     if (now < (this.ucpDiscoveryRetryAt.get(key) ?? 0)) return {}
@@ -269,18 +270,19 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
   }
 
-  private async fetchAcpDiscovery(): Promise<AcpHandler[]> {
+  private async fetchAcpDiscovery(ucpVersion: string): Promise<AcpHandler[]> {
     const now = Date.now()
-    if (this.acpDiscoveryCache && now < this.acpDiscoveryCache.expiry) {
-      return this.acpDiscoveryCache.data
+    const cache = this.acpDiscoveryCache
+    if (cache && now < cache.expiry) {
+      return cache.data
     }
     try {
-      const data = await this.client.fetchAcpHandlers()
+      const data = await this.client.fetchAcpHandlers(ucpVersion)
       this.acpDiscoveryCache = { data, expiry: now + this.DISCOVERY_TTL }
       return data
     } catch (error: unknown) {
       console.error(`[prism-handler] ACP discovery failed: ${error}`)
-      return this.acpDiscoveryCache?.data ?? []
+      return cache?.data ?? []
     }
   }
 

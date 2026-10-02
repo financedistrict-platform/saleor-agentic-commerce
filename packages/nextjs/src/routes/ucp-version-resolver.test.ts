@@ -59,7 +59,6 @@ describe("resolveUcpVersion", () => {
   it.each([
     [AGENT_DOWN, "unreachable"],
     [AGENT_UNDECLARED, "undeclared"],
-    [AGENT_UNKNOWN, "unknown"],
   ])("falls back to the current version for %s under lenient negotiation", async (agent, outcome) => {
     const resolution = await resolve(lenient, agent)
     expect(resolution).toMatchObject({ version: "2026-04-08", outcome })
@@ -67,13 +66,32 @@ describe("resolveUcpVersion", () => {
   })
 
   it.each([
-    [AGENT_DOWN, 424, "agent_profile_unavailable"],
-    [AGENT_UNDECLARED, 422, "version_unsupported"],
+    [AGENT_DOWN, 424, "profile_unreachable"],
+    [AGENT_UNDECLARED, 422, "profile_malformed"],
     [AGENT_UNKNOWN, 422, "version_unsupported"],
   ])("rejects %s under strict negotiation", async (agent, status, code) => {
     const resolution = await resolve(strict, agent)
     expect(resolution.rejection).toMatchObject({ status, code })
     expect(resolution.wire.version).toBe("2026-04-08")
+  })
+
+  it.each([lenient, strict])("rejects an unknown declared version with 422", async (registry) => {
+    const resolution = await resolve(registry, AGENT_UNKNOWN)
+    expect(resolution.outcome).toBe("unknown")
+    expect(resolution.rejection).toEqual({
+      status: 422,
+      code: "version_unsupported",
+      content: "Version 2027-01-01 is not supported. This business implements versions 2026-04-08, 2026-08-25, 2026-01-23.",
+    })
+  })
+
+  it("serves the current version without a fetch when UCP-Agent has no profile", async () => {
+    const fetcher = fixedFetcher(PROFILES)
+    const request = new Request(URL_, { headers: { "UCP-Agent": "agent-a/1.0" } })
+    const resolution = await resolveUcpVersion(strict, request, fetcher)
+    expect(resolution).toMatchObject({ version: "2026-04-08", outcome: "none" })
+    expect(resolution.rejection).toBeUndefined()
+    expect(fetcher.calls).toEqual([])
   })
 
   it.each(["lenient", "strict"])(
@@ -101,7 +119,11 @@ describe("resolveUcpVersion", () => {
 describe("applyUcpSessionPin", () => {
   it("rejects a matched version that differs from the pinned one", async () => {
     const pinned = applyUcpSessionPin(lenient, await resolve(lenient, AGENT_0408), "2026-08-25")
-    expect(pinned.rejection).toMatchObject({ status: 422, code: "version_unsupported" })
+    expect(pinned.rejection).toMatchObject({
+      status: 422,
+      code: "version_unsupported",
+      content: "This session is bound to UCP version 2026-08-25; the agent profile now declares 2026-04-08.",
+    })
   })
 
   it("keeps a matched version equal to the pinned one", async () => {
@@ -110,7 +132,7 @@ describe("applyUcpSessionPin", () => {
     expect(pinned.rejection).toBeUndefined()
   })
 
-  it.each([AGENT_DOWN, AGENT_UNDECLARED, AGENT_UNKNOWN, undefined])(
+  it.each([AGENT_DOWN, AGENT_UNDECLARED, undefined])(
     "serves the pinned version for a fallback outcome (%s)",
     async (agent) => {
       const pinned = applyUcpSessionPin(lenient, await resolve(lenient, agent), "2026-08-25")
@@ -119,6 +141,14 @@ describe("applyUcpSessionPin", () => {
       expect(pinned.rejection).toBeUndefined()
     },
   )
+
+  it("keeps the rejection for an unknown declared version on a pinned session", async () => {
+    const resolution = await resolve(lenient, AGENT_UNKNOWN)
+    const pinned = applyUcpSessionPin(lenient, resolution, "2026-08-25")
+    expect(pinned).toBe(resolution)
+    expect(pinned.rejection).toMatchObject({ status: 422, code: "version_unsupported" })
+    expect(pinned.wire.version).toBe("2026-04-08")
+  })
 
   it("ignores a session without a pin or with an unknown pin", async () => {
     const resolution = await resolve(lenient, AGENT_0825)

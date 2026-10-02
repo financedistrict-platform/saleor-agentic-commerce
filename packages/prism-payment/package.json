@@ -21,7 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node ../../scripts/write-package-version.mjs && tsc",
+    "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
     "test": "vitest run",
@@ -61,7 +61,7 @@
   },
   "dependencies": {},
   "peerDependencies": {
-    "@financedistrict/saleor-agentic-commerce-core": "^1.1.0"
+    "@financedistrict/saleor-agentic-commerce-core": "^1.1.1"
   },
   "devDependencies": {
     "@financedistrict/saleor-agentic-commerce-core": "workspace:*",

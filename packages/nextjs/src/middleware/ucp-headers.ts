@@ -32,7 +32,7 @@ export function parseUcpHeaders(request: Request): UcpRequestHeaders {
   if (agentHeader) {
     // Parse RFC 8941 Dictionary format: profile="url"
     const match = agentHeader.match(/profile="([^"]+)"/)
-    agentProfile = match ? match[1] : agentHeader
+    agentProfile = match ? match[1] : null
   }
 
   return {
