@@ -9,12 +9,14 @@ import type {
 export const settleWithoutProtocol: PaymentSettleInput = {
   checkoutId: "checkout-1",
   handlerId: "xyz.fd.prism_payment",
+  ucpVersion: "2026-08-25",
   credential: { type: "x402" },
 }
 
 export const settleAcp: PaymentSettleInput = {
   checkoutId: "checkout-1",
   handlerId: "xyz.fd.prism_payment",
+  ucpVersion: "2026-08-25",
   credential: { type: "x402" },
   protocol: "acp",
 }
@@ -22,6 +24,7 @@ export const settleAcp: PaymentSettleInput = {
 export const settleUcpWithoutInstrumentType: PaymentSettleInput = {
   checkoutId: "checkout-1",
   handlerId: "xyz.fd.prism_payment",
+  ucpVersion: "2026-08-25",
   credential: { type: "x402" },
   protocol: "ucp",
 }

@@ -204,7 +204,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
    * Shared helper: prepare payment handlers and store metadata on checkout.
    * Returns the final checkout with updated metadata.
    */
-  async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string, pin?: string) {
+  async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string, ucpVersion: string, pin?: string) {
     const totalAmount = Math.round(checkout.totalPrice.gross.amount * 100)
     const metadata = metadataToRecord(checkout.privateMetadata)
 
@@ -214,6 +214,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       currencyCode: checkout.totalPrice.gross.currency,
       checkoutBaseUrl: `${baseUrl}/checkout-sessions`,
       storeName: config.storeName,
+      ucpVersion,
       checkoutMetadata: metadata,
     })
 
@@ -358,7 +359,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const baseUrl = endpointBaseUrl(request)
         const finalCheckout = await preparePaymentAndRefetch(
-          checkoutResult.data.id, checkoutResult.data, baseUrl, sessionPinFor(scope.resolution),
+          checkoutResult.data.id, checkoutResult.data, baseUrl, scope.version, sessionPinFor(scope.resolution),
         )
 
         const readiness = await evaluateReadiness(saleorClient, finalCheckout)
@@ -507,7 +508,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
 
         const baseUrl = endpointBaseUrl(request)
-        const finalCheckout = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl)
+        const finalCheckout = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl, scope.version)
 
         const readiness = await evaluateReadiness(saleorClient, finalCheckout)
         const session = formatUcpCheckoutSession(scope.ctx, finalCheckout, readiness)
@@ -625,6 +626,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             checkoutId: id,
             protocol: "ucp",
             handlerId,
+            ucpVersion: scope.version,
             instrumentType: selectedInstrument.type,
             credential: selectedInstrument.credential,
             checkoutMetadata: metadata,

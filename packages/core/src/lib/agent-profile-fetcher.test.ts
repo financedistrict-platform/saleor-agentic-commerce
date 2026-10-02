@@ -27,7 +27,7 @@ beforeAll(async () => {
       return
     }
     if (req.url === "/big") {
-      res.end(JSON.stringify({ ucp: { version: "2026-08-25" }, pad: "x".repeat(70_000) }))
+      res.end(JSON.stringify({ ucp: { version: "2026-08-25" }, pad: "x".repeat(140_000) }))
       return
     }
     if (req.url === "/redirect") {
@@ -86,7 +86,7 @@ describe("createAgentProfileFetcher", () => {
     expect(await fetcher.lookup("https://agent.example/.well-known/ucp")).toEqual({ status: "failed" })
   })
 
-  it("does not follow redirects and caps the body at 64 KiB", async () => {
+  it("does not follow redirects and caps the body at 128 KiB", async () => {
     const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
     expect(await fetcher.lookup(`${base}/redirect`)).toEqual({ status: "failed" })
     expect(await fetcher.lookup(`${base}/big`)).toEqual({ status: "failed" })

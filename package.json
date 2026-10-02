@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "changeset": "changeset",
-    "version-packages": "changeset version && pnpm --filter @financedistrict/saleor-agentic-commerce-core --filter @financedistrict/saleor-prism-payment exec node ../../scripts/write-package-version.mjs",
+    "version-packages": "changeset version && pnpm --filter @financedistrict/saleor-agentic-commerce-core exec node ../../scripts/write-package-version.mjs",
     "release": "pnpm -r build && changeset publish"
   },
   "devDependencies": {
