@@ -20,7 +20,7 @@ Most users should install this alongside [`@financedistrict/saleor-agentic-comme
 
 Full TypeScript types for both protocols, audited against the official specs:
 
-- **UCP** (`2026-04-08` by default, plus `2026-08-25` and `2026-01-23` through `createUcpVersionRegistry`) — `UcpCheckoutSession`, `UcpOrder`, `UcpProfile`, `UcpPaymentInstrument`, `UcpFulfillment`, and more
+- **UCP** (the latest version, `2026-08-25`, by default, plus `2026-04-08` and `2026-01-23` through `createUcpVersionRegistry`) — `UcpCheckoutSession`, `UcpOrder`, `UcpProfile`, `UcpPaymentInstrument`, `UcpFulfillment`, and more
 - **ACP** (`2026-01-30`) — `AcpCheckoutSession`, `AcpOrder`, `AcpCapabilities`, `AcpPaymentHandler`, `AcpFulfillmentOption`, and more
 
 ```ts

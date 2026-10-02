@@ -135,8 +135,8 @@ createAgenticCommerce({
   // Optional
   channel?: string,            // Saleor channel slug (default: "default-channel")
   storeDescription?: string,   // Store description for discovery
-  ucpVersion?: string,         // Current UCP version (default: UCP_VERSION, "2026-04-08")
-  ucpSupportedVersions?: string[],  // Extra UCP versions (default: ["2026-08-25", "2026-01-23"])
+  ucpVersion?: string,         // Current UCP version (default: UCP_VERSION, the latest, "2026-08-25")
+  ucpSupportedVersions?: string[],  // Extra UCP versions (default: ["2026-04-08", "2026-01-23"])
   ucpVersionNegotiation?: "lenient" | "strict",  // default: "lenient"
   acpVersion?: string,         // ACP version (default: "2026-01-30")
   acpApiKey?: string,          // API key for ACP Bearer token auth
@@ -146,7 +146,7 @@ createAgenticCommerce({
 
 ## UCP versions
 
-The store serves `ucpVersion` (default `2026-04-08`) and every version in `ucpSupportedVersions`. `/.well-known/ucp` lists the extra versions under `ucp.supported_versions`, each linking to `/.well-known/ucp/<version>` (wire the `discoveryVersion` route shown above).
+The store serves `ucpVersion` (default: the latest, `2026-08-25`) and every version in `ucpSupportedVersions`. `/.well-known/ucp` lists the extra versions under `ucp.supported_versions`, each linking to `/.well-known/ucp/<version>` (wire the `discoveryVersion` route shown above).
 
 Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 64 KiB cap and a 10 minute cache.
 
@@ -163,7 +163,7 @@ Lenient negotiation is a deliberate deviation from the UCP spec, which asks for 
 
 An unknown value in `ucpVersion`, `ucpSupportedVersions` or `ucpVersionNegotiation` makes `createAgenticCommerce` throw at boot.
 
-If you set `ucpVersion`, also set `ucpSupportedVersions`; otherwise the default list (`2026-08-25`, `2026-01-23`) applies and the old default `2026-04-08` is disabled. The integration needs the Node.js runtime; the Edge runtime is not supported.
+If you set `ucpVersion`, also set `ucpSupportedVersions`; otherwise the default list (`2026-04-08`, `2026-01-23`) applies, so `ucpVersion: "2026-04-08"` alone leaves `2026-08-25` disabled. Stores upgrading from releases that served `2026-04-08` set `ucpVersion: "2026-04-08"` to keep that root profile. The integration needs the Node.js runtime; the Edge runtime is not supported.
 
 ## Middleware
 
