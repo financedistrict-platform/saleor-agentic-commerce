@@ -32,10 +32,10 @@ describe("createUcpVersionRegistry", () => {
     expect(version).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
-  it("keeps 2026-04-08 as the current version when the store pins it", () => {
+  it("keeps every other known version enabled when the store pins 2026-04-08", () => {
     const registry = createUcpVersionRegistry({ ucpVersion: "2026-04-08" })
     expect(registry.current).toBe("2026-04-08")
-    expect(registry.enabled()).toEqual(["2026-04-08", "2026-01-23"])
+    expect(registry.enabled()).toEqual(["2026-04-08", "2026-08-25", "2026-01-23"])
   })
 
   it("removes the current version from the supported list without an error", () => {

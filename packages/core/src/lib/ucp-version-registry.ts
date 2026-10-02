@@ -56,7 +56,7 @@ export function createUcpVersionRegistry(options: UcpVersionRegistryOptions = {}
     throw new Error(`Unknown UCP version: ${current}`)
   }
 
-  const requested = options.ucpSupportedVersions ?? [...DEFAULT_SUPPORTED_UCP_VERSIONS]
+  const requested = options.ucpSupportedVersions ?? KNOWN_UCP_VERSIONS
   for (const version of requested) {
     if (!isKnownUcpVersion(version)) {
       throw new Error(`Unknown supported UCP version: ${version}`)

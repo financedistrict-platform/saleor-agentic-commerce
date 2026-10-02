@@ -136,7 +136,7 @@ createAgenticCommerce({
   channel?: string,            // Saleor channel slug (default: "default-channel")
   storeDescription?: string,   // Store description for discovery
   ucpVersion?: string,         // Current UCP version (default: UCP_VERSION, the latest, "2026-08-25")
-  ucpSupportedVersions?: string[],  // Extra UCP versions (default: ["2026-04-08", "2026-01-23"])
+  ucpSupportedVersions?: string[],  // Extra UCP versions (default: every other known version)
   ucpVersionNegotiation?: "lenient" | "strict",  // default: "lenient"
   acpVersion?: string,         // ACP version (default: "2026-01-30")
   acpApiKey?: string,          // API key for ACP Bearer token auth
@@ -163,7 +163,7 @@ Lenient negotiation is a deliberate deviation from the UCP spec, which asks for 
 
 An unknown value in `ucpVersion`, `ucpSupportedVersions` or `ucpVersionNegotiation` makes `createAgenticCommerce` throw at boot.
 
-If you set `ucpVersion`, also set `ucpSupportedVersions`; otherwise the default list (`2026-04-08`, `2026-01-23`) applies, so `ucpVersion: "2026-04-08"` alone leaves `2026-08-25` disabled. Stores upgrading from releases that served `2026-04-08` set `ucpVersion: "2026-04-08"` to keep that root profile. The integration needs the Node.js runtime; the Edge runtime is not supported.
+When `ucpSupportedVersions` is omitted, every known version other than `ucpVersion` stays enabled, so `ucpVersion: "2026-04-08"` alone keeps `2026-08-25` and `2026-01-23` available. Stores upgrading from releases that served `2026-04-08` set `ucpVersion: "2026-04-08"` to keep that root profile. The integration needs the Node.js runtime; the Edge runtime is not supported.
 
 ## Middleware
 
