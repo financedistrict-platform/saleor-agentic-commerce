@@ -63,7 +63,7 @@ describe("checkout session version pin", () => {
       messages: [{
         type: "error",
         code: "version_unsupported",
-        content: "Version 2026-04-08 is not supported. This business implements versions 2026-04-08, 2026-08-25, 2026-01-23.",
+        content: "This session is bound to UCP version 2026-08-25; the agent profile now declares 2026-04-08.",
         severity: "unrecoverable",
       }],
     })

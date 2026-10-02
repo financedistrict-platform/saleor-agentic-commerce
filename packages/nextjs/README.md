@@ -148,14 +148,15 @@ createAgenticCommerce({
 
 The store serves `ucpVersion` (default: the latest, `2026-08-25`) and every version in `ucpSupportedVersions`. `/.well-known/ucp` lists the extra versions under `ucp.supported_versions`, each linking to `/.well-known/ucp/<version>` (wire the `discoveryVersion` route shown above).
 
-Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 64 KiB cap and a 10 minute cache.
+Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 128 KiB cap and a 10 minute cache.
 
 | Agent profile | `lenient` (default) | `strict` |
 |---|---|---|
 | no `UCP-Agent` header | current version | current version |
-| unreachable | current version + warning | 424 `agent_profile_unavailable` |
-| no or malformed `ucp.version` | current version + warning | 422 `version_unsupported` |
-| unknown version | current version + warning | 422 `version_unsupported` |
+| `UCP-Agent` without `profile=` | current version | current version |
+| unreachable | current version + warning | 424 `profile_unreachable` |
+| no or malformed `ucp.version` | current version + warning | 422 `profile_malformed` |
+| unknown version | 422 `version_unsupported` | 422 `version_unsupported` |
 | known version that is not enabled | 422 `version_unsupported` | 422 `version_unsupported` |
 | enabled version | that version | that version |
 

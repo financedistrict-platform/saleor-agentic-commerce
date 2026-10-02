@@ -62,13 +62,13 @@ export function checkoutAndOrderCapabilities(version: string): Record<string, { 
   }
 }
 
-export function shoppingService(version: string, endpoint: string) {
+export function shoppingService(version: string, endpoint: string, schemaFile = "rest.openapi.json") {
   return {
     "dev.ucp.shopping": [
       {
         version,
         spec: `https://ucp.dev/${version}/specification/overview`,
-        schema: `https://ucp.dev/${version}/services/shopping/rest.openapi.json`,
+        schema: `https://ucp.dev/${version}/services/shopping/${schemaFile}`,
         transport: "rest" as const,
         endpoint,
       },
