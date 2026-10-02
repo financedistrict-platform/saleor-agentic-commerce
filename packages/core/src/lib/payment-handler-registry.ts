@@ -54,7 +54,7 @@ export class PaymentHandlerRegistry {
   // Discovery
   // -------------------------------------------------
 
-  async getUcpDiscoveryHandlers(ucpVersion?: string): Promise<Record<string, unknown[]>> {
+  async getUcpDiscoveryHandlers(ucpVersion: string): Promise<Record<string, unknown[]>> {
     if (this.adapters.length === 0) return {}
 
     const results = await Promise.allSettled(
@@ -76,11 +76,11 @@ export class PaymentHandlerRegistry {
     return merged
   }
 
-  async getAcpDiscoveryHandlers(): Promise<unknown[]> {
+  async getAcpDiscoveryHandlers(ucpVersion: string): Promise<unknown[]> {
     if (this.adapters.length === 0) return []
 
     const results = await Promise.allSettled(
-      this.adapters.map((a) => a.getAcpDiscoveryHandlers()),
+      this.adapters.map((a) => a.getAcpDiscoveryHandlers(ucpVersion)),
     )
 
     const merged: unknown[] = []

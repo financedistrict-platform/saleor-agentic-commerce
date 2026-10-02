@@ -34,7 +34,7 @@ import { saleorToUcpAddress } from "../address-translator.js"
 import { resolveUcpCheckoutStatus } from "../status-maps.js"
 import { metadataToRecord } from "../metadata.js"
 import type { FormatterContext } from "./types.js"
-import { ucpWireFor, ucpWireOf } from "../ucp-version-registry.js"
+import { ucpWireOf } from "../ucp-version-registry.js"
 import { toMinor } from "./types.js"
 
 // =====================================================
@@ -47,8 +47,7 @@ export async function formatUcpProfile(
   supportedVersions: Record<string, string> = {},
 ): Promise<UcpProfile> {
   const wire = ucpWireOf(ctx.ucpVersion)
-  const known = ucpWireFor(ctx.ucpVersion) !== undefined
-  const paymentHandlers = await ctx.paymentHandlers.getUcpDiscoveryHandlers(known ? ctx.ucpVersion : undefined)
+  const paymentHandlers = await ctx.paymentHandlers.getUcpDiscoveryHandlers(ctx.ucpVersion)
   return wire.profile({ endpoint: endpointBaseUrl, handlers: paymentHandlers, supportedVersions })
 }
 

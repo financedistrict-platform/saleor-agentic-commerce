@@ -110,6 +110,7 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
       currencyCode: checkout.totalPrice.gross.currency,
       checkoutBaseUrl: `${baseUrl}/checkout_sessions`,
       storeName: config.storeName,
+      ucpVersion: config.ucpVersion,
       checkoutMetadata: metadata,
     })
 
@@ -414,6 +415,7 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
             checkoutId: id,
             protocol: "acp",
             handlerId,
+            ucpVersion: config.ucpVersion,
             credential,
             checkoutMetadata: metadata,
           })

@@ -51,6 +51,7 @@ describe("PrismClient — payload formatting", () => {
     const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
 
     await client.prepareUcpPayment({
+      ucpVersion: "2026-08-25",
       amount: 11480,
       currency: "USD",
       resourceUrl: "https://store.test/checkout/abc",
@@ -68,6 +69,7 @@ describe("PrismClient — payload formatting", () => {
     const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
 
     await client.prepareAcpPayment({
+      ucpVersion: "2026-08-25",
       amount: 100,
       currency: "jpy",
       resourceUrl: "https://store.test/checkout/abc",
@@ -77,5 +79,25 @@ describe("PrismClient — payload formatting", () => {
     const body = JSON.parse(init.body as string)
     expect(body.amount).toBe("100")
     expect(body.currency).toBe("JPY")
+  })
+
+  it("sends the UCP version as the User-Agent and adds no query to the handlers URL", async () => {
+    const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
+
+    await client.fetchUcpHandlers("2026-04-08")
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe("https://prism.test/api/v2/merchant/ucp/handlers")
+    expect(init.headers["User-Agent"]).toBe("fd-saleor-prism/2026-04-08")
+  })
+
+  it("keeps the UCP version out of the settle body", async () => {
+    const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
+
+    await client.settle({ ucpVersion: "2026-01-23", paymentPayload: { a: 1 }, paymentRequirements: { b: 2 } })
+
+    const [, init] = fetchMock.mock.calls[0]
+    expect(init.headers["User-Agent"]).toBe("fd-saleor-prism/2026-01-23")
+    expect(JSON.parse(init.body as string)).toEqual({ x402Version: 2, paymentPayload: { a: 1 }, paymentRequirements: { b: 2 } })
   })
 })

@@ -66,7 +66,10 @@ const sampleUcpPrepare: UcpCheckoutPrepareResponse = {
   ],
 }
 
+const TEST_UCP_VERSION = "2026-08-25"
+
 const baseInput = {
+  ucpVersion: TEST_UCP_VERSION,
   checkoutId: "abc",
   total: 1099,
   currencyCode: "USD",
@@ -83,7 +86,7 @@ describe("PrismPaymentHandler — discovery", () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
 
-    const result = await handler.getUcpDiscoveryHandlers()
+    const result = await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)
 
     expect(result).toEqual(sampleUcpDiscovery)
     expect(mock.fetchUcpHandlers).toHaveBeenCalledOnce()
@@ -93,7 +96,7 @@ describe("PrismPaymentHandler — discovery", () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
 
-    const result = await handler.getUcpDiscoveryHandlers()
+    const result = await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)
 
     const entry = result["xyz.fd.prism_payment"][0]
     expect(entry).toHaveProperty("spec")
@@ -104,7 +107,7 @@ describe("PrismPaymentHandler — discovery", () => {
     const { handler, mock } = makeHandler()
     mock.fetchAcpHandlers.mockResolvedValue([sampleAcpHandler])
 
-    const result = await handler.getAcpDiscoveryHandlers()
+    const result = await handler.getAcpDiscoveryHandlers(TEST_UCP_VERSION)
 
     expect(result).toEqual([sampleAcpHandler])
     expect(mock.fetchAcpHandlers).toHaveBeenCalledOnce()
@@ -115,7 +118,7 @@ describe("PrismPaymentHandler — discovery", () => {
     const handlerWithDelegate = { ...sampleAcpHandler, requires_delegate_payment: true }
     mock.fetchAcpHandlers.mockResolvedValue([handlerWithDelegate])
 
-    const result = await handler.getAcpDiscoveryHandlers()
+    const result = await handler.getAcpDiscoveryHandlers(TEST_UCP_VERSION)
 
     expect((result[0] as AcpHandler).requires_delegate_payment).toBe(true)
   })
@@ -125,7 +128,7 @@ describe("PrismPaymentHandler — discovery", () => {
     const { schema: _schema, ...withoutSchema } = sampleUcpDiscovery["xyz.fd.prism_payment"][0]
     mock.fetchUcpHandlers.mockResolvedValue({ "xyz.fd.prism_payment": [withoutSchema] })
 
-    expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+    expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual({})
   })
 
   it("advertises nothing when the fetched entry has a non-contract id", async () => {
@@ -133,7 +136,7 @@ describe("PrismPaymentHandler — discovery", () => {
     const entry = { ...sampleUcpDiscovery["xyz.fd.prism_payment"][0], id: "other" }
     mock.fetchUcpHandlers.mockResolvedValue({ "xyz.fd.prism_payment": [entry] })
 
-    expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+    expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual({})
   })
 
   it("advertises only the validated Prism entry", async () => {
@@ -144,14 +147,14 @@ describe("PrismPaymentHandler — discovery", () => {
       "com.example.extra": [{ id: "com.example.extra" }],
     })
 
-    expect(await handler.getUcpDiscoveryHandlers()).toEqual({ "xyz.fd.prism_payment": [entry] })
+    expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual({ "xyz.fd.prism_payment": [entry] })
   })
 
   it("advertises nothing when the first fetch is malformed", async () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue({ "xyz.fd.prism_payment": [{ id: "xyz.fd.prism_payment" }] })
 
-    expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+    expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual({})
   })
 
   it("never serves a malformed refetch after the cached entry expires", async () => {
@@ -159,12 +162,12 @@ describe("PrismPaymentHandler — discovery", () => {
     try {
       const { handler, mock } = makeHandler()
       mock.fetchUcpHandlers.mockResolvedValueOnce(sampleUcpDiscovery)
-      expect(await handler.getUcpDiscoveryHandlers()).toEqual(sampleUcpDiscovery)
+      expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual(sampleUcpDiscovery)
 
       vi.advanceTimersByTime(5 * 60 * 1000 + 1)
       mock.fetchUcpHandlers.mockResolvedValueOnce({ "xyz.fd.prism_payment": [{ id: "other" }] })
 
-      expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+      expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual({})
     } finally {
       vi.useRealTimers()
     }
@@ -175,14 +178,14 @@ describe("PrismPaymentHandler — discovery", () => {
     try {
       const { handler, mock } = makeHandler()
       mock.fetchUcpHandlers.mockRejectedValueOnce(new Error("down"))
-      expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+      expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual({})
 
       mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
-      expect(await handler.getUcpDiscoveryHandlers()).toEqual({})
+      expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual({})
       expect(mock.fetchUcpHandlers).toHaveBeenCalledOnce()
 
       vi.advanceTimersByTime(60 * 1000 + 1)
-      expect(await handler.getUcpDiscoveryHandlers()).toEqual(sampleUcpDiscovery)
+      expect(await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)).toEqual(sampleUcpDiscovery)
       expect(mock.fetchUcpHandlers).toHaveBeenCalledTimes(2)
     } finally {
       vi.useRealTimers()
@@ -193,8 +196,8 @@ describe("PrismPaymentHandler — discovery", () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
 
-    await handler.getUcpDiscoveryHandlers()
-    await handler.getUcpDiscoveryHandlers()
+    await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)
+    await handler.getUcpDiscoveryHandlers(TEST_UCP_VERSION)
 
     expect(mock.fetchUcpHandlers).toHaveBeenCalledOnce()
   })
@@ -210,6 +213,8 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
 
     expect(mock.prepareUcpPayment).toHaveBeenCalledOnce()
     expect(mock.prepareAcpPayment).toHaveBeenCalledOnce()
+    expect(mock.prepareUcpPayment.mock.calls[0][0].ucpVersion).toBe(TEST_UCP_VERSION)
+    expect(mock.prepareAcpPayment.mock.calls[0][0].ucpVersion).toBe(TEST_UCP_VERSION)
   })
 
   it("stores both UCP and ACP responses keyed for later retrieval", async () => {
@@ -334,6 +339,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const credential = { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
 
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -352,6 +358,7 @@ describe("PrismPaymentHandler — settlement", () => {
     expect(result.success).toBe(true)
     expect(result.transactionReference).toBe("0xdeadbeef")
     expect(mock.settle).toHaveBeenCalledWith({
+      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: credential,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -364,6 +371,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const credential = { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
 
     await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -380,6 +388,7 @@ describe("PrismPaymentHandler — settlement", () => {
     })
 
     expect(mock.settle).toHaveBeenCalledWith({
+      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: credential,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -392,6 +401,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
 
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "acp",
       handlerId: PRISM_HANDLER_ID,
@@ -408,6 +418,7 @@ describe("PrismPaymentHandler — settlement", () => {
 
     expect(result.success).toBe(true)
     expect(mock.settle).toHaveBeenCalledWith({
+      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: credential,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -428,6 +439,7 @@ describe("PrismPaymentHandler — settlement", () => {
     }
 
     await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -444,6 +456,7 @@ describe("PrismPaymentHandler — settlement", () => {
     })
 
     expect(mock.settle).toHaveBeenCalledWith({
+      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: expect.anything(),
       paymentRequirements: baseEntry,
     })
@@ -462,6 +475,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
 
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -478,6 +492,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
 
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -496,6 +511,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const paymentPayload = { x402Version: 2, accepted: { network: "base-sepolia", asset: "USDC" }, payload: {} }
 
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -506,6 +522,7 @@ describe("PrismPaymentHandler — settlement", () => {
 
     expect(result.success).toBe(true)
     expect(mock.settle).toHaveBeenCalledWith({
+      ucpVersion: TEST_UCP_VERSION,
       paymentPayload,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -515,6 +532,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler } = makeHandler()
 
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -541,6 +559,7 @@ describe("PrismPaymentHandler — settlement", () => {
     }
 
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
@@ -563,12 +582,11 @@ describe("PrismPaymentHandler — settlement", () => {
 })
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const PACKAGE_VERSION = JSON.parse(readFileSync(join(HERE, "..", "package.json"), "utf8")).version
 const recordedPrism = (name: string) =>
   JSON.parse(readFileSync(join(HERE, "..", "..", "core", "src", "__fixtures__", "prism", name), "utf8"))
 
 describe("PrismPaymentHandler — multi-version UCP", () => {
-  it("sends the plugin User-Agent and the requested ucp_version to Prism", async () => {
+  it("sends the UCP version in the User-Agent on every Prism call and no ucp_version query", async () => {
     const calls: { url: string; headers: Record<string, string> }[] = []
     const original = globalThis.fetch
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -577,21 +595,30 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
     }) as typeof fetch
     try {
       const client = new PrismClient({ apiUrl: "https://gw.example", apiKey: "k" })
+      const prepare = { amount: 100, currency: "USD", resourceUrl: "https://store.test/c/1" }
       await client.fetchUcpHandlers("2026-01-23")
-      await client.fetchUcpHandlers()
-      await client.settle({ paymentPayload: {}, paymentRequirements: {} })
-      await client.prepareUcpPayment({ amount: 100, currency: "USD", resourceUrl: "https://store.test/c/1" })
+      await client.fetchAcpHandlers("2026-04-08")
+      await client.prepareUcpPayment({ ...prepare, ucpVersion: "2026-04-08" })
+      await client.prepareAcpPayment({ ...prepare, ucpVersion: "2026-08-25" })
+      await client.settle({ ucpVersion: "2026-01-23", paymentPayload: {}, paymentRequirements: {} })
     } finally {
       globalThis.fetch = original
     }
 
     expect(calls.map((c) => c.url)).toEqual([
-      "https://gw.example/api/v2/merchant/ucp/handlers?ucp_version=2026-01-23",
       "https://gw.example/api/v2/merchant/ucp/handlers",
-      "https://gw.example/api/v2/payment/settle",
+      "https://gw.example/api/v2/merchant/acp/handlers",
       "https://gw.example/api/v2/merchant/ucp/payment-requirements",
+      "https://gw.example/api/v2/merchant/acp/payment-requirements",
+      "https://gw.example/api/v2/payment/settle",
     ])
-    for (const call of calls) expect(call.headers["User-Agent"]).toBe(`fd-saleor-prism/${PACKAGE_VERSION}`)
+    expect(calls.map((c) => c.headers["User-Agent"])).toEqual([
+      "fd-saleor-prism/2026-01-23",
+      "fd-saleor-prism/2026-04-08",
+      "fd-saleor-prism/2026-04-08",
+      "fd-saleor-prism/2026-08-25",
+      "fd-saleor-prism/2026-01-23",
+    ])
   })
 
   it("caches discovery per UCP version", async () => {
@@ -647,6 +674,7 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
     const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
       handlerId: PRISM_HANDLER_ID,
       instrumentType,
