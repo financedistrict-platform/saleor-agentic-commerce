@@ -21,7 +21,7 @@ const UCP_DATE_VERSION = /^\d{4}-\d{2}-\d{2}$/
 function prismUserAgent(ucpVersion: string): string {
   if (typeof ucpVersion !== "string" || !UCP_DATE_VERSION.test(ucpVersion)) {
     throw new Error(
-      `Invalid UCP version ${JSON.stringify(ucpVersion)} for the Prism User-Agent; upgrade @financedistrict/saleor-agentic-commerce-core together with @financedistrict/saleor-prism-payment`,
+      `Invalid UCP version ${JSON.stringify(ucpVersion)} for the Prism User-Agent; upgrade @financedistrict/saleor-agentic-commerce-core, @financedistrict/saleor-agentic-commerce-nextjs and @financedistrict/saleor-prism-payment together`,
     )
   }
   return `fd-saleor-prism/${ucpVersion}`

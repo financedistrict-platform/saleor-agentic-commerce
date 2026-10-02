@@ -21,7 +21,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node ../../scripts/write-package-version.mjs && tsc",
+    "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
     "test": "vitest run",

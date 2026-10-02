@@ -80,8 +80,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   private readonly apiUrl: string
 
   private ucpDiscoveryCache = new Map<string, { data: UcpHandlersDiscoveryResponse; expiry: number }>()
-  /** Cached ACP discovery responses per UCP version (5 min TTL) */
-  private acpDiscoveryCache = new Map<string, { data: AcpHandler[]; expiry: number }>()
+  private acpDiscoveryCache: { data: AcpHandler[]; expiry: number } | null = null
   private readonly DISCOVERY_TTL = 5 * 60 * 1000
   private ucpDiscoveryRetryAt = new Map<string, number>()
   private readonly DISCOVERY_FAILURE_TTL = 60 * 1000
@@ -273,13 +272,13 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
 
   private async fetchAcpDiscovery(ucpVersion: string): Promise<AcpHandler[]> {
     const now = Date.now()
-    const cache = this.acpDiscoveryCache.get(ucpVersion)
+    const cache = this.acpDiscoveryCache
     if (cache && now < cache.expiry) {
       return cache.data
     }
     try {
       const data = await this.client.fetchAcpHandlers(ucpVersion)
-      this.acpDiscoveryCache.set(ucpVersion, { data, expiry: now + this.DISCOVERY_TTL })
+      this.acpDiscoveryCache = { data, expiry: now + this.DISCOVERY_TTL }
       return data
     } catch (error: unknown) {
       console.error(`[prism-handler] ACP discovery failed: ${error}`)
