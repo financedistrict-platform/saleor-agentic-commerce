@@ -8,6 +8,7 @@ import {
   CHECKOUT_ID,
   checkoutTemplate,
   params,
+  PINNED_0408_CONFIG,
   ucpRequest,
 } from "./__tests__/harness.js"
 
@@ -44,7 +45,7 @@ describe("checkout session version pin", () => {
   })
 
   it("does not pin a new session on a fallback outcome", async () => {
-    const { routes, saleor } = buildRoutes()
+    const { routes, saleor } = buildRoutes({ config: PINNED_0408_CONFIG })
     const response = await routes.checkoutSessions.POST(ucpRequest(SESSIONS, { agent: AGENT_DOWN, body: { line_items: [{ item: { id: "v1" }, quantity: 1 }] } }))
     const body = await response.json()
 
@@ -53,7 +54,7 @@ describe("checkout session version pin", () => {
   })
 
   it("answers 422 version_unsupported in the current wire when a matched version differs from the pin", async () => {
-    const { routes } = buildRoutes({ checkouts: [pinnedCheckout("2026-08-25")] })
+    const { routes } = buildRoutes({ config: PINNED_0408_CONFIG, checkouts: [pinnedCheckout("2026-08-25")] })
     const response = await routes.checkoutSession.GET(ucpRequest(`${SESSIONS}/${CHECKOUT_ID}`, { agent: AGENT_0408 }), params({ id: CHECKOUT_ID }))
 
     expect(response.status).toBe(422)

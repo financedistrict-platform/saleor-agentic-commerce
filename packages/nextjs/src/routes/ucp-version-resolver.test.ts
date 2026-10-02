@@ -19,9 +19,10 @@ import {
 } from "./__tests__/harness.js"
 
 const URL_ = "https://store.test/api/ucp/checkout-sessions"
-const lenient = createUcpVersionRegistry()
-const strict = createUcpVersionRegistry({ ucpVersionNegotiation: "strict" })
-const only0408 = createUcpVersionRegistry({ ucpSupportedVersions: [] })
+const pinned = { ucpVersion: "2026-04-08", ucpSupportedVersions: ["2026-08-25", "2026-01-23"] }
+const lenient = createUcpVersionRegistry(pinned)
+const strict = createUcpVersionRegistry({ ...pinned, ucpVersionNegotiation: "strict" })
+const only0408 = createUcpVersionRegistry({ ucpVersion: "2026-04-08", ucpSupportedVersions: [] })
 
 async function resolve(registry: typeof lenient, agent?: string) {
   return resolveUcpVersion(registry, ucpRequest(URL_, { agent }), fixedFetcher(PROFILES))
@@ -37,6 +38,11 @@ describe("resolveUcpVersion", () => {
     const resolution = await resolveUcpVersion(lenient, ucpRequest(URL_), fetcher)
     expect(resolution).toMatchObject({ version: "2026-04-08", outcome: "none" })
     expect(fetcher.calls).toEqual([])
+  })
+
+  it("serves the latest version when the registry is left at its defaults", async () => {
+    const resolution = await resolveUcpVersion(createUcpVersionRegistry(), ucpRequest(URL_), fixedFetcher(PROFILES))
+    expect(resolution).toMatchObject({ version: "2026-08-25", outcome: "none" })
   })
 
   it.each([
@@ -73,7 +79,7 @@ describe("resolveUcpVersion", () => {
   it.each(["lenient", "strict"])(
     "rejects a known but disabled version with 422 under %s negotiation",
     async (negotiation) => {
-      const registry = createUcpVersionRegistry({ ucpSupportedVersions: [], ucpVersionNegotiation: negotiation })
+      const registry = createUcpVersionRegistry({ ucpVersion: "2026-04-08", ucpSupportedVersions: [], ucpVersionNegotiation: negotiation })
       const resolution = await resolve(registry, AGENT_0825)
       expect(resolution.rejection).toEqual({
         status: 422,

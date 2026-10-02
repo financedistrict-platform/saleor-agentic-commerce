@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { createAgenticCommerce } from "../config.js"
-import { AGENT_0123, AGENT_0825, buildRoutes, params, readFixture, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
+import { AGENT_0123, AGENT_0825, buildRoutes, PINNED_0408_CONFIG, params, readFixture, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 
 const WELL_KNOWN = "https://store.test/.well-known/ucp"
 
@@ -15,13 +15,23 @@ afterEach(() => {
 
 describe("GET /.well-known/ucp", () => {
   it("serves the original 0.7.1 profile bytes when no other version is enabled", async () => {
-    const { routes } = buildRoutes({ config: { ucpSupportedVersions: [] } })
+    const { routes } = buildRoutes({ config: { ucpVersion: "2026-04-08", ucpSupportedVersions: [] } })
     const response = await routes.discovery.GET(ucpRequest(WELL_KNOWN))
     expect(JSON.stringify(await response.json(), null, 2)).toBe(readFixture("ucp/2026-04-08/profile.json"))
   })
 
-  it("links every supported version by default", async () => {
+  it("serves the latest version and links the others by default", async () => {
     const { routes } = buildRoutes()
+    const profile = await (await routes.discovery.GET(ucpRequest(WELL_KNOWN))).json()
+    expect(profile.ucp.version).toBe("2026-08-25")
+    expect(profile.ucp.supported_versions).toEqual({
+      "2026-04-08": `${WELL_KNOWN}/2026-04-08`,
+      "2026-01-23": `${WELL_KNOWN}/2026-01-23`,
+    })
+  })
+
+  it("serves 2026-04-08 as the root profile when the store pins it", async () => {
+    const { routes } = buildRoutes({ config: PINNED_0408_CONFIG })
     const profile = await (await routes.discovery.GET(ucpRequest(WELL_KNOWN))).json()
     expect(profile.ucp.version).toBe("2026-04-08")
     expect(profile.ucp.supported_versions).toEqual({
@@ -33,7 +43,7 @@ describe("GET /.well-known/ucp", () => {
   it("asks Prism for the served version with the plugin User-Agent", async () => {
     const gateway = stubPrismGateway()
     try {
-      const { routes } = buildRoutes({ prism: true })
+      const { routes } = buildRoutes({ prism: true, config: PINNED_0408_CONFIG })
       const profile = await (await routes.discovery.GET(ucpRequest(WELL_KNOWN))).json()
       const discovery = gateway.requests.filter((r) => r.url.includes("/ucp/handlers"))
 
@@ -57,7 +67,7 @@ describe("GET /.well-known/ucp/[version]", () => {
     expect(profile.ucp.supported_versions).toBeUndefined()
   })
 
-  it.each(["2026-08-25", "2027-01-01"])("answers 404 version_unsupported for %s when it is not enabled", async (version) => {
+  it.each(["2026-04-08", "2027-01-01"])("answers 404 version_unsupported for %s when it is not enabled", async (version) => {
     const { routes } = buildRoutes({ config: { ucpSupportedVersions: [] } })
     const response = await routes.discoveryVersion.GET(ucpRequest(`${WELL_KNOWN}/${version}`), params({ version }))
 
@@ -97,10 +107,10 @@ describe("routes not available in a UCP version", () => {
 describe("createAgenticCommerce configuration", () => {
   const base = { saleorApiUrl: "https://saleor.test/graphql/", saleorAuthToken: "t", storefrontUrl: "https://store.test" }
 
-  it("defaults the current version to 2026-04-08", () => {
+  it("defaults the current version to the latest known version", () => {
     const instance = createAgenticCommerce(base)
-    expect(instance.config.ucpVersion).toBe("2026-04-08")
-    expect(instance.ucpRegistry?.enabled()).toEqual(["2026-04-08", "2026-08-25", "2026-01-23"])
+    expect(instance.config.ucpVersion).toBe("2026-08-25")
+    expect(instance.ucpRegistry?.enabled()).toEqual(["2026-08-25", "2026-04-08", "2026-01-23"])
   })
 
   it.each([

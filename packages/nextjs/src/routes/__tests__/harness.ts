@@ -106,6 +106,11 @@ export const PROFILES: Record<string, AgentProfileResult> = {
   [AGENT_UNDECLARED]: { status: "ok", version: null },
 }
 
+export const PINNED_0408_CONFIG: Partial<AgenticCommerceConfig> = {
+  ucpVersion: "2026-04-08",
+  ucpSupportedVersions: ["2026-08-25", "2026-01-23"],
+}
+
 export function buildRoutes(options: {
   config?: Partial<AgenticCommerceConfig>
   checkouts?: SaleorCheckout[]

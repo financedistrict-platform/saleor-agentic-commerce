@@ -3,9 +3,6 @@ import { wire20260123 } from "./ucp-wire/wire-2026-01-23.js"
 import { wire20260408 } from "./ucp-wire/wire-2026-04-08.js"
 import { createLatestUcpWire, wire20260825 } from "./ucp-wire/wire-2026-08-25.js"
 
-export const DEFAULT_CURRENT_UCP_VERSION = "2026-04-08"
-export const DEFAULT_SUPPORTED_UCP_VERSIONS: readonly string[] = ["2026-08-25", "2026-01-23"]
-
 export type UcpVersionNegotiation = "lenient" | "strict"
 
 export const UCP_VERSION_NEGOTIATION_MODES: readonly UcpVersionNegotiation[] = ["lenient", "strict"]
@@ -17,6 +14,12 @@ const WIRES: Record<string, UcpWire> = {
 }
 
 export const KNOWN_UCP_VERSIONS: readonly string[] = Object.keys(WIRES)
+
+export const LATEST_UCP_VERSION: string = [...KNOWN_UCP_VERSIONS].sort().at(-1) as string
+export const DEFAULT_CURRENT_UCP_VERSION: string = LATEST_UCP_VERSION
+export const DEFAULT_SUPPORTED_UCP_VERSIONS: readonly string[] = KNOWN_UCP_VERSIONS.filter(
+  (version) => version !== LATEST_UCP_VERSION,
+)
 
 export type UcpVersionRegistryOptions = {
   ucpVersion?: string

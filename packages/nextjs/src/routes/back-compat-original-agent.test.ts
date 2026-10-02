@@ -4,6 +4,7 @@ import {
   CHECKOUT_ID,
   checkoutTemplate,
   params,
+  PINNED_0408_CONFIG,
   readFixture,
   stubPrismGateway,
   ucpRequest,
@@ -30,7 +31,7 @@ function settleRequests() {
 }
 
 async function complete(instrument: Record<string, unknown>) {
-  const { routes, saleor } = buildRoutes({ prism: true, checkouts: [checkoutTemplate()] })
+  const { routes, saleor } = buildRoutes({ prism: true, config: PINNED_0408_CONFIG, checkouts: [checkoutTemplate()] })
   const response = await routes.checkoutSessionComplete.POST(
     ucpRequest(COMPLETE, { body: { payment: { instruments: [instrument] } } }),
     params({ id: CHECKOUT_ID }),

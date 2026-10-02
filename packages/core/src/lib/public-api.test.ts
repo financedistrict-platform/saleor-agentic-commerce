@@ -88,9 +88,9 @@ describe("public API of saleor-agentic-commerce-nextjs 1.0.0 and 2.0.0", () => {
 })
 
 describe("additive exports", () => {
-  it("adds the version registry with the 2026-04-08 default", () => {
+  it("adds the version registry defaulting to the latest known version", () => {
     expect(typeof core.createUcpVersionRegistry).toBe("function")
-    expect(core.DEFAULT_CURRENT_UCP_VERSION).toBe("2026-04-08")
+    expect(core.DEFAULT_CURRENT_UCP_VERSION).toBe("2026-08-25")
     expect(core.UCP_VERSION).toBe(core.DEFAULT_CURRENT_UCP_VERSION)
   })
 })
