@@ -48,8 +48,8 @@ const prism = new PrismPaymentHandler({
 })
 
 // Discovery — what payment methods this handler supports
-const ucpHandlers = prism.getUcpDiscoveryHandlers()
-const acpHandlers = prism.getAcpDiscoveryHandlers()
+const ucpHandlers = await prism.getUcpDiscoveryHandlers("2026-08-25")
+const acpHandlers = await prism.getAcpDiscoveryHandlers("2026-08-25")
 
 // Prepare — create a payment session for a checkout
 const prepared = await prism.prepareCheckoutPayment({
