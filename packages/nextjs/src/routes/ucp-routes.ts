@@ -2,8 +2,6 @@
  * UCP Route Handlers
  *
  * Creates Next.js App Router route handlers for all UCP endpoints.
- * Based on UCP spec version 2026-08-25.
- * https://ucp.dev/2026-08-25/specification/overview
  *
  * Endpoints:
  * - GET  /.well-known/ucp                             — Discovery profile
@@ -32,7 +30,7 @@ import {
   formatUcpOrder,
   formatUcpCatalogSearch,
   formatUcpCatalogLookup,
-  formatUcpError,
+  createUcpVersionRegistry,
   ucpToSaleorAddress,
   metadataToRecord,
   recordToMetadataInput,
@@ -45,7 +43,24 @@ import {
   isWellFormedInstrument,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
-import type { UcpErrorSeverity } from "@financedistrict/saleor-agentic-commerce-core"
+import type { FormatterContext, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
+import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
+import {
+  UCP_VERSION_METADATA_KEY,
+  applyUcpSessionPin,
+  logUcpResolution,
+  resolveUcpVersion,
+  sessionPinFor,
+  unsupportedVersionMessage,
+  type UcpResolution,
+} from "../middleware/ucp-version.js"
+
+type UcpRequestScope = {
+  resolution: UcpResolution
+  version: string
+  wire: UcpWire
+  ctx: FormatterContext
+}
 
 // Checkout privateMetadata key holding the settlement record (SAC-2): the tx
 // reference + amount, written the moment a payment settles — BEFORE the Saleor
@@ -57,6 +72,9 @@ export type UcpRouteHandlers = {
   /** GET /.well-known/ucp */
   discovery: {
     GET: (request: Request) => Promise<Response>
+  }
+  discoveryVersion: {
+    GET: (request: Request, context: { params: Promise<{ version: string }> }) => Promise<Response>
   }
   /** POST /api/ucp/checkout-sessions */
   checkoutSessions: {
@@ -92,22 +110,57 @@ export type UcpRouteHandlers = {
 export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHandlers {
   const { saleorClient, paymentHandlers, formatterContext, config } = instance
 
+  const ucpRegistry = instance.ucpRegistry ?? createUcpVersionRegistry({ ucpVersion: config.ucpVersion })
+  const agentProfileFetcher = instance.agentProfileFetcher ?? createAgentProfileFetcher()
+
   function ucpError(
+    wire: UcpWire,
     code: string,
     content: string,
     status: number,
     severity?: UcpErrorSeverity,
   ): Response {
-    return Response.json(
-      formatUcpError({ ucpVersion: config.ucpVersion, code, content, severity }),
-      { status },
-    )
+    return Response.json(wire.error({ code, content, severity }), { status })
+  }
+
+  function scopeOf(resolution: UcpResolution): UcpRequestScope {
+    return {
+      resolution,
+      version: resolution.version,
+      wire: resolution.wire,
+      ctx: { ...formatterContext, ucpVersion: resolution.version },
+    }
+  }
+
+  function rejectionResponse(resolution: UcpResolution): Response | null {
+    if (!resolution.rejection) return null
+    const { status, code, content } = resolution.rejection
+    return ucpError(resolution.wire, code, content, status)
+  }
+
+  async function resolveScope(request: Request): Promise<UcpRequestScope | Response> {
+    const resolution = await resolveUcpVersion(ucpRegistry, request, agentProfileFetcher)
+    logUcpResolution(resolution)
+    return rejectionResponse(resolution) ?? scopeOf(resolution)
+  }
+
+  function pinScope(scope: UcpRequestScope, metadata: Record<string, unknown>): UcpRequestScope | Response {
+    const pinned = applyUcpSessionPin(ucpRegistry, scope.resolution, metadata[UCP_VERSION_METADATA_KEY])
+    if (pinned === scope.resolution) return scope
+    if (pinned.version !== scope.version) logUcpResolution(pinned)
+    return rejectionResponse(pinned) ?? scopeOf(pinned)
+  }
+
+  function supportedVersionLinks(): Record<string, string> {
+    const base = config.storefrontUrl.replace(/\/$/, "")
+    return Object.fromEntries(ucpRegistry.supported.map((v) => [v, `${base}/.well-known/ucp/${v}`]))
   }
 
   // Surface a failed Saleor mutation with its structured field errors — one UCP
   // message per error, field preserved — instead of collapsing to errors[0]
   // (SAC-5). Defaults to recoverable: validation errors are fixable input.
   function ucpSaleorError(
+    wire: UcpWire,
     code: string,
     status: number,
     result: { error: string; errors?: unknown },
@@ -118,7 +171,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       severity,
       fallbackContent: result.error,
     })
-    return Response.json(formatUcpError({ ucpVersion: config.ucpVersion, messages }), { status })
+    return Response.json(wire.error({ messages }), { status })
   }
 
   /**
@@ -151,7 +204,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
    * Shared helper: prepare payment handlers and store metadata on checkout.
    * Returns the final checkout with updated metadata.
    */
-  async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string) {
+  async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string, pin?: string) {
     const totalAmount = Math.round(checkout.totalPrice.gross.amount * 100)
     const metadata = metadataToRecord(checkout.privateMetadata)
 
@@ -164,7 +217,10 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       checkoutMetadata: metadata,
     })
 
-    const metadataUpdates = recordToMetadataInput(prepareResults)
+    const metadataUpdates = recordToMetadataInput({
+      ...prepareResults,
+      ...(pin ? { [UCP_VERSION_METADATA_KEY]: pin } : {}),
+    })
     if (metadataUpdates.length > 0) {
       // Best-effort persist of the prepared payment config. If this write
       // fails the next request will re-prepare (idempotent on Prism's side
@@ -195,8 +251,37 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (blocked) return blocked
 
         const baseUrl = endpointBaseUrl(request)
-        const profile = await formatUcpProfile(formatterContext, baseUrl)
+        const profile = await formatUcpProfile(
+          { ...formatterContext, ucpVersion: ucpRegistry.current },
+          baseUrl,
+          supportedVersionLinks(),
+        )
 
+        return Response.json(profile, {
+          headers: {
+            "Cache-Control": "public, max-age=300",
+            "Content-Type": "application/json",
+          },
+        })
+      },
+    },
+
+    discoveryVersion: {
+      async GET(request: Request, context: { params: Promise<{ version: string }> }) {
+        const blocked = checkUcpEnabled()
+        if (blocked) return blocked
+
+        const { version } = await context.params
+        if (!ucpRegistry.isEnabled(version)) {
+          return ucpError(
+            ucpRegistry.currentWire(),
+            "version_unsupported",
+            unsupportedVersionMessage(ucpRegistry, version),
+            404,
+          )
+        }
+
+        const profile = await formatUcpProfile({ ...formatterContext, ucpVersion: version }, endpointBaseUrl(request))
         return Response.json(profile, {
           headers: {
             "Cache-Control": "public, max-age=300",
@@ -213,17 +298,20 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        const scope = resolved
 
         let body: any
         try {
           body = await request.json()
         } catch {
-          return ucpError("invalid_body", "Request body must be valid JSON", 400)
+          return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
         const lineItems = body.line_items
         if (!Array.isArray(lineItems) || lineItems.length === 0) {
-          return ucpError("missing_line_items", "line_items array is required", 400, "recoverable")
+          return ucpError(scope.wire, "missing_line_items", "line_items array is required", 400, "recoverable")
         }
 
         // Map UCP line items to Saleor checkout lines
@@ -252,7 +340,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         })
 
         if (!checkoutResult.ok) {
-          return ucpSaleorError("checkout_create_failed", 422, checkoutResult)
+          return ucpSaleorError(scope.wire, "checkout_create_failed", 422, checkoutResult)
         }
 
         // If a shipping address was supplied but Saleor returns no usable
@@ -260,6 +348,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // accepting an unfulfillable order that would later die at complete.
         if (shippingAddress && checkoutResult.data.shippingMethods.length === 0) {
           return ucpError(
+            scope.wire,
             "unsupported_shipping_destination",
             `No shipping methods available for destination country '${shippingAddress.country ?? "unknown"}'`,
             422,
@@ -269,11 +358,11 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const baseUrl = endpointBaseUrl(request)
         const finalCheckout = await preparePaymentAndRefetch(
-          checkoutResult.data.id, checkoutResult.data, baseUrl,
+          checkoutResult.data.id, checkoutResult.data, baseUrl, sessionPinFor(scope.resolution),
         )
 
         const readiness = await evaluateReadiness(saleorClient, finalCheckout)
-        const session = formatUcpCheckoutSession(formatterContext, finalCheckout, readiness)
+        const session = formatUcpCheckoutSession(scope.ctx, finalCheckout, readiness)
         return Response.json(session, { status: 201 })
       },
     },
@@ -285,47 +374,61 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async GET(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        let scope = resolved
 
         const { id } = await context.params
         const result = await saleorClient.getCheckout(id)
-        if (!result.ok) return ucpError("checkout_not_found", result.error, 404)
+        if (!result.ok) return ucpError(scope.wire, "checkout_not_found", result.error, 404)
+
+        const sessionMetadata = metadataToRecord(result.data.privateMetadata)
+        const pinned = pinScope(scope, sessionMetadata)
+        if (pinned instanceof Response) return pinned
+        scope = pinned
 
         // metadataToRecord JSON.parses values, so the literal "true" written by
         // the cancel route comes back as boolean true (not the string "true").
-        const canceled =
-          metadataToRecord(result.data.privateMetadata).ucp_canceled === true
+        const canceled = sessionMetadata.ucp_canceled === true
         if (canceled) {
-          const session = formatUcpCheckoutSession(formatterContext, result.data)
+          const session = formatUcpCheckoutSession(scope.ctx, result.data)
           return Response.json({ ...session, status: "canceled" })
         }
         const readiness = await evaluateReadiness(saleorClient, result.data)
-        const session = formatUcpCheckoutSession(formatterContext, result.data, readiness)
+        const session = formatUcpCheckoutSession(scope.ctx, result.data, readiness)
         return Response.json(session)
       },
 
       async PUT(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        let scope = resolved
 
         const { id } = await context.params
         let body: any
         try {
           body = await request.json()
         } catch {
-          return ucpError("invalid_body", "Request body must be valid JSON", 400)
+          return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
         // Refuse updates on a session the agent has already cancelled.
         const cancelGuard = await saleorClient.getCheckout(id)
-        if (!cancelGuard.ok) return ucpError("checkout_not_found", cancelGuard.error, 404)
-        if (metadataToRecord(cancelGuard.data.privateMetadata).ucp_canceled === true) {
-          return ucpError("session_canceled", "Checkout session has been canceled", 409)
+        if (!cancelGuard.ok) return ucpError(scope.wire, "checkout_not_found", cancelGuard.error, 404)
+        const sessionMetadata = metadataToRecord(cancelGuard.data.privateMetadata)
+        const pinned = pinScope(scope, sessionMetadata)
+        if (pinned instanceof Response) return pinned
+        scope = pinned
+        if (sessionMetadata.ucp_canceled === true) {
+          return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
         }
 
         // Update buyer email
         if (body.buyer?.email) {
           const result = await saleorClient.updateCheckoutEmail(id, body.buyer.email)
-          if (!result.ok) return ucpSaleorError("email_update_failed", 422, result)
+          if (!result.ok) return ucpSaleorError(scope.wire, "email_update_failed", 422, result)
         }
 
         // Update fulfillment: extract destination address and selected option
@@ -337,9 +440,10 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             if (dest) {
               const addr = ucpToSaleorAddress(dest)
               const result = await saleorClient.updateCheckoutShippingAddress(id, addr)
-              if (!result.ok) return ucpSaleorError("shipping_address_update_failed", 422, result)
+              if (!result.ok) return ucpSaleorError(scope.wire, "shipping_address_update_failed", 422, result)
               if (result.data.shippingMethods.length === 0) {
                 return ucpError(
+                  scope.wire,
                   "unsupported_shipping_destination",
                   `No shipping methods available for destination country '${addr.country ?? "unknown"}'`,
                   422,
@@ -352,7 +456,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
               if (!result.data.billingAddress) {
                 const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
                 if (!billingResult.ok) {
-                  return ucpSaleorError("billing_address_update_failed", 422, billingResult)
+                  return ucpSaleorError(scope.wire, "billing_address_update_failed", 422, billingResult)
                 }
               }
             }
@@ -361,7 +465,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             const selectedOptionId = method.groups?.[0]?.selected_option_id
             if (selectedOptionId) {
               const result = await saleorClient.updateCheckoutDeliveryMethod(id, selectedOptionId)
-              if (!result.ok) return ucpSaleorError("delivery_method_update_failed", 422, result)
+              if (!result.ok) return ucpSaleorError(scope.wire, "delivery_method_update_failed", 422, result)
             }
           }
         }
@@ -386,27 +490,27 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
           if (plan.toDelete.length > 0) {
             const del = await saleorClient.deleteCheckoutLines(id, plan.toDelete)
-            if (!del.ok) return ucpSaleorError("items_update_failed", 422, del)
+            if (!del.ok) return ucpSaleorError(scope.wire, "items_update_failed", 422, del)
           }
           if (plan.toAdd.length > 0) {
             const add = await saleorClient.addCheckoutLines(id, plan.toAdd)
-            if (!add.ok) return ucpSaleorError("items_update_failed", 422, add)
+            if (!add.ok) return ucpSaleorError(scope.wire, "items_update_failed", 422, add)
           }
           if (plan.toUpdate.length > 0) {
             const upd = await saleorClient.updateCheckoutLines(id, plan.toUpdate)
-            if (!upd.ok) return ucpSaleorError("items_update_failed", 422, upd)
+            if (!upd.ok) return ucpSaleorError(scope.wire, "items_update_failed", 422, upd)
           }
         }
 
         // Re-fetch and prepare payment
         const checkoutResult = await saleorClient.getCheckout(id)
-        if (!checkoutResult.ok) return ucpError("checkout_not_found", checkoutResult.error, 404)
+        if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
 
         const baseUrl = endpointBaseUrl(request)
         const finalCheckout = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl)
 
         const readiness = await evaluateReadiness(saleorClient, finalCheckout)
-        const session = formatUcpCheckoutSession(formatterContext, finalCheckout, readiness)
+        const session = formatUcpCheckoutSession(scope.ctx, finalCheckout, readiness)
         return Response.json(session)
       },
     },
@@ -418,41 +522,48 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        let scope = resolved
 
         const { id } = await context.params
         let body: any
         try {
           body = await request.json()
         } catch {
-          return ucpError("invalid_body", "Request body must be valid JSON", 400)
+          return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
         // Extract payment instrument
         const payment = body.payment
         if (!payment?.instruments || !Array.isArray(payment.instruments)) {
-          return ucpError("missing_payment", "payment.instruments array is required", 400, "recoverable")
+          return ucpError(scope.wire, "missing_payment", "payment.instruments array is required", 400, "recoverable")
         }
 
         const selectedInstrument = payment.instruments.find((i: any) => i.selected) || payment.instruments[0]
         if (!selectedInstrument) {
-          return ucpError("no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
-        }
-        if (!isWellFormedInstrument(selectedInstrument)) {
-          return ucpError("invalid_instrument", "Payment instrument requires string id, handler_id, type and credential.type", 400, "recoverable")
+          return ucpError(scope.wire, "no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
         }
 
         // Fetch checkout for metadata
         const checkoutResult = await saleorClient.getCheckout(id)
-        if (!checkoutResult.ok) return ucpError("checkout_not_found", checkoutResult.error, 404)
+        if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
 
         const checkout = checkoutResult.data
         const metadata = metadataToRecord(checkout.privateMetadata)
+        const pinned = pinScope(scope, metadata)
+        if (pinned instanceof Response) return pinned
+        scope = pinned
+        if (!isWellFormedInstrument(selectedInstrument)) {
+          return ucpError(scope.wire, "invalid_instrument", "Payment instrument requires handler_id", 400, "recoverable")
+        }
+        const handlerId = paymentHandlers.getAdapter(selectedInstrument.handler_id)?.id ?? selectedInstrument.handler_id
 
         // Refuse to settle on a session the agent has already cancelled.
         // Without this, an agent that aborts and retries can still sign
         // and settle against a session it thought was dead.
         if (metadata.ucp_canceled === true) {
-          return ucpError("session_canceled", "Checkout session has been canceled", 409)
+          return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
         }
 
         // Update billing address if provided on instrument. Mirror the
@@ -464,7 +575,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           const addr = ucpToSaleorAddress(selectedInstrument.billing_address)
           const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
           if (!billingResult.ok) {
-            return ucpSaleorError("billing_address_update_failed", 422, billingResult)
+            return ucpSaleorError(scope.wire, "billing_address_update_failed", 422, billingResult)
           }
         }
 
@@ -480,7 +591,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           if (storedAccepts) {
             const validation = validateSignedAgainstStored(signedSummary, storedAccepts)
             if (!validation.ok) {
-              return ucpError(validation.code, validation.message, 422)
+              return ucpError(scope.wire, validation.code, validation.message, 422)
             }
           }
         }
@@ -506,20 +617,20 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           const readiness = await evaluateReadiness(saleorClient, checkout)
           if (!readiness.ready) {
             return Response.json(
-              formatUcpCheckoutSession(formatterContext, checkout, readiness),
+              formatUcpCheckoutSession(scope.ctx, checkout, readiness),
             )
           }
 
           const settleResult = await paymentHandlers.settlePayment({
             checkoutId: id,
             protocol: "ucp",
-            handlerId: selectedInstrument.handler_id,
+            handlerId,
             instrumentType: selectedInstrument.type,
             credential: selectedInstrument.credential,
             checkoutMetadata: metadata,
           })
           if (!settleResult.success) {
-            return ucpError("payment_failed", settleResult.error || "Payment settlement failed", 422, "recoverable")
+            return ucpError(scope.wire, "payment_failed", settleResult.error || "Payment settlement failed", 422, "recoverable")
           }
           reference = settleResult.transactionReference
 
@@ -528,7 +639,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           // analog of Shopware's settlement table; the response is stored opaquely.
           if (reference) {
             const record = {
-              handlerId: selectedInstrument.handler_id,
+              handlerId,
               reference,
               amount: checkout.totalPrice.gross.amount,
               currency: checkout.totalPrice.gross.currency,
@@ -544,6 +655,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
               // double-charge).
               console.error(`[ucp-routes] settled ${reference} but failed to record settlement on ${id}: ${recResult.error}`)
               return ucpError(
+                scope.wire,
                 "settlement_not_recorded",
                 `Payment settled on-chain (reference ${reference}) but recording it failed — the order was not created. Retry to reconcile.`,
                 422,
@@ -559,9 +671,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (reference) {
           const alreadyRecorded = (checkout.transactions ?? []).some((t) => t.pspReference === reference)
           if (!alreadyRecorded) {
-            const handler = paymentHandlers.getAdapter(selectedInstrument.handler_id)
+            const handler = paymentHandlers.getAdapter(handlerId)
             const txResult = await saleorClient.createCheckoutTransaction(id, {
-              name: handler?.name ?? selectedInstrument.handler_id,
+              name: handler?.name ?? handlerId,
               pspReference: reference,
               amountCharged: {
                 amount: checkout.totalPrice.gross.amount,
@@ -573,6 +685,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
               // order failed — not payment_failed. Settlement is recorded, so a
               // retry resumes here.
               return ucpError(
+                scope.wire,
                 "order_not_recorded_after_settlement",
                 `Payment settled (reference ${reference}) but recording the order failed: ${txResult.error}. Retry to complete the order.`,
                 422,
@@ -590,13 +703,14 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           // commit) — say so, and let a retry resume without re-charging.
           if (reference) {
             return ucpError(
+              scope.wire,
               "order_not_completed_after_settlement",
               `Payment settled (reference ${reference}) but completing the order failed: ${orderResult.error}. Retry to complete the order.`,
               422,
               "recoverable",
             )
           }
-          return ucpSaleorError("checkout_complete_failed", 422, orderResult)
+          return ucpSaleorError(scope.wire, "checkout_complete_failed", 422, orderResult)
         }
 
         // Return checkout session with completed status and order confirmation
@@ -606,7 +720,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           permalink_url: `${config.storefrontUrl}/orders/${orderResult.data.id}`,
         }
 
-        const response = formatUcpCompleteResponse(formatterContext, checkout, orderConfirmation)
+        const response = formatUcpCompleteResponse(scope.ctx, checkout, orderConfirmation)
         return Response.json(response)
       },
     },
@@ -615,15 +729,21 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     // Cancel Checkout Session
     // =====================================================
     checkoutSessionCancel: {
-      async POST(_request: Request, context: { params: Promise<{ id: string }> }) {
+      async POST(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        let scope = resolved
 
         const { id } = await context.params
 
         // Verify checkout exists
         const result = await saleorClient.getCheckout(id)
-        if (!result.ok) return ucpError("checkout_not_found", result.error, 404)
+        if (!result.ok) return ucpError(scope.wire, "checkout_not_found", result.error, 404)
+        const pinned = pinScope(scope, metadataToRecord(result.data.privateMetadata))
+        if (pinned instanceof Response) return pinned
+        scope = pinned
 
         // Mark as canceled via metadata. We MUST check this write succeeded
         // before telling the agent the session is cancelled — the cancel
@@ -641,11 +761,11 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           { key: "ucp_canceled_at", value: new Date().toISOString() },
         ])
         if (!persistResult.ok) {
-          return ucpError("cancel_persist_failed", persistResult.error, 422)
+          return ucpError(scope.wire, "cancel_persist_failed", persistResult.error, 422)
         }
 
         // Return full checkout session with canceled status
-        const session = formatUcpCheckoutSession(formatterContext, result.data)
+        const session = formatUcpCheckoutSession(scope.ctx, result.data)
         return Response.json({
           ...session,
           status: "canceled",
@@ -660,12 +780,15 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async GET(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        const scope = resolved
 
         const { id } = await context.params
         const result = await saleorClient.getOrder(id)
-        if (!result.ok) return ucpError("order_not_found", result.error, 404)
+        if (!result.ok) return ucpError(scope.wire, "order_not_found", result.error, 404)
 
-        const order = formatUcpOrder(formatterContext, result.data)
+        const order = formatUcpOrder(scope.ctx, result.data)
         return Response.json(order)
       },
     },
@@ -677,12 +800,23 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        const scope = resolved
+        if (!scope.wire.supports("catalog")) {
+          return ucpError(
+            scope.wire,
+            "capabilities_incompatible",
+            `Catalog is not available in UCP version ${scope.version}.`,
+            404,
+          )
+        }
 
         let body: any
         try {
           body = await request.json()
         } catch {
-          return ucpError("invalid_body", "Request body must be valid JSON", 400)
+          return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
         const query: string = body.query ?? ""
@@ -699,9 +833,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           cursor,
         })
 
-        if (!result.ok) return ucpError("catalog_search_failed", result.error, 422)
+        if (!result.ok) return ucpError(scope.wire, "catalog_search_failed", result.error, 422)
 
-        const response = formatUcpCatalogSearch(config.ucpVersion, result.data)
+        const response = formatUcpCatalogSearch(scope.version, result.data)
         return Response.json(response)
       },
     },
@@ -713,23 +847,34 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
+        const resolved = await resolveScope(request)
+        if (resolved instanceof Response) return resolved
+        const scope = resolved
+        if (!scope.wire.supports("catalog")) {
+          return ucpError(
+            scope.wire,
+            "capabilities_incompatible",
+            `Catalog is not available in UCP version ${scope.version}.`,
+            404,
+          )
+        }
 
         let body: any
         try {
           body = await request.json()
         } catch {
-          return ucpError("invalid_body", "Request body must be valid JSON", 400)
+          return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
         const ids: string[] = Array.isArray(body.ids) ? body.ids : []
         if (ids.length === 0) {
-          return ucpError("missing_ids", "ids array is required and must not be empty", 400)
+          return ucpError(scope.wire, "missing_ids", "ids array is required and must not be empty", 400)
         }
 
         const result = await saleorClient.lookupProductsAndVariants({ ids })
-        if (!result.ok) return ucpError("catalog_lookup_failed", result.error, 422)
+        if (!result.ok) return ucpError(scope.wire, "catalog_lookup_failed", result.error, 422)
 
-        const response = formatUcpCatalogLookup(config.ucpVersion, result.data)
+        const response = formatUcpCatalogLookup(scope.version, result.data)
         return Response.json(response)
       },
     },

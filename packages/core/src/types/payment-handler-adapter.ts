@@ -36,12 +36,14 @@ export interface PaymentHandlerAdapter {
   /** Human-readable name (e.g., "Finance District Prism") */
   readonly name: string
 
+  readonly aliases?: readonly string[]
+
   /**
    * Return UCP discovery handler entries for .well-known/ucp.
    * Keyed by handler namespace (e.g., "xyz.fd.prism_payment").
    * Return empty object if nothing to advertise.
    */
-  getUcpDiscoveryHandlers(): Promise<Record<string, unknown[]>>
+  getUcpDiscoveryHandlers(ucpVersion?: string): Promise<Record<string, unknown[]>>
 
   /**
    * Return ACP discovery handler entries.
@@ -118,7 +120,7 @@ type PaymentSettleInputBase = {
 }
 
 export type PaymentSettleInput =
-  | (PaymentSettleInputBase & { protocol: "ucp"; instrumentType: string })
+  | (PaymentSettleInputBase & { protocol?: "ucp"; instrumentType?: string })
   | (PaymentSettleInputBase & { protocol: "acp" })
 
 export type PaymentSettleResult = {

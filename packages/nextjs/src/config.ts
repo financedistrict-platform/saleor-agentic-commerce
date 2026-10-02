@@ -9,14 +9,19 @@
 import {
   SaleorClient,
   PaymentHandlerRegistry,
-  UCP_VERSION,
   loadConfigFromAppCached,
+  createUcpVersionRegistry,
   type PaymentHandlerAdapter,
+  type UcpVersionRegistry,
   type FormatterContext,
   type SaleorClientOptions,
   type AppConfig,
   type AppPaymentHandlerConfig,
 } from "@financedistrict/saleor-agentic-commerce-core"
+import {
+  createAgentProfileFetcher,
+  type AgentProfileFetcher,
+} from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 
 // =====================================================
 // Configuration
@@ -71,8 +76,9 @@ export type AgenticCommerceConfig = {
   storeName?: string
   /** Store description (overrides App config if both present) */
   storeDescription?: string
-  /** UCP protocol version (default: UCP_VERSION, "2026-08-25") */
   ucpVersion?: string
+  ucpSupportedVersions?: string[]
+  ucpVersionNegotiation?: "lenient" | "strict"
   /** ACP protocol version (default: "2026-01-30") */
   acpVersion?: string
   /** API key for ACP Bearer token authentication (overrides App config) */
@@ -109,6 +115,8 @@ export type AgenticCommerceInstance = {
   saleorClient: SaleorClient
   paymentHandlers: PaymentHandlerRegistry
   formatterContext: FormatterContext
+  ucpRegistry?: UcpVersionRegistry
+  agentProfileFetcher?: AgentProfileFetcher
   config: Required<Pick<AgenticCommerceConfig, "storefrontUrl" | "ucpVersion" | "acpVersion">> &
     Pick<AgenticCommerceConfig, "storeDescription" | "acpApiKey"> &
     {
@@ -213,7 +221,12 @@ function buildInstance(
   config: AgenticCommerceConfig,
   storeName: string
 ): AgenticCommerceInstance {
-  const ucpVersion = config.ucpVersion || UCP_VERSION
+  const ucpRegistry = createUcpVersionRegistry({
+    ucpVersion: config.ucpVersion,
+    ucpSupportedVersions: config.ucpSupportedVersions,
+    ucpVersionNegotiation: config.ucpVersionNegotiation,
+  })
+  const ucpVersion = ucpRegistry.current
   const acpVersion = config.acpVersion || "2026-01-30"
 
   // Create Saleor client
@@ -242,6 +255,8 @@ function buildInstance(
     saleorClient,
     paymentHandlers,
     formatterContext,
+    ucpRegistry,
+    agentProfileFetcher: createAgentProfileFetcher(),
     config: {
       storefrontUrl: config.storefrontUrl,
       storeName,

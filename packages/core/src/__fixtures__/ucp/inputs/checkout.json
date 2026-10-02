@@ -1,0 +1,204 @@
+{
+  "id": "Q2hlY2tvdXQ6MQ==",
+  "token": "0b6f8c1e-0000-4000-8000-000000000001",
+  "email": "ada@example.com",
+  "channel": {
+    "slug": "default-channel"
+  },
+  "totalPrice": {
+    "gross": {
+      "amount": 54.97,
+      "currency": "USD"
+    },
+    "net": {
+      "amount": 50.97,
+      "currency": "USD"
+    },
+    "tax": {
+      "amount": 4,
+      "currency": "USD"
+    }
+  },
+  "subtotalPrice": {
+    "gross": {
+      "amount": 44.97,
+      "currency": "USD"
+    },
+    "net": {
+      "amount": 44.97,
+      "currency": "USD"
+    },
+    "tax": {
+      "amount": 0,
+      "currency": "USD"
+    }
+  },
+  "shippingPrice": {
+    "gross": {
+      "amount": 6,
+      "currency": "USD"
+    },
+    "net": {
+      "amount": 6,
+      "currency": "USD"
+    },
+    "tax": {
+      "amount": 0,
+      "currency": "USD"
+    }
+  },
+  "discount": null,
+  "lines": [
+    {
+      "id": "Q2hlY2tvdXRMaW5lOj1",
+      "quantity": 1,
+      "totalPrice": {
+        "gross": {
+          "amount": 24.99,
+          "currency": "USD"
+        },
+        "net": {
+          "amount": 24.99,
+          "currency": "USD"
+        },
+        "tax": {
+          "amount": 0,
+          "currency": "USD"
+        }
+      },
+      "unitPrice": {
+        "gross": {
+          "amount": 24.99,
+          "currency": "USD"
+        },
+        "net": {
+          "amount": 24.99,
+          "currency": "USD"
+        },
+        "tax": {
+          "amount": 0,
+          "currency": "USD"
+        }
+      },
+      "variant": {
+        "id": "UHJvZHVjdFZhcmlhbnQ61",
+        "name": "1kg",
+        "sku": "SKU-1",
+        "product": {
+          "id": "UHJvZHVjdDo1",
+          "name": "Coffee Beans",
+          "slug": "coffee-beans",
+          "thumbnail": {
+            "url": "https://cdn.store.test/p1.png"
+          }
+        }
+      }
+    },
+    {
+      "id": "Q2hlY2tvdXRMaW5lOj2",
+      "quantity": 2,
+      "totalPrice": {
+        "gross": {
+          "amount": 19.98,
+          "currency": "USD"
+        },
+        "net": {
+          "amount": 19.98,
+          "currency": "USD"
+        },
+        "tax": {
+          "amount": 0,
+          "currency": "USD"
+        }
+      },
+      "unitPrice": {
+        "gross": {
+          "amount": 9.99,
+          "currency": "USD"
+        },
+        "net": {
+          "amount": 9.99,
+          "currency": "USD"
+        },
+        "tax": {
+          "amount": 0,
+          "currency": "USD"
+        }
+      },
+      "variant": {
+        "id": "UHJvZHVjdFZhcmlhbnQ62",
+        "name": "Large",
+        "sku": "SKU-2",
+        "product": {
+          "id": "UHJvZHVjdDo2",
+          "name": "Tea Sampler",
+          "slug": "tea-sampler",
+          "thumbnail": null
+        }
+      }
+    }
+  ],
+  "shippingAddress": {
+    "firstName": "Ada",
+    "lastName": "Lovelace",
+    "streetAddress1": "1 Main St",
+    "streetAddress2": "",
+    "city": "Springfield",
+    "countryArea": "IL",
+    "postalCode": "62701",
+    "country": {
+      "code": "US",
+      "country": "United States of America"
+    },
+    "phone": "+15555550100"
+  },
+  "billingAddress": {
+    "firstName": "Ada",
+    "lastName": "Lovelace",
+    "streetAddress1": "1 Main St",
+    "streetAddress2": "",
+    "city": "Springfield",
+    "countryArea": "IL",
+    "postalCode": "62701",
+    "country": {
+      "code": "US",
+      "country": "United States of America"
+    },
+    "phone": "+15555550100"
+  },
+  "shippingMethods": [
+    {
+      "id": "U2hpcHBpbmdNZXRob2Q6MQ==",
+      "name": "Standard",
+      "price": {
+        "amount": 6,
+        "currency": "USD"
+      },
+      "minimumDeliveryDays": null,
+      "maximumDeliveryDays": null
+    },
+    {
+      "id": "U2hpcHBpbmdNZXRob2Q6Mg==",
+      "name": "Express",
+      "price": {
+        "amount": 15,
+        "currency": "USD"
+      },
+      "minimumDeliveryDays": null,
+      "maximumDeliveryDays": null
+    }
+  ],
+  "deliveryMethod": {
+    "__typename": "ShippingMethod",
+    "id": "U2hpcHBpbmdNZXRob2Q6MQ==",
+    "name": "Standard"
+  },
+  "transactions": [],
+  "metadata": [],
+  "privateMetadata": [
+    {
+      "key": "xyz.fd.prism_payment",
+      "value": "{\"ucp\":{\"xyz.fd.prism_payment\":[{\"id\":\"x402\",\"version\":\"2026-01-15\",\"config\":{\"x402Version\":2,\"resource\":{\"url\":\"https://gw.example/checkout/1\",\"description\":\"Order checkout at Demo Store\"},\"accepts\":[{\"scheme\":\"exact\",\"network\":\"eip155:84532\",\"payTo\":\"0x1111111111111111111111111111111111111111\",\"maxTimeoutSeconds\":300,\"asset\":\"0x036CbD53842c5426634e7929541eC2318f3dCF7e\",\"extra\":{\"name\":\"USDC\",\"version\":\"2\"},\"amount\":\"1000000\"}]}}]},\"acp\":null,\"preparedAmount\":5497,\"preparedResourceUrl\":\"https://store.test/api/ucp/checkout-sessions/Q2hlY2tvdXQ6MQ==\"}"
+    }
+  ]
+}
