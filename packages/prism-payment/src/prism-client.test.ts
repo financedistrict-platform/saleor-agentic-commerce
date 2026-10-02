@@ -100,4 +100,17 @@ describe("PrismClient — payload formatting", () => {
     expect(init.headers["User-Agent"]).toBe("fd-saleor-prism/2026-01-23")
     expect(JSON.parse(init.body as string)).toEqual({ x402Version: 2, paymentPayload: { a: 1 }, paymentRequirements: { b: 2 } })
   })
+
+  it.each([
+    ["fetchUcpHandlers", (c: PrismClient) => c.fetchUcpHandlers(undefined as unknown as string)],
+    ["fetchAcpHandlers", (c: PrismClient) => c.fetchAcpHandlers("1.1.0")],
+    ["prepareUcpPayment", (c: PrismClient) => c.prepareUcpPayment({ ucpVersion: undefined as unknown as string, amount: 1, currency: "USD", resourceUrl: "https://store.test/c" })],
+    ["prepareAcpPayment", (c: PrismClient) => c.prepareAcpPayment({ ucpVersion: "", amount: 1, currency: "USD", resourceUrl: "https://store.test/c" })],
+    ["settle", (c: PrismClient) => c.settle({ ucpVersion: undefined as unknown as string, paymentPayload: {}, paymentRequirements: {} })],
+  ])("%s rejects a non-date UCP version without sending a request", async (_name, call) => {
+    const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
+
+    await expect(call(client)).rejects.toThrow(/Invalid UCP version .*upgrade .*core/)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
