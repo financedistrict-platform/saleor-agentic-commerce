@@ -1,8 +1,6 @@
 /**
  * UCP (Universal Commerce Protocol) Types
  *
- * Based on UCP spec version 2026-08-25
- * https://ucp.dev/2026-08-25/specification/overview
  */
 
 // =====================================================
@@ -17,6 +15,7 @@ export type UcpProfile = {
     payment_handlers?: Record<string, unknown[]>
     supported_versions?: Record<string, string>
   }
+  signing_keys?: unknown[]
 }
 
 export type UcpService = {

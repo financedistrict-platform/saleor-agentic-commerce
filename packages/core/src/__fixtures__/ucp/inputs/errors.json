@@ -1,0 +1,7 @@
+{
+  "invalid_instrument": {
+    "code": "invalid_instrument",
+    "content": "Payment instrument requires handler_id",
+    "severity": "recoverable"
+  }
+}

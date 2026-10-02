@@ -16,6 +16,12 @@
  * full OpenAPI spec.
  */
 
+import { PACKAGE_VERSION } from "./package-version.js"
+
+const PRISM_USER_AGENT = `fd-saleor-prism/${PACKAGE_VERSION}`
+const PRISM_UCP_HANDLER_ID = "xyz.fd.prism_payment"
+const PRISM_UCP_HANDLER_IDS: readonly unknown[] = [PRISM_UCP_HANDLER_ID, "x402"]
+
 // =====================================================
 // Shared payment-requirements input
 // =====================================================
@@ -70,12 +76,29 @@ export type UcpHandlerDiscoveryEntry = {
   version: string
   spec: string
   schema: string
-  available_instruments: { type: string }[]
+  available_instruments?: { type: string }[]
+  config_schema?: string
+  instrument_schemas?: string[]
   config: unknown
 }
 
 /** UCP discovery response: `{ "xyz.fd.prism_payment": [...] }` */
 export type UcpHandlersDiscoveryResponse = Record<string, UcpHandlerDiscoveryEntry[]>
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0
+}
+
+export function canonicalUcpHandlerEntry(entry: unknown): UcpHandlerDiscoveryEntry | null {
+  if (typeof entry !== "object" || entry === null) return null
+  const raw = entry as Record<string, unknown>
+  const schema = nonEmptyString(raw.schema) ? raw.schema : raw.config_schema
+  if (!PRISM_UCP_HANDLER_IDS.includes(raw.id)) return null
+  if (!nonEmptyString(raw.version) || !nonEmptyString(raw.spec) || !nonEmptyString(schema)) return null
+  if (raw.available_instruments !== undefined && !Array.isArray(raw.available_instruments)) return null
+  if (raw.instrument_schemas !== undefined && !Array.isArray(raw.instrument_schemas)) return null
+  return { ...raw, id: PRISM_UCP_HANDLER_ID, schema } as UcpHandlerDiscoveryEntry
+}
 
 /** A single UCP checkout-prepare entry — same namespace keying, smaller shape */
 export type UcpCheckoutHandlerEntry = {
@@ -168,12 +191,13 @@ export class PrismClient {
   // UCP
   // -------------------------------------------------
 
-  async fetchUcpHandlers(): Promise<UcpHandlersDiscoveryResponse> {
+  async fetchUcpHandlers(ucpVersion?: string): Promise<UcpHandlersDiscoveryResponse> {
     if (!this.apiKey) {
       console.warn("[prism-client] No PRISM_API_KEY configured, returning empty UCP handlers")
       return {}
     }
-    return this.get<UcpHandlersDiscoveryResponse>("/api/v2/merchant/ucp/handlers")
+    const query = ucpVersion ? `?ucp_version=${encodeURIComponent(ucpVersion)}` : ""
+    return this.get<UcpHandlersDiscoveryResponse>(`/api/v2/merchant/ucp/handlers${query}`)
   }
 
   async prepareUcpPayment(input: PreparePaymentInput): Promise<UcpCheckoutPrepareResponse> {
@@ -223,6 +247,7 @@ export class PrismClient {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": this.apiKey,
+        "User-Agent": PRISM_USER_AGENT,
       },
       body: JSON.stringify({ x402Version: 2, ...input }),
     })
@@ -258,7 +283,7 @@ export class PrismClient {
   private async get<T>(path: string): Promise<T> {
     const response = await fetch(`${this.apiUrl}${path}`, {
       method: "GET",
-      headers: { "X-API-Key": this.apiKey },
+      headers: { "X-API-Key": this.apiKey, "User-Agent": PRISM_USER_AGENT },
     })
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error")
@@ -273,6 +298,7 @@ export class PrismClient {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": this.apiKey,
+        "User-Agent": PRISM_USER_AGENT,
       },
       body: JSON.stringify(body),
     })

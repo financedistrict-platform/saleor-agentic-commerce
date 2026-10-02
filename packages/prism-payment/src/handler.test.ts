@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { describe, it, expect, vi } from "vitest"
 import { PrismPaymentHandler, PRISM_HANDLER_ID } from "./handler.js"
+import { PrismClient } from "./prism-client.js"
 import { samplePaymentHandlerConfig, sampleAcpHandler } from "./__tests__/acp-handler-fixture.js"
 import type {
   AcpHandler,
@@ -454,14 +458,14 @@ describe("PrismPaymentHandler — settlement", () => {
     },
   }
 
-  it("rejects an instrument whose type is not x402 without settling", async () => {
+  it("rejects an instrument whose type is not an x402-era type without settling", async () => {
     const { handler, mock } = makeHandler()
 
     const result = await handler.settlePayment({
       checkoutId: "abc",
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
-      instrumentType: "tokenized",
+      instrumentType: "card",
       credential: { type: "x402", x402Version: 2, network: "base-sepolia", payload: {} },
       checkoutMetadata: storedUcpOnly,
     })
@@ -478,7 +482,7 @@ describe("PrismPaymentHandler — settlement", () => {
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
       instrumentType: "x402",
-      credential: { x402Version: 2, network: "base-sepolia", payload: {} },
+      credential: { type: "card", x402Version: 2, network: "base-sepolia", payload: {} },
       checkoutMetadata: storedUcpOnly,
     })
 
@@ -555,5 +559,103 @@ describe("PrismPaymentHandler — settlement", () => {
     expect(result.success).toBe(false)
     expect(result.error).toMatch(/could not match/i)
     expect(mock.settle).not.toHaveBeenCalled()
+  })
+})
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const PACKAGE_VERSION = JSON.parse(readFileSync(join(HERE, "..", "package.json"), "utf8")).version
+const recordedPrism = (name: string) =>
+  JSON.parse(readFileSync(join(HERE, "..", "..", "core", "src", "__fixtures__", "prism", name), "utf8"))
+
+describe("PrismPaymentHandler — multi-version UCP", () => {
+  it("sends the plugin User-Agent and the requested ucp_version to Prism", async () => {
+    const calls: { url: string; headers: Record<string, string> }[] = []
+    const original = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), headers: { ...(init?.headers as Record<string, string>) } })
+      return new Response(JSON.stringify({ success: true, transaction: "0x1" }), { status: 200 })
+    }) as typeof fetch
+    try {
+      const client = new PrismClient({ apiUrl: "https://gw.example", apiKey: "k" })
+      await client.fetchUcpHandlers("2026-01-23")
+      await client.fetchUcpHandlers()
+      await client.settle({ paymentPayload: {}, paymentRequirements: {} })
+      await client.prepareUcpPayment({ amount: 100, currency: "USD", resourceUrl: "https://store.test/c/1" })
+    } finally {
+      globalThis.fetch = original
+    }
+
+    expect(calls.map((c) => c.url)).toEqual([
+      "https://gw.example/api/v2/merchant/ucp/handlers?ucp_version=2026-01-23",
+      "https://gw.example/api/v2/merchant/ucp/handlers",
+      "https://gw.example/api/v2/payment/settle",
+      "https://gw.example/api/v2/merchant/ucp/payment-requirements",
+    ])
+    for (const call of calls) expect(call.headers["User-Agent"]).toBe(`fd-saleor-prism/${PACKAGE_VERSION}`)
+  })
+
+  it("caches discovery per UCP version", async () => {
+    const { handler, mock } = makeHandler()
+    mock.fetchUcpHandlers.mockImplementation(async (version?: string) => recordedPrism(`current-handlers-${version}.json`))
+
+    await handler.getUcpDiscoveryHandlers("2026-04-08")
+    await handler.getUcpDiscoveryHandlers("2026-01-23")
+    await handler.getUcpDiscoveryHandlers("2026-04-08")
+    const v0123 = await handler.getUcpDiscoveryHandlers("2026-01-23")
+
+    expect(mock.fetchUcpHandlers.mock.calls).toEqual([["2026-04-08"], ["2026-01-23"]])
+    expect(v0123[PRISM_HANDLER_ID][0].spec).toContain("2026-01-23")
+  })
+
+  it("accepts a 2026-01-23 entry without available_instruments", async () => {
+    const { handler, mock } = makeHandler()
+    mock.fetchUcpHandlers.mockResolvedValue(recordedPrism("current-handlers-2026-01-23.json"))
+    const [entry] = (await handler.getUcpDiscoveryHandlers("2026-01-23"))[PRISM_HANDLER_ID]
+    expect(entry.available_instruments).toBeUndefined()
+    expect(entry.schema).toBe("https://gw.example/ucp/2026-01-23/schema.json")
+  })
+
+  it.each(["legacy-handlers.json", "legacy-namespace-id-handlers.json"])(
+    "maps the legacy entry in %s to one canonical entry",
+    async (fixture) => {
+      const { handler, mock } = makeHandler()
+      mock.fetchUcpHandlers.mockResolvedValue(recordedPrism(fixture))
+      const discovered = await handler.getUcpDiscoveryHandlers("2026-04-08")
+
+      expect(discovered[PRISM_HANDLER_ID]).toHaveLength(1)
+      expect(discovered[PRISM_HANDLER_ID][0]).toMatchObject({
+        id: PRISM_HANDLER_ID,
+        version: "2026-01-15",
+        spec: "https://gw.example/ucp/prism.md",
+        schema: "https://gw.example/ucp/schema.json",
+        config: {},
+      })
+    },
+  )
+
+  it("answers to the x402 alias", () => {
+    expect(new PrismPaymentHandler({ apiKey: "k" }).aliases).toEqual(["x402"])
+  })
+
+  it.each([
+    ["tokenized", { type: "x402" }],
+    ["default", { type: "x402" }],
+    [undefined, { type: "x402" }],
+    ["x402", {}],
+    [undefined, {}],
+  ])("settles an original-era instrument with type %s and credential %j", async (instrumentType, credentialType) => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+    const result = await handler.settlePayment({
+      checkoutId: "abc",
+      handlerId: PRISM_HANDLER_ID,
+      instrumentType,
+      credential: { ...credentialType, x402Version: 2, network: "base-sepolia", payload: {} },
+      checkoutMetadata: {
+        [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedResourceUrl: "https://store.test/checkout/abc" },
+      },
+    })
+
+    expect(result).toEqual({ success: true, transactionReference: "0xabc" })
   })
 })

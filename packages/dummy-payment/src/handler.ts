@@ -94,7 +94,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   // Discovery
   // -------------------------------------------------
 
-  async getUcpDiscoveryHandlers(): Promise<Record<string, unknown[]>> {
+  async getUcpDiscoveryHandlers(_ucpVersion?: string): Promise<Record<string, unknown[]>> {
     return {
       [DUMMY_HANDLER_ID]: [
         {

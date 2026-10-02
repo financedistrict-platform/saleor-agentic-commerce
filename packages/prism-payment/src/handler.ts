@@ -18,6 +18,7 @@ import type {
 } from "@financedistrict/saleor-agentic-commerce-core"
 import {
   PrismClient,
+  canonicalUcpHandlerEntry,
   type AcpHandler,
   type PaymentHandlerConfig,
   type UcpCheckoutPrepareResponse,
@@ -31,6 +32,9 @@ import {
 
 export const PRISM_HANDLER_ID = "xyz.fd.prism_payment"
 export const PRISM_INSTRUMENT_TYPE = "x402"
+const PRISM_HANDLER_ALIASES: readonly string[] = ["x402"]
+const ORIGINAL_INSTRUMENT_TYPES: readonly (string | undefined)[] = [PRISM_INSTRUMENT_TYPE, "tokenized", "default", undefined]
+const ORIGINAL_CREDENTIAL_TYPES: readonly (string | undefined)[] = [PRISM_INSTRUMENT_TYPE, undefined]
 
 /**
  * Re-exported for back-compat readers of older Saleor checkout metadata.
@@ -70,19 +74,21 @@ export type PrismPaymentHandlerOptions = {
 export class PrismPaymentHandler implements PaymentHandlerAdapter {
   readonly id = PRISM_HANDLER_ID
   readonly name = "Finance District Prism"
+  readonly aliases = PRISM_HANDLER_ALIASES
 
   private client: PrismClient
+  private readonly apiUrl: string
 
-  /** Cached UCP discovery response (5 min TTL) */
-  private ucpDiscoveryCache: { data: UcpHandlersDiscoveryResponse; expiry: number } | null = null
+  private ucpDiscoveryCache = new Map<string, { data: UcpHandlersDiscoveryResponse; expiry: number }>()
   /** Cached ACP discovery response (5 min TTL) */
   private acpDiscoveryCache: { data: AcpHandler[]; expiry: number } | null = null
   private readonly DISCOVERY_TTL = 5 * 60 * 1000
-  private ucpDiscoveryRetryAt = 0
+  private ucpDiscoveryRetryAt = new Map<string, number>()
   private readonly DISCOVERY_FAILURE_TTL = 60 * 1000
 
   constructor(options: PrismPaymentHandlerOptions = {}) {
     const apiUrl = options.apiUrl || process.env.PRISM_API_URL || "https://prism-gw.fd.xyz"
+    this.apiUrl = apiUrl
     this.client = new PrismClient({
       apiUrl,
       apiKey: options.apiKey,
@@ -93,8 +99,8 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // Discovery
   // -------------------------------------------------
 
-  async getUcpDiscoveryHandlers(): Promise<UcpHandlersDiscoveryResponse> {
-    return this.fetchUcpDiscovery()
+  async getUcpDiscoveryHandlers(ucpVersion?: string): Promise<UcpHandlersDiscoveryResponse> {
+    return this.fetchUcpDiscovery(ucpVersion)
   }
 
   async getAcpDiscoveryHandlers(): Promise<AcpHandler[]> {
@@ -169,8 +175,9 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     const { credential, checkoutMetadata } = input
 
     if (
-      input.protocol === "ucp" &&
-      (input.instrumentType !== PRISM_INSTRUMENT_TYPE || readString(credential, "type") !== PRISM_INSTRUMENT_TYPE)
+      input.protocol !== "acp" &&
+      (!ORIGINAL_INSTRUMENT_TYPES.includes(input.instrumentType || undefined) ||
+        !ORIGINAL_CREDENTIAL_TYPES.includes(readString(credential, "type")))
     ) {
       return { success: false, error: `Prism instrument and credential type must be "${PRISM_INSTRUMENT_TYPE}"` }
     }
@@ -241,22 +248,23 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   // Internal
   // -------------------------------------------------
 
-  private async fetchUcpDiscovery(): Promise<UcpHandlersDiscoveryResponse> {
+  private async fetchUcpDiscovery(ucpVersion?: string): Promise<UcpHandlersDiscoveryResponse> {
     const now = Date.now()
-    const cache = this.ucpDiscoveryCache
-    if (cache && now < cache.expiry && isContractEntry(cache.data)) return cache.data
-    if (now < this.ucpDiscoveryRetryAt) return {}
+    const key = `${this.apiUrl}|${ucpVersion ?? ""}`
+    const cache = this.ucpDiscoveryCache.get(key)
+    if (cache && now < cache.expiry) return cache.data
+    if (now < (this.ucpDiscoveryRetryAt.get(key) ?? 0)) return {}
     try {
-      const fetched = await this.client.fetchUcpHandlers()
-      if (!isContractEntry(fetched)) {
+      const entry = firstCanonicalEntry(await this.client.fetchUcpHandlers(ucpVersion))
+      if (!entry) {
         throw new Error(`malformed ${PRISM_HANDLER_ID} entry (need id, version, spec, schema)`)
       }
-      const data = { [PRISM_HANDLER_ID]: [fetched[PRISM_HANDLER_ID][0]] }
-      this.ucpDiscoveryCache = { data, expiry: now + this.DISCOVERY_TTL }
+      const data = { [PRISM_HANDLER_ID]: [entry] }
+      this.ucpDiscoveryCache.set(key, { data, expiry: now + this.DISCOVERY_TTL })
       return data
     } catch (error: unknown) {
       console.error(`[prism-handler] UCP discovery failed: ${error}`)
-      this.ucpDiscoveryRetryAt = now + this.DISCOVERY_FAILURE_TTL
+      this.ucpDiscoveryRetryAt.set(key, now + this.DISCOVERY_FAILURE_TTL)
       return {}
     }
   }
@@ -310,17 +318,15 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   }
 }
 
-export function isContractEntry(data: unknown): data is UcpHandlersDiscoveryResponse {
-  if (typeof data !== "object" || data === null) return false
+function firstCanonicalEntry(data: unknown) {
+  if (typeof data !== "object" || data === null) return null
   const entries = (data as Record<string, unknown>)[PRISM_HANDLER_ID]
-  if (!Array.isArray(entries) || entries.length === 0) return false
-  const entry: unknown = entries[0]
-  return (
-    readString(entry, "id") === PRISM_HANDLER_ID &&
-    readString(entry, "version") !== undefined &&
-    readString(entry, "spec") !== undefined &&
-    readString(entry, "schema") !== undefined
-  )
+  if (!Array.isArray(entries) || entries.length === 0) return null
+  return canonicalUcpHandlerEntry(entries[0])
+}
+
+export function isContractEntry(data: unknown): data is UcpHandlersDiscoveryResponse {
+  return firstCanonicalEntry(data) !== null
 }
 
 /**

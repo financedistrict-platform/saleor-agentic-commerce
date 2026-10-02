@@ -18,18 +18,24 @@ describe("isWellFormedInstrument", () => {
     expect(isWellFormedInstrument(withoutCredential)).toBe(true)
   })
 
-  it.each(["id", "handler_id", "type"])("rejects an instrument missing %s", (key) => {
-    const instrument: Record<string, unknown> = { ...valid }
-    delete instrument[key]
-    expect(isWellFormedInstrument(instrument)).toBe(false)
+  it("rejects an instrument missing handler_id", () => {
+    const { handler_id: _handlerId, ...withoutHandler } = valid
+    expect(isWellFormedInstrument(withoutHandler)).toBe(false)
   })
 
-  it("rejects a credential without type", () => {
-    expect(isWellFormedInstrument({ ...valid, credential: { x402Version: 2 } })).toBe(false)
+  it.each([
+    ["no id", { handler_id: "xyz.fd.prism_payment", type: "x402", credential: { type: "x402" } }],
+    ["type tokenized", { ...valid, type: "tokenized" }],
+    ["type default", { ...valid, type: "default" }],
+    ["no type", { id: "inst_1", handler_id: "xyz.fd.prism_payment", credential: { type: "x402" } }],
+    ["credential without type", { ...valid, credential: { x402Version: 2 } }],
+    ["handler_id x402", { ...valid, handler_id: "x402" }],
+  ])("accepts an original-era instrument with %s", (_label, instrument) => {
+    expect(isWellFormedInstrument(instrument)).toBe(true)
   })
 
-  it("rejects a non-string credential type", () => {
-    expect(isWellFormedInstrument({ ...valid, credential: { type: 402 } })).toBe(false)
+  it("rejects a non-object credential", () => {
+    expect(isWellFormedInstrument({ ...valid, credential: "x402" })).toBe(false)
   })
 
   it("rejects a non-object instrument", () => {
