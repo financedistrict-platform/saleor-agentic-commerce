@@ -4,7 +4,7 @@ import { parseUcpHeaders } from "./ucp-headers.js"
 
 export const UCP_VERSION_METADATA_KEY = "ucp_version"
 
-export type UcpProfileOutcome = "none" | "matched" | "undeclared" | "unknown" | "unreachable" | "disabled"
+export type UcpProfileOutcome = "none" | "matched" | "undeclared" | "unknown" | "unreachable" | "redirected" | "disabled"
 
 export type UcpResolutionRejection = {
   status: 422 | 424
@@ -18,6 +18,7 @@ export type UcpResolution = {
   outcome: UcpProfileOutcome
   declared?: string
   host?: string
+  location?: string
   rejection?: UcpResolutionRejection
 }
 
@@ -45,8 +46,11 @@ function served(
   outcome: UcpProfileOutcome,
   declared?: string,
   host?: string,
+  location?: string,
 ): UcpResolution {
-  return { version, wire: registry.wire(version), outcome, declared, host }
+  const resolution: UcpResolution = { version, wire: registry.wire(version), outcome, declared, host }
+  if (location !== undefined) resolution.location = location
+  return resolution
 }
 
 function rejected(
@@ -55,8 +59,9 @@ function rejected(
   rejection: UcpResolutionRejection,
   declared?: string,
   host?: string,
+  location?: string,
 ): UcpResolution {
-  return { ...served(registry, registry.current, outcome, declared, host), rejection }
+  return { ...served(registry, registry.current, outcome, declared, host, location), rejection }
 }
 
 export async function resolveUcpVersion(
@@ -72,11 +77,27 @@ export async function resolveUcpVersion(
   const declared = profile.status === "ok" && profile.version ? profile.version : undefined
 
   let outcome: UcpProfileOutcome
-  if (profile.status !== "ok") outcome = "unreachable"
-  else if (!declared) outcome = "undeclared"
-  else if (!registry.isKnown(declared)) outcome = "unknown"
-  else if (!registry.isEnabled(declared)) outcome = "disabled"
-  else outcome = "matched"
+  let location: string | undefined
+  switch (profile.status) {
+    case "ok":
+      if (!declared) outcome = "undeclared"
+      else if (!registry.isKnown(declared)) outcome = "unknown"
+      else if (!registry.isEnabled(declared)) outcome = "disabled"
+      else outcome = "matched"
+      break
+    case "redirected":
+      outcome = "redirected"
+      location = profile.location ?? undefined
+      break
+    case "failed":
+    case "busy":
+      outcome = "unreachable"
+      break
+    default: {
+      const unhandled: never = profile
+      throw new Error(`Unhandled agent profile status: ${JSON.stringify(unhandled)}`)
+    }
+  }
 
   if (outcome === "matched") return served(registry, declared!, outcome, declared, host)
 
@@ -86,6 +107,16 @@ export async function resolveUcpVersion(
       code: "version_unsupported",
       content: unsupportedVersionMessage(registry, declared!),
     }, declared, host)
+  }
+
+  if (outcome === "redirected") {
+    return rejected(registry, outcome, {
+      status: 424,
+      code: "profile_redirected",
+      content: location
+        ? `Agent profile URL redirects to ${location}; use the final URL.`
+        : "Agent profile URL redirects; use the final URL.",
+    }, declared, host, location)
   }
 
   if (registry.negotiation === "strict") {
@@ -124,9 +155,11 @@ export function sessionPinFor(resolution: UcpResolution): string | undefined {
 
 export function logUcpResolution(resolution: UcpResolution): void {
   if (resolution.outcome === "none" || resolution.outcome === "matched") return
-  console.warn(JSON.stringify({
+  const entry: Record<string, string | null> = {
     ucp_profile_resolution: resolution.outcome,
     served: resolution.version,
     host: resolution.host ?? "",
-  }))
+  }
+  if (resolution.outcome === "redirected") entry.location = resolution.location ?? null
+  console.warn(JSON.stringify(entry))
 }

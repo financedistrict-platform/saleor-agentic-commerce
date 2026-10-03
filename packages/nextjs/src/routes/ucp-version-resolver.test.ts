@@ -11,6 +11,8 @@ import {
   AGENT_0408,
   AGENT_0825,
   AGENT_DOWN,
+  AGENT_REDIRECTED,
+  AGENT_REDIRECTED_NO_LOCATION,
   AGENT_UNDECLARED,
   AGENT_UNKNOWN,
   fixedFetcher,
@@ -82,6 +84,26 @@ describe("resolveUcpVersion", () => {
       status: 422,
       code: "version_unsupported",
       content: "Version 2027-01-01 is not supported. This business implements versions 2026-04-08, 2026-08-25, 2026-01-23.",
+    })
+  })
+
+  it.each([lenient, strict])("rejects a redirected profile with 424 and the location", async (registry) => {
+    const resolution = await resolve(registry, AGENT_REDIRECTED)
+    expect(resolution).toMatchObject({ outcome: "redirected", location: "https://elsewhere.example/profile" })
+    expect(resolution.rejection).toEqual({
+      status: 424,
+      code: "profile_redirected",
+      content: "Agent profile URL redirects to https://elsewhere.example/profile; use the final URL.",
+    })
+  })
+
+  it.each([lenient, strict])("rejects a redirected profile without a location", async (registry) => {
+    const resolution = await resolve(registry, AGENT_REDIRECTED_NO_LOCATION)
+    expect(resolution.outcome).toBe("redirected")
+    expect(resolution.rejection).toEqual({
+      status: 424,
+      code: "profile_redirected",
+      content: "Agent profile URL redirects; use the final URL.",
     })
   })
 
@@ -175,5 +197,18 @@ describe("logUcpResolution", () => {
       served: "2026-04-08",
       host: "agent.example",
     })
+  })
+
+  it("writes the location for a redirected profile", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    logUcpResolution(await resolve(lenient, AGENT_REDIRECTED))
+    logUcpResolution(await resolve(lenient, AGENT_REDIRECTED_NO_LOCATION))
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toEqual({
+      ucp_profile_resolution: "redirected",
+      served: "2026-04-08",
+      host: "agent.example",
+      location: "https://elsewhere.example/profile",
+    })
+    expect(JSON.parse(String(warn.mock.calls[1][0])).location).toBeNull()
   })
 })
