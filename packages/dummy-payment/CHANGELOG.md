@@ -1,5 +1,11 @@
 # @financedistrict/saleor-dummy-payment
 
+## 2.1.2
+
+### Patch Changes
+
+- [#91](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/91) [`573f659`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/573f659802348463139886267d049b5d47bc5d9b) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - The nextjs, prism-payment and dummy-payment packages now share one version line, so a storefront that installs all three at the same version always finds a matching release, rc snapshots included.
+
 ## 2.1.0
 
 ### Minor Changes

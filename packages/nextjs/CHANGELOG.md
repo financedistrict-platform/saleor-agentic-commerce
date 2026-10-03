@@ -1,5 +1,13 @@
 # @financedistrict/saleor-agentic-commerce-nextjs
 
+## 2.1.2
+
+### Patch Changes
+
+- [#91](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/91) [`573f659`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/573f659802348463139886267d049b5d47bc5d9b) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - The Prism ACP discovery cache is keyed by UCP version, so a store serving several UCP versions never returns a handler entry cached for another version. The prism-payment README examples pass the required `ucpVersion` to `getUcpDiscoveryHandlers` and `getAcpDiscoveryHandlers`. Core and nextjs are released together with prism-payment so the three packages stay on one patch line.
+
+- [#91](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/91) [`573f659`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/573f659802348463139886267d049b5d47bc5d9b) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - The UCP agent-profile fetcher follows one same-origin redirect (301, 302, 303, 307, 308), so a profile URL that redirects by a trailing slash no longer falls back to the default version. Any other redirect (cross-origin, scheme change, credentials in the URL, or a second redirect) is rejected with 424 `profile_redirected` in both lenient and strict negotiation. The message names the Location and the structured log line carries it. Core and nextjs are released together with prism-payment so the three packages stay on one patch line.
+
 ## 2.1.1
 
 ### Patch Changes
