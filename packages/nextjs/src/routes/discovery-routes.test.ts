@@ -40,15 +40,15 @@ describe("GET /.well-known/ucp", () => {
     })
   })
 
-  it("asks Prism for the served version with the plugin User-Agent", async () => {
+  it("asks Prism for the served version in the path with the plugin User-Agent", async () => {
     const gateway = stubPrismGateway()
     try {
       const { routes } = buildRoutes({ prism: true, config: PINNED_0408_CONFIG })
       const profile = await (await routes.discovery.GET(ucpRequest(WELL_KNOWN))).json()
-      const discovery = gateway.requests.filter((r) => r.url.includes("/ucp/handlers"))
+      const discovery = gateway.requests.filter((r) => r.url.endsWith("/handlers"))
 
-      expect(discovery.map((r) => r.url)).toEqual(["https://gw.example/api/v2/merchant/ucp/handlers"])
-      expect(discovery[0].headers["User-Agent"]).toBe("fd-saleor-prism/2026-04-08")
+      expect(discovery.map((r) => r.url)).toEqual(["https://gw.example/api/v2/merchant/ucp/2026-04-08/handlers"])
+      expect(discovery[0].headers["User-Agent"]).toMatch(/^fd-saleor-prism\/\d+\.\d+\.\d+/)
       expect(profile.ucp.payment_handlers["xyz.fd.prism_payment"][0].id).toBe("xyz.fd.prism_payment")
     } finally {
       gateway.restore()

@@ -3,7 +3,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, it, expect, vi } from "vitest"
 import { PrismPaymentHandler, PRISM_HANDLER_ID } from "./handler.js"
-import { PrismClient } from "./prism-client.js"
+import { PrismClient, PRISM_USER_AGENT } from "./prism-client.js"
 import { samplePaymentHandlerConfig, sampleAcpHandler } from "./__tests__/acp-handler-fixture.js"
 import type {
   AcpHandler,
@@ -358,7 +358,6 @@ describe("PrismPaymentHandler — settlement", () => {
     expect(result.success).toBe(true)
     expect(result.transactionReference).toBe("0xdeadbeef")
     expect(mock.settle).toHaveBeenCalledWith({
-      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: credential,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -388,7 +387,6 @@ describe("PrismPaymentHandler — settlement", () => {
     })
 
     expect(mock.settle).toHaveBeenCalledWith({
-      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: credential,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -418,7 +416,6 @@ describe("PrismPaymentHandler — settlement", () => {
 
     expect(result.success).toBe(true)
     expect(mock.settle).toHaveBeenCalledWith({
-      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: credential,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -456,7 +453,6 @@ describe("PrismPaymentHandler — settlement", () => {
     })
 
     expect(mock.settle).toHaveBeenCalledWith({
-      ucpVersion: TEST_UCP_VERSION,
       paymentPayload: expect.anything(),
       paymentRequirements: baseEntry,
     })
@@ -522,7 +518,6 @@ describe("PrismPaymentHandler — settlement", () => {
 
     expect(result.success).toBe(true)
     expect(mock.settle).toHaveBeenCalledWith({
-      ucpVersion: TEST_UCP_VERSION,
       paymentPayload,
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
@@ -586,7 +581,7 @@ const recordedPrism = (name: string) =>
   JSON.parse(readFileSync(join(HERE, "..", "..", "core", "src", "__fixtures__", "prism", name), "utf8"))
 
 describe("PrismPaymentHandler — multi-version UCP", () => {
-  it("sends the UCP version in the User-Agent on every Prism call and no ucp_version query", async () => {
+  it("puts the UCP version in the UCP paths and sends the constant User-Agent on every Prism call", async () => {
     const calls: { url: string; headers: Record<string, string> }[] = []
     const original = globalThis.fetch
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -597,28 +592,22 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       const client = new PrismClient({ apiUrl: "https://gw.example", apiKey: "k" })
       const prepare = { amount: 100, currency: "USD", resourceUrl: "https://store.test/c/1" }
       await client.fetchUcpHandlers("2026-01-23")
-      await client.fetchAcpHandlers("2026-04-08")
+      await client.fetchAcpHandlers()
       await client.prepareUcpPayment({ ...prepare, ucpVersion: "2026-04-08" })
       await client.prepareAcpPayment({ ...prepare, ucpVersion: "2026-08-25" })
-      await client.settle({ ucpVersion: "2026-01-23", paymentPayload: {}, paymentRequirements: {} })
+      await client.settle({ paymentPayload: {}, paymentRequirements: {} })
     } finally {
       globalThis.fetch = original
     }
 
     expect(calls.map((c) => c.url)).toEqual([
-      "https://gw.example/api/v2/merchant/ucp/handlers",
+      "https://gw.example/api/v2/merchant/ucp/2026-01-23/handlers",
       "https://gw.example/api/v2/merchant/acp/handlers",
-      "https://gw.example/api/v2/merchant/ucp/payment-requirements",
+      "https://gw.example/api/v2/merchant/ucp/2026-04-08/payment-requirements",
       "https://gw.example/api/v2/merchant/acp/payment-requirements",
       "https://gw.example/api/v2/payment/settle",
     ])
-    expect(calls.map((c) => c.headers["User-Agent"])).toEqual([
-      "fd-saleor-prism/2026-01-23",
-      "fd-saleor-prism/2026-04-08",
-      "fd-saleor-prism/2026-04-08",
-      "fd-saleor-prism/2026-08-25",
-      "fd-saleor-prism/2026-01-23",
-    ])
+    expect(calls.map((c) => c.headers["User-Agent"])).toEqual(Array(5).fill(PRISM_USER_AGENT))
   })
 
   it("caches discovery per UCP version", async () => {
