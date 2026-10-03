@@ -95,7 +95,8 @@ export async function resolveUcpVersion(
       break
     default: {
       const unhandled: never = profile
-      throw new Error(`Unhandled agent profile status: ${JSON.stringify(unhandled)}`)
+      void unhandled
+      outcome = "unreachable"
     }
   }
 

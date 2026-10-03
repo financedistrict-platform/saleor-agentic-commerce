@@ -2,6 +2,7 @@ import http from "node:http"
 import type { AddressInfo } from "node:net"
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { createUcpVersionRegistry } from "@financedistrict/saleor-agentic-commerce-core"
+import type { AgentProfileResult } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   applyUcpSessionPin,
@@ -78,6 +79,15 @@ describe("resolveUcpVersion", () => {
     const resolution = await resolve(strict, agent)
     expect(resolution.rejection).toMatchObject({ status, code })
     expect(resolution.wire.version).toBe("2026-04-08")
+  })
+
+  it("treats a status unknown to this build as unreachable", async () => {
+    const fetcher = { async lookup() { return { status: "throttled" } as unknown as AgentProfileResult } }
+    const served = await resolveUcpVersion(lenient, ucpRequest(URL_, { agent: AGENT_0408 }), fetcher)
+    expect(served).toMatchObject({ version: "2026-04-08", outcome: "unreachable" })
+    expect(served.rejection).toBeUndefined()
+    const rejected = await resolveUcpVersion(strict, ucpRequest(URL_, { agent: AGENT_0408 }), fetcher)
+    expect(rejected.rejection).toMatchObject({ status: 424, code: "profile_unreachable" })
   })
 
   it.each([lenient, strict])("rejects an unknown declared version with 422", async (registry) => {
