@@ -1,6 +1,6 @@
 {
   "name": "@financedistrict/saleor-dummy-payment",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Dummy/test payment handler for Saleor agentic commerce. Always-succeeds simulator — for integration testing and as a reference implementation. Do not use in production.",
   "author": "Finance District <developers@fd.xyz>",
   "license": "MIT",

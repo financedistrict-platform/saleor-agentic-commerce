@@ -1,5 +1,11 @@
 # @financedistrict/saleor-agentic-commerce-nextjs
 
+## 2.1.3
+
+### Patch Changes
+
+- [#96](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/96) [`6853639`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/6853639e962a9d4a14e247438e5263291c7fc40e) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - An agent profile status that this nextjs build does not know is treated as an unreachable profile instead of throwing, so a newer core can never break requests that declare a profile. The core peer range is now ^1.1.2 for nextjs and prism-payment, so the same-origin profile redirect fix is always present.
+
 ## 2.1.2
 
 ### Patch Changes
