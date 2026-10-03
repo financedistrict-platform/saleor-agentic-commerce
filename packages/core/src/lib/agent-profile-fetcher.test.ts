@@ -30,8 +30,23 @@ beforeAll(async () => {
       res.end(JSON.stringify({ ucp: { version: "2026-08-25" }, pad: "x".repeat(140_000) }))
       return
     }
-    if (req.url === "/redirect") {
-      res.writeHead(302, { location: "/profile" }).end()
+    const redirects: Record<string, [number, string | undefined]> = {
+      "/redirect": [302, "/profile"],
+      "/r301": [301, "/profile"],
+      "/r308": [308, "/profile"],
+      "/r308-slash/": [308, "/r308-slash"],
+      "/to-big": [302, "/big"],
+      "/two-hops": [302, "/redirect"],
+      "/cross": [302, "https://elsewhere.example/profile"],
+      "/downgrade": [302, "https://127.0.0.1/profile"],
+      "/userinfo": [302, "http://user:pass@127.0.0.1/profile"],
+      "/secret": [302, "https://user:secret@elsewhere.example/p"],
+      "/no-location": [302, undefined],
+      "/long": [302, `https://elsewhere.example/${"a".repeat(600)}`],
+    }
+    const redirect = redirects[req.url ?? ""]
+    if (redirect) {
+      res.writeHead(redirect[0], redirect[1] ? { location: redirect[1] } : {}).end()
       return
     }
     res.setHeader("content-type", "application/json")
@@ -86,11 +101,81 @@ describe("createAgentProfileFetcher", () => {
     expect(await fetcher.lookup("https://agent.example/.well-known/ucp")).toEqual({ status: "failed" })
   })
 
-  it("does not follow redirects and caps the body at 128 KiB", async () => {
+  it("caps the body at 128 KiB", async () => {
     const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
-    expect(await fetcher.lookup(`${base}/redirect`)).toEqual({ status: "failed" })
     expect(await fetcher.lookup(`${base}/big`)).toEqual({ status: "failed" })
-    expect(hits.map((h) => h.url)).toEqual(["/redirect", "/big"])
+  })
+
+  it.each(["/r301", "/r308"])("follows one same-origin redirect from %s", async (path) => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    expect(await fetcher.lookup(`${base}${path}`)).toEqual({ status: "ok", version: "2026-08-25" })
+    expect(hits.map((h) => h.url)).toEqual([path, "/profile"])
+  })
+
+  it("follows a trailing-slash redirect to the same path without the slash", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    expect(await fetcher.lookup(`${base}/r308-slash/`)).toEqual({ status: "ok", version: "2026-08-25" })
+    expect(hits.map((h) => h.url)).toEqual(["/r308-slash/", "/r308-slash"])
+  })
+
+  it("caches the followed result under the original URL only", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    await fetcher.lookup(`${base}/r308`)
+    await fetcher.lookup(`${base}/r308`)
+    expect(hits.map((h) => h.url)).toEqual(["/r308", "/profile"])
+    await fetcher.lookup(`${base}/profile`)
+    expect(hits).toHaveLength(3)
+  })
+
+  it("enforces the body cap after the redirect", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    expect(await fetcher.lookup(`${base}/to-big`)).toEqual({ status: "failed" })
+    expect(hits.map((h) => h.url)).toEqual(["/to-big", "/big"])
+  })
+
+  it("reports a cross-origin redirect without following it", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    expect(await fetcher.lookup(`${base}/cross`)).toEqual({ status: "redirected", location: "https://elsewhere.example/profile" })
+    expect(hits).toHaveLength(1)
+  })
+
+  it.each([
+    ["/downgrade", "https://127.0.0.1/profile"],
+    ["/userinfo", "http://127.0.0.1/profile"],
+  ])("reports the %s redirect without following it", async (path, location) => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    expect(await fetcher.lookup(`${base}${path}`)).toEqual({ status: "redirected", location })
+    expect(hits).toHaveLength(1)
+  })
+
+  it("reports a second redirect after one followed hop", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    expect(await fetcher.lookup(`${base}/two-hops`)).toEqual({ status: "redirected", location: `${base}/profile` })
+    expect(hits.map((h) => h.url)).toEqual(["/two-hops", "/redirect"])
+  })
+
+  it("strips credentials from the reported location", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    const result = await fetcher.lookup(`${base}/secret`)
+    expect(result).toEqual({ status: "redirected", location: "https://elsewhere.example/p" })
+  })
+
+  it("reports a null location when the redirect has no Location", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    expect(await fetcher.lookup(`${base}/no-location`)).toEqual({ status: "redirected", location: null })
+  })
+
+  it("truncates a long reported location to 512 characters", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    const result = await fetcher.lookup(`${base}/long`)
+    expect(result.status === "redirected" && result.location?.length).toBe(512)
+  })
+
+  it("caches a redirected result under the original URL", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    await fetcher.lookup(`${base}/cross`)
+    await fetcher.lookup(`${base}/cross`)
+    expect(hits).toHaveLength(1)
   })
 
   it("caches a failure for 600 s without fetching again", async () => {

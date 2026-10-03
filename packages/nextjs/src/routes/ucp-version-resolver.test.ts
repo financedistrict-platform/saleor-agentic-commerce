@@ -1,5 +1,8 @@
+import http from "node:http"
+import type { AddressInfo } from "node:net"
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { createUcpVersionRegistry } from "@financedistrict/saleor-agentic-commerce-core"
+import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   applyUcpSessionPin,
   logUcpResolution,
@@ -11,6 +14,8 @@ import {
   AGENT_0408,
   AGENT_0825,
   AGENT_DOWN,
+  AGENT_REDIRECTED,
+  AGENT_REDIRECTED_NO_LOCATION,
   AGENT_UNDECLARED,
   AGENT_UNKNOWN,
   fixedFetcher,
@@ -83,6 +88,46 @@ describe("resolveUcpVersion", () => {
       code: "version_unsupported",
       content: "Version 2027-01-01 is not supported. This business implements versions 2026-04-08, 2026-08-25, 2026-01-23.",
     })
+  })
+
+  it.each([lenient, strict])("rejects a redirected profile with 424 and the location", async (registry) => {
+    const resolution = await resolve(registry, AGENT_REDIRECTED)
+    expect(resolution).toMatchObject({ outcome: "redirected", location: "https://elsewhere.example/profile" })
+    expect(resolution.rejection).toEqual({
+      status: 424,
+      code: "profile_redirected",
+      content: "Agent profile URL redirects to https://elsewhere.example/profile; use the final URL.",
+    })
+  })
+
+  it.each([lenient, strict])("rejects a redirected profile without a location", async (registry) => {
+    const resolution = await resolve(registry, AGENT_REDIRECTED_NO_LOCATION)
+    expect(resolution.outcome).toBe("redirected")
+    expect(resolution.rejection).toEqual({
+      status: 424,
+      code: "profile_redirected",
+      content: "Agent profile URL redirects; use the final URL.",
+    })
+  })
+
+  it("keeps credentials from the Location out of the rejection and the log", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(302, { location: "https://user:secret@elsewhere.example/p" }).end()
+    })
+    await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen))
+    try {
+      const agent = `http://127.0.0.1:${(server.address() as AddressInfo).port}/profile`
+      const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+      const resolution = await resolveUcpVersion(lenient, ucpRequest(URL_, { agent }), fetcher)
+      logUcpResolution(resolution)
+      expect(resolution.location).toBe("https://elsewhere.example/p")
+      expect(resolution.rejection?.content).toBe("Agent profile URL redirects to https://elsewhere.example/p; use the final URL.")
+      expect(String(warn.mock.calls[0][0])).not.toContain("secret")
+      expect(String(warn.mock.calls[0][0])).not.toContain("user")
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    }
   })
 
   it("serves the current version without a fetch when UCP-Agent has no profile", async () => {
@@ -175,5 +220,18 @@ describe("logUcpResolution", () => {
       served: "2026-04-08",
       host: "agent.example",
     })
+  })
+
+  it("writes the location for a redirected profile", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    logUcpResolution(await resolve(lenient, AGENT_REDIRECTED))
+    logUcpResolution(await resolve(lenient, AGENT_REDIRECTED_NO_LOCATION))
+    expect(JSON.parse(String(warn.mock.calls[0][0]))).toEqual({
+      ucp_profile_resolution: "redirected",
+      served: "2026-04-08",
+      host: "agent.example",
+      location: "https://elsewhere.example/profile",
+    })
+    expect(JSON.parse(String(warn.mock.calls[1][0])).location).toBeNull()
   })
 })
