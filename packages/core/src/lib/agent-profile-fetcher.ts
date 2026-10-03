@@ -190,7 +190,10 @@ function followableRedirect(base: URL, location: string | null): URL | null {
 
 function reportedLocation(base: URL, location: string | null): string | null {
   const next = resolveLocation(base, location)
-  return next ? next.href.slice(0, MAX_REPORTED_LOCATION_LENGTH) : null
+  if (!next) return null
+  next.username = ""
+  next.password = ""
+  return next.href.slice(0, MAX_REPORTED_LOCATION_LENGTH)
 }
 
 function download(url: URL, target: ResolvedAddress, loopback: boolean, timeoutMs: number): Promise<DownloadResult> {

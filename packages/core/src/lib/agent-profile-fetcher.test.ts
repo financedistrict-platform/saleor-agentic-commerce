@@ -40,6 +40,7 @@ beforeAll(async () => {
       "/cross": [302, "https://elsewhere.example/profile"],
       "/downgrade": [302, "https://127.0.0.1/profile"],
       "/userinfo": [302, "http://user:pass@127.0.0.1/profile"],
+      "/secret": [302, "https://user:secret@elsewhere.example/p"],
       "/no-location": [302, undefined],
       "/long": [302, `https://elsewhere.example/${"a".repeat(600)}`],
     }
@@ -140,7 +141,7 @@ describe("createAgentProfileFetcher", () => {
 
   it.each([
     ["/downgrade", "https://127.0.0.1/profile"],
-    ["/userinfo", "http://user:pass@127.0.0.1/profile"],
+    ["/userinfo", "http://127.0.0.1/profile"],
   ])("reports the %s redirect without following it", async (path, location) => {
     const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
     expect(await fetcher.lookup(`${base}${path}`)).toEqual({ status: "redirected", location })
@@ -151,6 +152,12 @@ describe("createAgentProfileFetcher", () => {
     const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
     expect(await fetcher.lookup(`${base}/two-hops`)).toEqual({ status: "redirected", location: `${base}/profile` })
     expect(hits.map((h) => h.url)).toEqual(["/two-hops", "/redirect"])
+  })
+
+  it("strips credentials from the reported location", async () => {
+    const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+    const result = await fetcher.lookup(`${base}/secret`)
+    expect(result).toEqual({ status: "redirected", location: "https://elsewhere.example/p" })
   })
 
   it("reports a null location when the redirect has no Location", async () => {

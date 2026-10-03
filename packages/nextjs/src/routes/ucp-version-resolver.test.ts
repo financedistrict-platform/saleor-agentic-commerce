@@ -1,5 +1,8 @@
+import http from "node:http"
+import type { AddressInfo } from "node:net"
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { createUcpVersionRegistry } from "@financedistrict/saleor-agentic-commerce-core"
+import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   applyUcpSessionPin,
   logUcpResolution,
@@ -105,6 +108,26 @@ describe("resolveUcpVersion", () => {
       code: "profile_redirected",
       content: "Agent profile URL redirects; use the final URL.",
     })
+  })
+
+  it("keeps credentials from the Location out of the rejection and the log", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(302, { location: "https://user:secret@elsewhere.example/p" }).end()
+    })
+    await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen))
+    try {
+      const agent = `http://127.0.0.1:${(server.address() as AddressInfo).port}/profile`
+      const fetcher = createAgentProfileFetcher({ allowLoopbackForTests: true })
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+      const resolution = await resolveUcpVersion(lenient, ucpRequest(URL_, { agent }), fetcher)
+      logUcpResolution(resolution)
+      expect(resolution.location).toBe("https://elsewhere.example/p")
+      expect(resolution.rejection?.content).toBe("Agent profile URL redirects to https://elsewhere.example/p; use the final URL.")
+      expect(String(warn.mock.calls[0][0])).not.toContain("secret")
+      expect(String(warn.mock.calls[0][0])).not.toContain("user")
+    } finally {
+      await new Promise<void>((resolveClose) => server.close(() => resolveClose()))
+    }
   })
 
   it("serves the current version without a fetch when UCP-Agent has no profile", async () => {
