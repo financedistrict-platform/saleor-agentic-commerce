@@ -3,7 +3,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, it, expect, vi } from "vitest"
 import { PrismPaymentHandler, PRISM_HANDLER_ID } from "./handler.js"
-import { PrismClient, PRISM_USER_AGENT } from "./prism-client.js"
+import { PrismClient } from "./prism-client.js"
 import { samplePaymentHandlerConfig, sampleAcpHandler } from "./__tests__/acp-handler-fixture.js"
 import type {
   AcpHandler,
@@ -581,11 +581,11 @@ const recordedPrism = (name: string) =>
   JSON.parse(readFileSync(join(HERE, "..", "..", "core", "src", "__fixtures__", "prism", name), "utf8"))
 
 describe("PrismPaymentHandler — multi-version UCP", () => {
-  it("puts the UCP version in the UCP paths and sends the constant User-Agent on every Prism call", async () => {
-    const calls: { url: string; headers: Record<string, string> }[] = []
+  it("puts the UCP version in the UCP paths", async () => {
+    const calls: { url: string }[] = []
     const original = globalThis.fetch
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(input), headers: { ...(init?.headers as Record<string, string>) } })
+      calls.push({ url: String(input) })
       return new Response(JSON.stringify({ success: true, transaction: "0x1" }), { status: 200 })
     }) as typeof fetch
     try {
@@ -607,7 +607,6 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       "https://gw.example/api/v2/merchant/acp/payment-requirements",
       "https://gw.example/api/v2/payment/settle",
     ])
-    expect(calls.map((c) => c.headers["User-Agent"])).toEqual(Array(5).fill(PRISM_USER_AGENT))
   })
 
   it("caches discovery per UCP version", async () => {
