@@ -1,9 +1,3 @@
-import { createRequire } from "node:module"
-
-const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as { version: string }
-
-export const PRISM_USER_AGENT = `fd-saleor-prism/${packageVersion}`
-
 const PRISM_UCP_HANDLER_ID = "xyz.fd.prism_payment"
 const PRISM_UCP_HANDLER_IDS: readonly unknown[] = [PRISM_UCP_HANDLER_ID, "x402"]
 
@@ -186,7 +180,6 @@ export class PrismClient {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": this.apiKey,
-        "User-Agent": PRISM_USER_AGENT,
       },
       body: JSON.stringify({ x402Version: 2, paymentPayload: input.paymentPayload, paymentRequirements: input.paymentRequirements }),
     })
@@ -219,7 +212,7 @@ export class PrismClient {
   private async get<T>(path: string): Promise<T> {
     const response = await fetch(`${this.apiUrl}${path}`, {
       method: "GET",
-      headers: { "X-API-Key": this.apiKey, "User-Agent": PRISM_USER_AGENT },
+      headers: { "X-API-Key": this.apiKey },
     })
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error")
@@ -234,7 +227,6 @@ export class PrismClient {
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": this.apiKey,
-        "User-Agent": PRISM_USER_AGENT,
       },
       body: JSON.stringify(body),
     })

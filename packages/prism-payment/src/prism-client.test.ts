@@ -1,8 +1,5 @@
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { PrismClient, PRISM_USER_AGENT, minorUnitsToDecimalString } from "./prism-client.js"
+import { PrismClient, minorUnitsToDecimalString } from "./prism-client.js"
 
 describe("minorUnitsToDecimalString", () => {
   it("formats USD cents as a 2-decimal major-unit string", () => {
@@ -84,14 +81,13 @@ describe("PrismClient — payload formatting", () => {
     expect(body.currency).toBe("JPY")
   })
 
-  it("puts the UCP version in the handlers path and sends the constant User-Agent", async () => {
+  it("puts the UCP version in the handlers path", async () => {
     const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
 
     await client.fetchUcpHandlers("2026-04-08")
 
-    const [url, init] = fetchMock.mock.calls[0]
+    const [url] = fetchMock.mock.calls[0]
     expect(url).toBe("https://prism.test/api/v2/merchant/ucp/2026-04-08/handlers")
-    expect(init.headers["User-Agent"]).toBe(PRISM_USER_AGENT)
   })
 
   it("keeps the UCP version out of the settle request", async () => {
@@ -100,12 +96,6 @@ describe("PrismClient — payload formatting", () => {
     await client.settle({ paymentPayload: { a: 1 }, paymentRequirements: { b: 2 } })
 
     const [, init] = fetchMock.mock.calls[0]
-    expect(init.headers["User-Agent"]).toBe(PRISM_USER_AGENT)
     expect(JSON.parse(init.body as string)).toEqual({ x402Version: 2, paymentPayload: { a: 1 }, paymentRequirements: { b: 2 } })
-  })
-
-  it("derives the User-Agent from the package version", () => {
-    const { version } = JSON.parse(readFileSync(join(fileURLToPath(new URL(".", import.meta.url)), "..", "package.json"), "utf8"))
-    expect(PRISM_USER_AGENT).toBe(`fd-saleor-prism/${version}`)
   })
 })
