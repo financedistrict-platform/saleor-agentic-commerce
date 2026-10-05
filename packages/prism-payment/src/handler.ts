@@ -9,6 +9,7 @@ import {
   canonicalUcpHandlerEntry,
   type AcpHandler,
   type PaymentHandlerConfig,
+  type PreparePaymentInput,
   type UcpCheckoutPrepareResponse,
   type UcpHandlersDiscoveryResponse,
   type X402AcceptEntry,
@@ -86,7 +87,6 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
 
     const prepareInput = {
-      ucpVersion,
       amount: total,
       currency: currencyCode,
       resourceUrl,
@@ -94,7 +94,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
 
     const [ucpResult, acpResult] = await Promise.allSettled([
-      this.client.prepareUcpPayment(prepareInput),
+      this.prepareUcp(prepareInput, ucpVersion),
       this.client.prepareAcpPayment(prepareInput),
     ])
 
@@ -185,6 +185,15 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     return data?.acp ? [data.acp] : []
   }
 
+
+  private async prepareUcp(input: PreparePaymentInput, ucpVersion: string): Promise<UcpCheckoutPrepareResponse> {
+    const declaration = (await this.fetchUcpDiscovery(ucpVersion))[PRISM_HANDLER_ID]?.[0]
+    if (!declaration) {
+      throw new Error(`no ${PRISM_HANDLER_ID} declaration for UCP version ${ucpVersion}`)
+    }
+    const config = await this.client.preparePayment(input)
+    return { [PRISM_HANDLER_ID]: [{ id: declaration.id, version: declaration.version, config }] }
+  }
 
   private async fetchUcpDiscovery(ucpVersion: string): Promise<UcpHandlersDiscoveryResponse> {
     const now = Date.now()

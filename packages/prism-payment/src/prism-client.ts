@@ -3,7 +3,6 @@ const PRISM_UCP_HANDLER_IDS: readonly unknown[] = [PRISM_UCP_HANDLER_ID, "x402"]
 
 
 export type PreparePaymentInput = {
-  ucpVersion: string
   amount: number
   currency: string
   resourceUrl: string
@@ -139,15 +138,11 @@ export class PrismClient {
     return this.get<UcpHandlersDiscoveryResponse>(`/api/v2/merchant/ucp/${encodeURIComponent(ucpVersion)}/handlers`)
   }
 
-  async prepareUcpPayment(input: PreparePaymentInput): Promise<UcpCheckoutPrepareResponse> {
+  async preparePayment(input: PreparePaymentInput): Promise<PaymentHandlerConfig> {
     if (!this.apiKey) {
-      console.warn("[prism-client] No PRISM_API_KEY configured, returning empty UCP prepare")
-      return {}
+      throw new Error("No PRISM_API_KEY configured")
     }
-    return this.post<UcpCheckoutPrepareResponse>(
-      `/api/v2/merchant/ucp/${encodeURIComponent(input.ucpVersion)}/payment-requirements`,
-      this.preparePayload(input),
-    )
+    return this.post<PaymentHandlerConfig>("/api/v2/merchant/payment-requirements", this.preparePayload(input))
   }
 
 

@@ -31,7 +31,7 @@ export function stubPrismGateway(options: { handlers?: string; requirements?: st
     requests.push({ url, method: init?.method ?? "GET", headers: { ...(init?.headers as Record<string, string> | undefined) }, body })
     const json = (text: string) => new Response(text, { status: 200, headers: { "content-type": "application/json" } })
     if (/\/ucp\/[^/]+\/handlers$/.test(url)) return json(readFixture(`prism/${options.handlers ?? "current-handlers-2026-04-08.json"}`))
-    if (/\/ucp\/[^/]+\/payment-requirements$/.test(url)) return json(readFixture(`prism/${options.requirements ?? "current-payment-requirements.json"}`))
+    if (/\/api\/v2\/merchant\/payment-requirements$/.test(url)) return json(readFixture(`prism/${options.requirements ?? "current-payment-requirements.json"}`))
     if (url.includes("/payment/settle")) return json(JSON.stringify({ success: true, transaction: "0xsettled" }))
     return new Response("not found", { status: 404 })
   }) as typeof fetch
