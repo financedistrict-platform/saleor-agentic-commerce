@@ -1,29 +1,21 @@
 {
-  "xyz.fd.prism_payment": [
+  "x402Version": 2,
+  "resource": {
+    "url": "https://gw.example/checkout/1",
+    "description": "Order checkout at Demo Store"
+  },
+  "accepts": [
     {
-      "id": "xyz.fd.prism_payment",
-      "version": "2026-10-07",
-      "config": {
-        "x402Version": 2,
-        "resource": {
-          "url": "https://gw.example/checkout/1",
-          "description": "Order checkout at Demo Store"
-        },
-        "accepts": [
-          {
-            "scheme": "exact",
-            "network": "eip155:84532",
-            "payTo": "0x1111111111111111111111111111111111111111",
-            "maxTimeoutSeconds": 300,
-            "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-            "extra": {
-              "name": "USDC",
-              "version": "2"
-            },
-            "amount": "1000000"
-          }
-        ]
-      }
+      "scheme": "exact",
+      "network": "eip155:84532",
+      "payTo": "0x1111111111111111111111111111111111111111",
+      "maxTimeoutSeconds": 300,
+      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "extra": {
+        "name": "USDC",
+        "version": "2"
+      },
+      "amount": "1000000"
     }
   ]
 }

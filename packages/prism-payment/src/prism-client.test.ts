@@ -47,11 +47,10 @@ describe("PrismClient — payload formatting", () => {
     vi.unstubAllGlobals()
   })
 
-  it("posts the amount to /payment-requirements as a major-unit decimal string", async () => {
+  it("posts the amount to /api/v2/merchant/payment-requirements as a major-unit decimal string", async () => {
     const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
 
-    await client.prepareUcpPayment({
-      ucpVersion: "2026-08-25",
+    await client.preparePayment({
       amount: 11480,
       currency: "USD",
       resourceUrl: "https://store.test/checkout/abc",
@@ -59,6 +58,7 @@ describe("PrismClient — payload formatting", () => {
     })
 
     expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0][0]).toBe("https://prism.test/api/v2/merchant/payment-requirements")
     const [, init] = fetchMock.mock.calls[0]
     const body = JSON.parse(init.body as string)
     expect(body.amount).toBe("114.80")
@@ -69,7 +69,6 @@ describe("PrismClient — payload formatting", () => {
     const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
 
     await client.prepareAcpPayment({
-      ucpVersion: "2026-08-25",
       amount: 100,
       currency: "jpy",
       resourceUrl: "https://store.test/checkout/abc",

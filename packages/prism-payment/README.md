@@ -87,7 +87,7 @@ new PrismPaymentHandler({
 2. **Prepare** — When an agent selects Prism as their payment method, the handler calls the Prism Gateway to create a payment session and stores the session config in Saleor's checkout metadata
 3. **Settle** — When the agent submits a signed EIP-3009 authorization, the handler forwards it to the Prism Gateway for on-chain settlement
 
-Discovery caches UCP responses per UCP version. Handlers and payment-requirements calls put the UCP version in the Prism path. The handler also accepts the older Prism entry shape (`id: "x402"`, `config_schema`) and the instruments of earlier agents (`handler_id: "x402"`, `type` `tokenized`, `default` or missing, credential without `type`).
+Discovery caches UCP responses per UCP version. Handler discovery puts the UCP version in the Prism path. Payment requirements come from the protocol-free `/api/v2/merchant/payment-requirements`; the handler places that x402 config under the `id` and `version` from discovery for the same UCP version. The handler also accepts the older Prism entry shape (`id: "x402"`, `config_schema`) and the instruments of earlier agents (`handler_id: "x402"`, `type` `tokenized`, `default` or missing, credential without `type`).
 
 ## Environment Variables
 
