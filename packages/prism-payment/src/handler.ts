@@ -9,7 +9,6 @@ import {
   canonicalUcpHandlerEntry,
   type AcpHandler,
   type PaymentHandlerConfig,
-  type PreparePaymentInput,
   type UcpCheckoutPrepareResponse,
   type UcpHandlersDiscoveryResponse,
   type X402AcceptEntry,
@@ -68,7 +67,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   }
 
   async getAcpDiscoveryHandlers(ucpVersion: string): Promise<AcpHandler[]> {
-    return this.fetchAcpDiscovery(ucpVersion)
+    return this.fetchAcpDiscovery()
   }
 
 
@@ -93,28 +92,30 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       resourceDescription: `Purchase from ${storeName}`,
     }
 
-    const [ucpResult, acpResult] = await Promise.allSettled([
-      this.prepareUcp(prepareInput, ucpVersion),
-      this.client.prepareAcpPayment(prepareInput),
+    const [ucpDiscovery, acpDiscovery] = await Promise.all([
+      this.fetchUcpDiscovery(ucpVersion),
+      this.fetchAcpDiscovery(),
     ])
+    const ucpDeclaration = ucpDiscovery[PRISM_HANDLER_ID]?.[0]
+    const acpDeclaration = acpDiscovery[0]
 
-    const ucp = ucpResult.status === "fulfilled" ? ucpResult.value : null
-    const acp = acpResult.status === "fulfilled" ? acpResult.value : null
-
-    if (ucpResult.status === "rejected") {
-      console.error(
-        `[prism-handler] UCP prepare failed for ${checkoutId}: ${ucpResult.reason}`,
-      )
-    }
-    if (acpResult.status === "rejected") {
-      console.error(
-        `[prism-handler] ACP prepare failed for ${checkoutId}: ${acpResult.reason}`,
-      )
-    }
-
-    if (!ucp && !acp) {
+    if (!ucpDeclaration && !acpDeclaration) {
+      console.error(`[prism-handler] no UCP or ACP declaration for ${checkoutId}`)
       return null
     }
+
+    let config: PaymentHandlerConfig
+    try {
+      config = await this.client.preparePayment(prepareInput)
+    } catch (error: unknown) {
+      console.error(`[prism-handler] prepare failed for ${checkoutId}: ${error}`)
+      return null
+    }
+
+    const ucp: UcpCheckoutPrepareResponse | null = ucpDeclaration
+      ? { [PRISM_HANDLER_ID]: [{ id: ucpDeclaration.id, version: ucpDeclaration.version, config }] }
+      : null
+    const acp: AcpHandler | null = acpDeclaration ? { ...acpDeclaration, config } : null
 
     return {
       ucp,
@@ -186,15 +187,6 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   }
 
 
-  private async prepareUcp(input: PreparePaymentInput, ucpVersion: string): Promise<UcpCheckoutPrepareResponse> {
-    const declaration = (await this.fetchUcpDiscovery(ucpVersion))[PRISM_HANDLER_ID]?.[0]
-    if (!declaration) {
-      throw new Error(`no ${PRISM_HANDLER_ID} declaration for UCP version ${ucpVersion}`)
-    }
-    const config = await this.client.preparePayment(input)
-    return { [PRISM_HANDLER_ID]: [{ id: declaration.id, version: declaration.version, config }] }
-  }
-
   private async fetchUcpDiscovery(ucpVersion: string): Promise<UcpHandlersDiscoveryResponse> {
     const now = Date.now()
     const key = `${this.apiUrl}|${ucpVersion}`
@@ -216,15 +208,15 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
   }
 
-  private async fetchAcpDiscovery(ucpVersion: string): Promise<AcpHandler[]> {
+  private async fetchAcpDiscovery(): Promise<AcpHandler[]> {
     const now = Date.now()
-    const cache = this.acpDiscoveryCache.get(ucpVersion)
+    const cache = this.acpDiscoveryCache.get(this.apiUrl)
     if (cache && now < cache.expiry) {
       return cache.data
     }
     try {
       const data = await this.client.fetchAcpHandlers()
-      this.acpDiscoveryCache.set(ucpVersion, { data, expiry: now + this.DISCOVERY_TTL })
+      this.acpDiscoveryCache.set(this.apiUrl, { data, expiry: now + this.DISCOVERY_TTL })
       return data
     } catch (error: unknown) {
       console.error(`[prism-handler] ACP discovery failed: ${error}`)

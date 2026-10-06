@@ -154,17 +154,6 @@ export class PrismClient {
     return this.get<AcpHandler[]>("/api/v2/merchant/acp/handlers")
   }
 
-  async prepareAcpPayment(input: PreparePaymentInput): Promise<AcpHandler> {
-    if (!this.apiKey) {
-      throw new Error("No PRISM_API_KEY configured")
-    }
-    return this.post<AcpHandler>(
-      "/api/v2/merchant/acp/payment-requirements",
-      this.preparePayload(input),
-    )
-  }
-
-
   async settle(input: SettleInput): Promise<SettleResult> {
     if (!this.apiKey) {
       return { success: false, error: "No PRISM_API_KEY configured" }

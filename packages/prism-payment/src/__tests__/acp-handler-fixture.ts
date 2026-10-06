@@ -27,3 +27,5 @@ export const sampleAcpHandler: AcpHandler = {
   instrument_schemas: ["https://test.example/acp/instrument_schema.json"],
   config: samplePaymentHandlerConfig,
 }
+
+export const sampleAcpDeclaration: AcpHandler = { ...sampleAcpHandler, config: {} }
