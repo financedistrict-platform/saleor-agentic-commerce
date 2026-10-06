@@ -135,7 +135,7 @@ export class PrismClient {
       console.warn("[prism-client] No PRISM_API_KEY configured, returning empty UCP handlers")
       return {}
     }
-    return this.get<UcpHandlersDiscoveryResponse>(`/api/v2/merchant/ucp/${encodeURIComponent(ucpVersion)}/handlers`)
+    return this.get<UcpHandlersDiscoveryResponse>(`/ucp/${encodeURIComponent(ucpVersion)}/handlers`)
   }
 
   async preparePayment(input: PreparePaymentInput): Promise<PaymentHandlerConfig> {

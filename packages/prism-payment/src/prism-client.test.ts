@@ -86,7 +86,7 @@ describe("PrismClient — payload formatting", () => {
     await client.fetchUcpHandlers("2026-04-08")
 
     const [url] = fetchMock.mock.calls[0]
-    expect(url).toBe("https://prism.test/api/v2/merchant/ucp/2026-04-08/handlers")
+    expect(url).toBe("https://prism.test/ucp/2026-04-08/handlers")
   })
 
   it("keeps the UCP version out of the settle request", async () => {

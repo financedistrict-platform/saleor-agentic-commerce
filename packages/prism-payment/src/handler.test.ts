@@ -713,7 +713,7 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
     }
 
     expect(calls.map((c) => c.url)).toEqual([
-      "https://gw.example/api/v2/merchant/ucp/2026-01-23/handlers",
+      "https://gw.example/ucp/2026-01-23/handlers",
       "https://gw.example/api/v2/merchant/acp/handlers",
       "https://gw.example/api/v2/merchant/payment-requirements",
       "https://gw.example/api/v2/payment/settle",
