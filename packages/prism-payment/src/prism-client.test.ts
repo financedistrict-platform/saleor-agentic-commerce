@@ -68,7 +68,7 @@ describe("PrismClient — payload formatting", () => {
   it("uppercases the currency code on the wire", async () => {
     const client = new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" })
 
-    await client.prepareAcpPayment({
+    await client.preparePayment({
       amount: 100,
       currency: "jpy",
       resourceUrl: "https://store.test/checkout/abc",

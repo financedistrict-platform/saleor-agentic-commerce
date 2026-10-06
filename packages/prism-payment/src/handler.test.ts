@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url"
 import { describe, it, expect, vi } from "vitest"
 import { PrismPaymentHandler, PRISM_HANDLER_ID } from "./handler.js"
 import { PrismClient } from "./prism-client.js"
-import { samplePaymentHandlerConfig, sampleAcpHandler } from "./__tests__/acp-handler-fixture.js"
+import { samplePaymentHandlerConfig, sampleAcpHandler, sampleAcpDeclaration } from "./__tests__/acp-handler-fixture.js"
 import type {
   AcpHandler,
   PaymentHandlerConfig,
@@ -20,7 +20,6 @@ type MockedClient = {
   fetchUcpHandlers: ReturnType<typeof vi.fn>
   fetchAcpHandlers: ReturnType<typeof vi.fn>
   preparePayment: ReturnType<typeof vi.fn>
-  prepareAcpPayment: ReturnType<typeof vi.fn>
   settle: ReturnType<typeof vi.fn>
 }
 
@@ -31,7 +30,6 @@ function makeHandler() {
     fetchUcpHandlers: vi.fn(),
     fetchAcpHandlers: vi.fn(),
     preparePayment: vi.fn(),
-    prepareAcpPayment: vi.fn(),
     settle: vi.fn(),
   }
   // @ts-expect-error - injecting mock
@@ -105,17 +103,17 @@ describe("PrismPaymentHandler — discovery", () => {
 
   it("passes Prism's ACP discovery response through unchanged (no hand-construction)", async () => {
     const { handler, mock } = makeHandler()
-    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpHandler])
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
 
     const result = await handler.getAcpDiscoveryHandlers(TEST_UCP_VERSION)
 
-    expect(result).toEqual([sampleAcpHandler])
+    expect(result).toEqual([sampleAcpDeclaration])
     expect(mock.fetchAcpHandlers).toHaveBeenCalledOnce()
   })
 
   it("uses Prism's authoritative requires_delegate_payment instead of hardcoding false", async () => {
     const { handler, mock } = makeHandler()
-    const handlerWithDelegate = { ...sampleAcpHandler, requires_delegate_payment: true }
+    const handlerWithDelegate = { ...sampleAcpDeclaration, requires_delegate_payment: true }
     mock.fetchAcpHandlers.mockResolvedValue([handlerWithDelegate])
 
     const result = await handler.getAcpDiscoveryHandlers(TEST_UCP_VERSION)
@@ -204,26 +202,54 @@ describe("PrismPaymentHandler — discovery", () => {
 })
 
 describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
-  it("calls both UCP and ACP prepare endpoints in parallel", async () => {
+  it("calls Prism once for payment requirements and composes both entries", async () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
     mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
-    mock.prepareAcpPayment.mockResolvedValue(sampleAcpHandler)
 
-    await handler.prepareCheckoutPayment(baseInput)
+    const data = await handler.prepareCheckoutPayment(baseInput)
 
     expect(mock.preparePayment).toHaveBeenCalledOnce()
-    expect(mock.prepareAcpPayment).toHaveBeenCalledOnce()
     expect(mock.fetchUcpHandlers).toHaveBeenCalledWith(TEST_UCP_VERSION)
     expect(mock.preparePayment.mock.calls[0][0]).not.toHaveProperty("ucpVersion")
-    expect(mock.prepareAcpPayment.mock.calls[0][0]).not.toHaveProperty("ucpVersion")
+    expect(data!.ucp).toEqual(sampleUcpPrepare)
+    expect(data!.acp).toEqual(sampleAcpHandler)
+  })
+
+  it("composes the ACP entry static fields from the cached ACP declaration", async () => {
+    const { handler, mock } = makeHandler()
+    mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
+    mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
+
+    const data = await handler.prepareCheckoutPayment(baseInput)
+    const [discovered] = await handler.getAcpDiscoveryHandlers(TEST_UCP_VERSION)
+
+    const staticKeys = [
+      "id",
+      "name",
+      "version",
+      "spec",
+      "requires_delegate_payment",
+      "requires_pci_compliance",
+      "psp",
+      "config_schema",
+      "instrument_schemas",
+    ] as const
+    for (const key of staticKeys) {
+      expect(data!.acp![key]).toEqual(discovered[key])
+    }
+    expect(data!.acp!.config).toEqual(samplePaymentHandlerConfig)
+    expect(discovered.config).toEqual({})
+    expect(mock.fetchAcpHandlers).toHaveBeenCalledOnce()
   })
 
   it("stores both UCP and ACP responses keyed for later retrieval", async () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
     mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
-    mock.prepareAcpPayment.mockResolvedValue(sampleAcpHandler)
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
 
     const data = await handler.prepareCheckoutPayment(baseInput)
 
@@ -234,28 +260,55 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
     expect(data!.preparedResourceUrl).toBe("https://store.test/checkout/abc")
   })
 
-  it("succeeds when one protocol prepare fails (fail-soft per protocol)", async () => {
+  it("omits the ACP entry when ACP discovery is empty", async () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
+    mock.fetchAcpHandlers.mockResolvedValue([])
     mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
-    mock.prepareAcpPayment.mockRejectedValue(new Error("ACP unavailable"))
 
     const data = await handler.prepareCheckoutPayment(baseInput)
 
     expect(data).not.toBeNull()
     expect(data!.ucp).toEqual(sampleUcpPrepare)
     expect(data!.acp).toBeNull()
+    expect(mock.preparePayment).toHaveBeenCalledOnce()
   })
 
-  it("returns null when both protocols fail", async () => {
+  it("returns null when payment-requirements fails", async () => {
     const { handler, mock } = makeHandler()
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
-    mock.preparePayment.mockRejectedValue(new Error("UCP down"))
-    mock.prepareAcpPayment.mockRejectedValue(new Error("ACP down"))
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
+    mock.preparePayment.mockRejectedValue(new Error("Prism down"))
 
     const data = await handler.prepareCheckoutPayment(baseInput)
 
     expect(data).toBeNull()
+    error.mockRestore()
+  })
+
+  it("returns null instead of the stale quote when a re-prepare fails after the total changed", async () => {
+    const { handler, mock } = makeHandler()
+    const error = vi.spyOn(console, "error").mockImplementation(() => {})
+    mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
+    mock.preparePayment.mockRejectedValue(new Error("Prism down"))
+    const stale = {
+      ucp: sampleUcpPrepare,
+      acp: sampleAcpHandler,
+      preparedAmount: 999,
+      preparedResourceUrl: "https://store.test/checkout/abc",
+    }
+
+    const data = await handler.prepareCheckoutPayment({
+      ...baseInput,
+      checkoutMetadata: { [PRISM_HANDLER_ID]: stale },
+    })
+
+    expect(data).toBeNull()
+    expect(handler.getUcpCheckoutHandlers({ [PRISM_HANDLER_ID]: data })).toEqual({})
+    expect(handler.getAcpCheckoutHandlers({ [PRISM_HANDLER_ID]: data })).toEqual([])
+    error.mockRestore()
   })
 
   it("is idempotent — same checkout + same total returns cached blob without re-calling Prism", async () => {
@@ -275,14 +328,13 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
 
     expect(result).toEqual(stored)
     expect(mock.preparePayment).not.toHaveBeenCalled()
-    expect(mock.prepareAcpPayment).not.toHaveBeenCalled()
   })
 
   it("re-prepares when the total changes", async () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
     mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
-    mock.prepareAcpPayment.mockResolvedValue(sampleAcpHandler)
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
 
     const stored = {
       ucp: sampleUcpPrepare,
@@ -297,7 +349,6 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
     })
 
     expect(mock.preparePayment).toHaveBeenCalledOnce()
-    expect(mock.prepareAcpPayment).toHaveBeenCalledOnce()
   })
 
   it("composes the UCP entry id and version from discovery for the same UCP version", async () => {
@@ -306,7 +357,7 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
       [PRISM_HANDLER_ID]: [{ ...sampleUcpDiscovery[PRISM_HANDLER_ID][0], version: `decl-${version}` }],
     }))
     mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
-    mock.prepareAcpPayment.mockResolvedValue(sampleAcpHandler)
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
 
     const data = await handler.prepareCheckoutPayment({ ...baseInput, ucpVersion: "2026-04-08" })
     const [declared] = (await handler.getUcpDiscoveryHandlers("2026-04-08"))[PRISM_HANDLER_ID]
@@ -323,17 +374,14 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {})
     mock.fetchUcpHandlers.mockResolvedValue({})
     mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
-    mock.prepareAcpPayment.mockResolvedValue(sampleAcpHandler)
+    mock.fetchAcpHandlers.mockResolvedValue([sampleAcpDeclaration])
 
     const data = await handler.prepareCheckoutPayment(baseInput)
 
     expect(data!.ucp).toBeNull()
     expect(data!.acp).toEqual(sampleAcpHandler)
-    expect(mock.preparePayment).not.toHaveBeenCalled()
+    expect(mock.preparePayment).toHaveBeenCalledOnce()
     expect(handler.getUcpCheckoutHandlers({ [PRISM_HANDLER_ID]: data })).toEqual({})
-    expect(error).toHaveBeenCalledWith(
-      expect.stringContaining(`no ${PRISM_HANDLER_ID} declaration for UCP version ${TEST_UCP_VERSION}`),
-    )
     error.mockRestore()
   })
 
@@ -341,7 +389,7 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
     const { handler, mock } = makeHandler()
     mock.fetchUcpHandlers.mockResolvedValue(sampleUcpDiscovery)
     mock.preparePayment.mockResolvedValue(samplePaymentHandlerConfig)
-    mock.prepareAcpPayment.mockRejectedValue(new Error("ACP unavailable"))
+    mock.fetchAcpHandlers.mockResolvedValue([])
     const data = await handler.prepareCheckoutPayment(baseInput)
     mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
 
@@ -659,7 +707,6 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       await client.fetchUcpHandlers("2026-01-23")
       await client.fetchAcpHandlers()
       await client.preparePayment(prepare)
-      await client.prepareAcpPayment(prepare)
       await client.settle({ paymentPayload: {}, paymentRequirements: {} })
     } finally {
       globalThis.fetch = original
@@ -669,7 +716,6 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       "https://gw.example/api/v2/merchant/ucp/2026-01-23/handlers",
       "https://gw.example/api/v2/merchant/acp/handlers",
       "https://gw.example/api/v2/merchant/payment-requirements",
-      "https://gw.example/api/v2/merchant/acp/payment-requirements",
       "https://gw.example/api/v2/payment/settle",
     ])
   })
