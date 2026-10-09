@@ -28,7 +28,14 @@ describe("PaymentHandlerRegistry handler aliases", () => {
     registry.registerAdapter(prism.instance)
 
     expect(registry.getAdapter("x402")).toBe(prism.instance)
-    const result = await registry.settlePayment({ checkoutId: "c1", handlerId: "x402", credential: {} })
+    const result = await registry.settlePayment({
+      checkoutId: "c1",
+      channel: "default-channel",
+      handlerId: "x402",
+      ucpVersion: "2026-04-08",
+      credential: {},
+      checkoutMetadata: { "xyz.fd.prism_payment": { prepared: true } },
+    })
 
     expect(result.success).toBe(true)
     expect(prism.settled[0].handlerId).toBe("xyz.fd.prism_payment")

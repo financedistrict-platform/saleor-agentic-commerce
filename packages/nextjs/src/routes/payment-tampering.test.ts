@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { CheckoutPrepareInput, PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
-import { buildRoutes, CHECKOUT_ID, checkoutTemplate, params, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
+import { buildRoutes, CHECKOUT_ID, checkoutTemplate, fakeSaleor, fixedFetcher, params, PROFILES, STOREFRONT, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
+import { createAgenticCommerce } from "../config.js"
+import { createAcpRoutes } from "./acp-routes.js"
+import { createUcpRoutes } from "./ucp-routes.js"
 
 const UCP_SESSIONS = "https://store.test/api/ucp/checkout-sessions"
 const ACP_SESSIONS = "https://store.test/api/acp/checkout_sessions"
@@ -708,6 +711,176 @@ describe("Complete with a Prism credential the signed-amount check cannot read",
 
     expect(response.status).toBe(200)
     expect(settleRequests()).toHaveLength(1)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})
+
+function alwaysPaysQuote(id: string) {
+  const settled: PaymentSettleInput[] = []
+  const adapter: PaymentHandlerAdapter = {
+    id,
+    name: "Always Pays",
+    async getUcpDiscoveryHandlers() { return {} },
+    async getAcpDiscoveryHandlers() { return [] },
+    async prepareCheckoutPayment() { return null },
+    async settlePayment(input: PaymentSettleInput) {
+      settled.push(input)
+      return { success: true, transactionReference: `0xfree${settled.length}`, settled: { amount: 5497, currency: "USD" } }
+    },
+    getUcpCheckoutHandlers() { return {} },
+    getAcpCheckoutHandlers() { return [] },
+  }
+  return { adapter, settled }
+}
+
+function ucpCompleteWith(routes: ReturnType<typeof buildRoutes>["routes"], id: string, handlerId: string) {
+  return routes.checkoutSessionComplete.POST(
+    ucpRequest(`${UCP_SESSIONS}/${id}/complete`, {
+      body: { payment: { instruments: [{ id: "inst_1", handler_id: handlerId, type: "test", credential: { token: "none" } }] } },
+    }),
+    params({ id }),
+  )
+}
+
+function acpCompleteWith(acpRoutes: ReturnType<typeof buildRoutes>["acpRoutes"], id: string, handlerId: string) {
+  return acpRoutes.checkoutSessionComplete.POST(
+    new Request(`${ACP_SESSIONS}/${id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ payment_data: { handler_id: handlerId, instrument: { credential: { token: "none" } } } }),
+    }),
+    params({ id }),
+  )
+}
+
+describe("Complete with a registered handler that was not prepared for the checkout", () => {
+  it("UCP refuses to settle through a handler with no prepared entry on the checkout", async () => {
+    const pay = recordingHandler()
+    const free = alwaysPaysQuote("test.free")
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter, free.adapter], checkouts: [preparedCheckout()] })
+
+    const response = await ucpCompleteWith(routes, CHECKOUT_ID, "test.free")
+    const body = await response.json()
+
+    expect(response.status).toBe(422)
+    expect(body.messages[0].code).toBe("payment_handler_not_prepared")
+    expect(free.settled).toHaveLength(0)
+    expect(saleor.transactions).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("UCP refuses a prepared entry that is a list instead of a handler object", async () => {
+    const pay = recordingHandler()
+    const free = alwaysPaysQuote("test.free")
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter, free.adapter], checkouts: [preparedCheckout([{ key: "test.free", value: "[]" }])] })
+
+    const response = await ucpCompleteWith(routes, CHECKOUT_ID, "test.free")
+
+    expect(response.status).toBe(422)
+    expect(free.settled).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("ACP refuses to settle through a handler whose prepare failed for the checkout", async () => {
+    const pay = recordingHandler()
+    const free = alwaysPaysQuote("test.free")
+    const { acpRoutes, saleor } = buildRoutes({
+      handlers: [pay.adapter, free.adapter],
+      checkouts: [preparedCheckout([{ key: "test.free", value: "null" }])],
+      config: { acpEnabled: true },
+    })
+
+    const response = await acpCompleteWith(acpRoutes, CHECKOUT_ID, "test.free")
+
+    expect(response.status).toBe(422)
+    expect(free.settled).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+})
+
+async function buildAppRoutes(token: string, channels: string[] | null, adapter: PaymentHandlerAdapter) {
+  vi.stubGlobal("fetch", vi.fn(async () =>
+    new Response(JSON.stringify({
+      data: {
+        app: {
+          id: "app",
+          privateMetadata: [
+            { key: "agentic_commerce__store_name", value: "Demo Store" },
+            { key: `agentic_commerce__handler__${adapter.id}`, value: JSON.stringify({ enabled: true, channels, config: {} }) },
+          ],
+        },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }),
+  ))
+  const instance = await createAgenticCommerce({
+    saleorApiUrl: "https://saleor.test/graphql/",
+    saleorAuthToken: token,
+    storefrontUrl: STOREFRONT,
+    configFromApp: true,
+    enabled: true,
+    acpEnabled: true,
+    paymentHandlerFactory: (ph) => (ph.handlerId === adapter.id ? adapter : null),
+  })
+  vi.unstubAllGlobals()
+  const saleor = fakeSaleor([preparedCheckout()])
+  instance.saleorClient = saleor.client as unknown as typeof instance.saleorClient
+  instance.agentProfileFetcher = fixedFetcher(PROFILES)
+  return { routes: createUcpRoutes(instance), acpRoutes: createAcpRoutes(instance), saleor, instance }
+}
+
+describe("Complete on a channel the handler is not enabled for", () => {
+  it("UCP refuses to settle when the handler is limited to other channels", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = await buildAppRoutes("token-wholesale-ucp", ["wholesale"], pay.adapter)
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(422)
+    expect(body.messages[0].code).toBe("payment_handler_unavailable")
+    expect(pay.settled).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("ACP refuses to settle when the handler is enabled for no channel", async () => {
+    const pay = recordingHandler()
+    const { acpRoutes, saleor } = await buildAppRoutes("token-none-acp", [], pay.adapter)
+
+    const response = await acpComplete(acpRoutes, CHECKOUT_ID)
+
+    expect(response.status).toBe(422)
+    expect(pay.settled).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("does not prepare the handler for a checkout on another channel", async () => {
+    const pay = recordingHandler()
+    const prepare = vi.spyOn(pay.adapter, "prepareCheckoutPayment")
+    const { instance } = await buildAppRoutes("token-wholesale-prepare", ["wholesale"], pay.adapter)
+
+    const prepared = await instance.paymentHandlers.prepareCheckoutPayment({
+      checkoutId: CHECKOUT_ID,
+      channel: "default-channel",
+      total: 5497,
+      currencyCode: "USD",
+      checkoutBaseUrl: UCP_SESSIONS,
+      storeName: "Demo Store",
+      ucpVersion: "2026-04-08",
+    })
+
+    expect(prepare).not.toHaveBeenCalled()
+    expect(prepared).toEqual({ "test.pay": null })
+  })
+
+  it("completes when the handler is enabled for the checkout channel", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = await buildAppRoutes("token-default-ucp", ["default-channel"], pay.adapter)
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(200)
+    expect(pay.settled).toHaveLength(1)
+    expect(pay.settled[0].channel).toBe("default-channel")
     expect(saleor.completed).toEqual([CHECKOUT_ID])
   })
 })

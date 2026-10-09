@@ -62,6 +62,7 @@ export type DummyPaymentHandlerOptions = {
   mode?: DummyMode
   /** Artificial latency before settlement responds, in ms (default: 0). */
   delayMs?: number
+  allowInProduction?: boolean
 }
 
 // =====================================================
@@ -74,6 +75,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
 
   private mode: DummyMode
   private delayMs: number
+  private allowInProduction: boolean
 
   constructor(opts: DummyPaymentHandlerOptions = {}) {
     // Env wins over passed config (Path A/B/C convention).
@@ -88,6 +90,14 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
     this.delayMs = Number.isFinite(envDelay) && envDelay >= 0
       ? envDelay
       : (opts.delayMs ?? 0)
+    this.allowInProduction = opts.allowInProduction === true
+    if (!this.isActive()) {
+      console.warn(`[dummy-payment] ${DUMMY_HANDLER_ID} is disabled outside development and test; pass allowInProduction: true to enable it`)
+    }
+  }
+
+  private isActive(): boolean {
+    return this.allowInProduction || process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test"
   }
 
   // -------------------------------------------------
@@ -95,6 +105,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   // -------------------------------------------------
 
   async getUcpDiscoveryHandlers(_ucpVersion?: string): Promise<Record<string, unknown[]>> {
+    if (!this.isActive()) return {}
     return {
       [DUMMY_HANDLER_ID]: [
         {
@@ -109,6 +120,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   }
 
   async getAcpDiscoveryHandlers(): Promise<unknown[]> {
+    if (!this.isActive()) return []
     return [
       {
         id: "v1",
@@ -132,6 +144,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   async prepareCheckoutPayment(
     input: CheckoutPrepareInput,
   ): Promise<unknown> {
+    if (!this.isActive()) return null
     if (this.delayMs > 0) await sleep(this.delayMs)
 
     const { checkoutId, total, currencyCode, checkoutMetadata } = input
@@ -165,6 +178,9 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   async settlePayment(
     input: PaymentSettleInput,
   ): Promise<PaymentSettleResult> {
+    if (!this.isActive()) {
+      return { success: false, code: "payment_handler_unavailable", error: `${DUMMY_HANDLER_ID} is disabled outside development and test` }
+    }
     if (this.delayMs > 0) await sleep(this.delayMs)
 
     const prepared = input.checkoutMetadata?.[DUMMY_HANDLER_ID] as

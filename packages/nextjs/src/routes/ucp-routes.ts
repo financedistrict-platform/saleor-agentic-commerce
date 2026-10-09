@@ -207,6 +207,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
     const prepareResults = await paymentHandlers.prepareCheckoutPayment({
       checkoutId,
+      channel: checkout.channel.slug,
       total: quote.amount,
       currencyCode: quote.currency,
       checkoutBaseUrl: `${baseUrl}/checkout-sessions`,

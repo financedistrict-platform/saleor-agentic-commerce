@@ -27,7 +27,7 @@ export type CompletionFailure = {
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 
-type SettleRequest = DistributiveOmit<PaymentSettleInput, "checkoutId" | "checkoutMetadata">
+type SettleRequest = DistributiveOmit<PaymentSettleInput, "checkoutId" | "channel" | "checkoutMetadata">
 
 export type SettleAndCompleteResult =
   | { ok: true; order: SaleorOrder }
@@ -75,7 +75,7 @@ export async function settleAndCompleteCheckout(input: {
     const quoted = reconcilePayment({ quote: readPaymentQuote(metadata), total: checkout.totalPrice.gross })
     if (!quoted.ok) return reject({ code: quoted.code, message: quoted.message, status: 409, severity: "recoverable" })
 
-    const result = await paymentHandlers.settlePayment({ ...payment, checkoutId: id, checkoutMetadata: metadata } as PaymentSettleInput)
+    const result = await paymentHandlers.settlePayment({ ...payment, checkoutId: id, channel: checkout.channel.slug, checkoutMetadata: metadata } as PaymentSettleInput)
     if (!result.success || !result.transactionReference) {
       return reject({
         code: (!result.success && result.code) || (payment.protocol === "acp" ? "payment_declined" : "payment_failed"),

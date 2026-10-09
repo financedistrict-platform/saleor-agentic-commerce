@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { DummyPaymentHandler, DUMMY_HANDLER_ID } from "./handler.js"
 
 const PREPARE = {
@@ -37,5 +37,73 @@ describe("DummyPaymentHandler — checkout config round-trip (U-1)", () => {
     const h = new DummyPaymentHandler()
     expect(h.getUcpCheckoutHandlers({})).toEqual({})
     expect(h.getAcpCheckoutHandlers({})).toEqual([])
+  })
+})
+
+describe("DummyPaymentHandler on a production configuration", () => {
+  const settleInput = (prepared: unknown) => ({
+    checkoutId: PREPARE.checkoutId,
+    channel: "default-channel",
+    handlerId: DUMMY_HANDLER_ID,
+    ucpVersion: "2026-04-08",
+    credential: {},
+    checkoutMetadata: { [DUMMY_HANDLER_ID]: prepared },
+  })
+
+  beforeEach(() => {
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it("refuses to settle a prepared checkout in production without an explicit opt-in", async () => {
+    const prepared = await new DummyPaymentHandler().prepareCheckoutPayment(PREPARE)
+    vi.stubEnv("NODE_ENV", "production")
+    const h = new DummyPaymentHandler({ mode: "always_succeed" })
+
+    const result = await h.settlePayment(settleInput(prepared))
+
+    expect(result.success).toBe(false)
+  })
+
+  it("is not advertised or prepared in production without an explicit opt-in", async () => {
+    vi.stubEnv("NODE_ENV", "production")
+    const h = new DummyPaymentHandler()
+
+    expect(await h.getUcpDiscoveryHandlers()).toEqual({})
+    expect(await h.getAcpDiscoveryHandlers()).toEqual([])
+    expect(await h.prepareCheckoutPayment(PREPARE)).toBeNull()
+  })
+
+  it("ignores the mode env var forcing success when production refuses it", async () => {
+    const prepared = await new DummyPaymentHandler().prepareCheckoutPayment(PREPARE)
+    vi.stubEnv("NODE_ENV", "production")
+    vi.stubEnv("DUMMY_PAYMENT_MODE", "always_succeed")
+
+    const result = await new DummyPaymentHandler().settlePayment(settleInput(prepared))
+
+    expect(result.success).toBe(false)
+  })
+
+  it("refuses to settle when NODE_ENV is not set", async () => {
+    const prepared = await new DummyPaymentHandler().prepareCheckoutPayment(PREPARE)
+    vi.stubEnv("NODE_ENV", undefined)
+
+    const result = await new DummyPaymentHandler().settlePayment(settleInput(prepared))
+
+    expect(result.success).toBe(false)
+  })
+
+  it("settles in production when the code opts in explicitly", async () => {
+    vi.stubEnv("NODE_ENV", "production")
+    const h = new DummyPaymentHandler({ mode: "always_succeed", allowInProduction: true })
+    const prepared = await h.prepareCheckoutPayment(PREPARE)
+
+    const result = await h.settlePayment(settleInput(prepared))
+
+    expect(result.success).toBe(true)
   })
 })

@@ -96,6 +96,7 @@ export interface PaymentHandlerAdapter {
 export type CheckoutPrepareInput = {
   /** Saleor checkout ID */
   checkoutId: string
+  channel: string
   /** Total amount in minor units (cents) */
   total: number
   /** ISO 4217 currency code (e.g., "USD", "EUR") */
@@ -112,6 +113,7 @@ export type CheckoutPrepareInput = {
 type PaymentSettleInputBase = {
   /** Saleor checkout ID */
   checkoutId: string
+  channel: string
   /** The handler ID that the agent selected */
   handlerId: string
   ucpVersion: string
