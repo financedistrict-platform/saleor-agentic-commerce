@@ -7,6 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
+import { createRemoteJWKSet, errors, flattenedVerify } from "jose"
 import { saleorApp } from "./saleor-app"
 import { KEYS, type OrderEvent } from "./metadata-keys"
 import { SaleorApiClient, MUTATIONS } from "./saleor-api"
@@ -19,20 +20,72 @@ type WebhookContext = {
   payload: unknown
 }
 
+const JWKS_PATH = "/.well-known/jwks.json"
+const JWKS_TIMEOUT_MS = 5000
+const KEY_SET_UNAVAILABLE_CODES = new Set(["ERR_JWKS_TIMEOUT", "ERR_JWKS_INVALID", "ERR_JOSE_GENERIC"])
+
+type SignatureCheck = "verified" | "invalid" | "unavailable"
+
+const keySets = new Map<string, ReturnType<typeof createRemoteJWKSet>>()
+
+function keySetFor(saleorApiUrl: string): ReturnType<typeof createRemoteJWKSet> {
+  const url = new URL(JWKS_PATH, saleorApiUrl)
+  let keySet = keySets.get(url.href)
+  if (!keySet) {
+    keySet = createRemoteJWKSet(url, { timeoutDuration: JWKS_TIMEOUT_MS })
+    keySets.set(url.href, keySet)
+  }
+  return keySet
+}
+
+async function checkSaleorSignature(
+  saleorApiUrl: string,
+  signature: string,
+  body: string
+): Promise<SignatureCheck> {
+  const [header, detachedPayload, jwsSignature, ...rest] = signature.split(".")
+  if (!header || detachedPayload !== "" || !jwsSignature || rest.length > 0) {
+    return "invalid"
+  }
+
+  try {
+    await flattenedVerify(
+      { protected: header, payload: body, signature: jwsSignature },
+      keySetFor(saleorApiUrl),
+      { algorithms: ["RS256"] }
+    )
+    return "verified"
+  } catch (error) {
+    const keySetUnavailable =
+      !(error instanceof errors.JOSEError) || KEY_SET_UNAVAILABLE_CODES.has(error.code)
+    return keySetUnavailable ? "unavailable" : "invalid"
+  }
+}
+
+export type WebhookVerification =
+  | { ok: true; context: WebhookContext }
+  | { ok: false; response: NextResponse }
+
+const refuse = (message: string, status = 401): WebhookVerification => ({
+  ok: false,
+  response: webhookError(message, status),
+})
+
 /**
  * Verify a Saleor webhook request and extract the payload.
  *
- * Returns null if verification fails (caller should return 401).
+ * A forged or unreadable request is answered 401. When Saleor's key set cannot
+ * be fetched the answer is 503, so Saleor retries the delivery.
  */
 export async function verifyWebhook(
   request: NextRequest
-): Promise<WebhookContext | null> {
+): Promise<WebhookVerification> {
   const saleorApiUrl = request.headers.get("saleor-api-url")
   const saleorSignature = request.headers.get("saleor-signature")
 
   if (!saleorApiUrl || !saleorSignature) {
     console.warn("[Webhook] Missing saleor-api-url or saleor-signature header")
-    return null
+    return refuse("Webhook verification failed")
   }
 
   // Look up auth data for this Saleor instance
@@ -40,28 +93,36 @@ export async function verifyWebhook(
 
   if (!authData) {
     console.warn(`[Webhook] No auth data found for ${saleorApiUrl}`)
-    return null
+    return refuse("Webhook verification failed")
   }
 
-  // TODO: Implement full JWKS signature verification
-  // For now, we verify the domain matches our registered instance
-  // In production, use jose to verify the JWT signature against
-  // {saleorApiUrl}/.well-known/jwks.json
-
   const body = await request.text()
+
+  const signature = await checkSaleorSignature(authData.saleorApiUrl, saleorSignature, body)
+  if (signature === "unavailable") {
+    console.warn(`[Webhook] Could not fetch the signing keys of ${saleorApiUrl}`)
+    return refuse("Webhook verification unavailable", 503)
+  }
+  if (signature === "invalid") {
+    console.warn(`[Webhook] Signature verification failed for ${saleorApiUrl}`)
+    return refuse("Webhook verification failed")
+  }
 
   let payload: unknown
   try {
     payload = JSON.parse(body)
   } catch {
     console.warn("[Webhook] Failed to parse request body as JSON")
-    return null
+    return refuse("Webhook verification failed")
   }
 
   return {
-    saleorApiUrl: authData.saleorApiUrl,
-    token: authData.token,
-    payload,
+    ok: true,
+    context: {
+      saleorApiUrl: authData.saleorApiUrl,
+      token: authData.token,
+      payload,
+    },
   }
 }
 

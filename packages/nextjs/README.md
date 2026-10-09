@@ -139,11 +139,34 @@ createAgenticCommerce({
   ucpSupportedVersions?: string[],  // Extra UCP versions (default: every other known version)
   ucpVersionNegotiation?: "lenient" | "strict",  // default: "lenient"
   acpVersion?: string,         // ACP version (default: "2026-01-30")
-  acpApiKey?: string,          // API key for ACP Bearer token auth
+  acpApiKey?: string,          // Bearer key every ACP request must present; with none set, ACP refuses all requests
   paymentHandlers?: PaymentHandlerAdapter[],  // Payment handler adapters
   paymentReplayStore?: PaymentReplayStore,     // Required outside development and test
 })
 ```
+
+### ACP access
+
+ACP routes accept only `Authorization: Bearer <acpApiKey>`, compared in
+constant time. With no `acpApiKey` (or an empty one) every ACP route answers
+401. The App's `/api/config-public` does not return the key set in the App
+dashboard; pass the same value as `acpApiKey` here, or set `acpEnabled: false`.
+
+### Order reads
+
+`POST /api/ucp/checkout-sessions` returns a `UCP-Session-Secret` header once.
+Only its SHA-256 hash is stored, in checkout metadata, and Saleor carries it to
+the order. `GET /api/ucp/orders/{id}` needs that header: without it the answer
+is 401, and with a wrong secret, or for an order whose checkout never had one,
+it is 404. The `UCP-Agent` profile header identifies no one. If the hash cannot
+be stored, creation answers 503 and no secret is handed out.
+
+### Quote lifetime
+
+Every quote is stamped with the time it was made and is good for 15 minutes.
+Completing with an older quote answers 409 `payment_quote_expired`; an update to
+the checkout makes a fresh one. A quote with no readable timestamp is treated as
+missing. A payment already taken is never held back because its quote aged out.
 
 ### Payment replay store
 

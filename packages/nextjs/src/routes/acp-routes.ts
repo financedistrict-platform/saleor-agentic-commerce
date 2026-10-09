@@ -32,6 +32,7 @@ import {
   recordToMetadataInput,
   PAYMENT_QUOTE_METADATA_KEY,
   quoteForTotal,
+  secretsMatch,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
@@ -80,9 +81,11 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
   }
 
   function validateApiKey(request: Request): boolean {
-    if (!config.acpApiKey) return true // No key configured = open access
-    const auth = request.headers.get("Authorization")
-    return auth === `Bearer ${config.acpApiKey}`
+    const expected = config.acpApiKey
+    if (!expected) return false
+    const auth = request.headers.get("Authorization") ?? ""
+    if (!auth.startsWith("Bearer ")) return false
+    return secretsMatch(auth.slice("Bearer ".length), expected)
   }
 
   function endpointBaseUrl(_request: Request): string {

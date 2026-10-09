@@ -103,6 +103,7 @@ export type SaleorOrder = {
   billingAddress: SaleorAddress | null
   fulfillments: SaleorFulfillment[]
   metadata: SaleorMetadataItem[]
+  privateMetadata: SaleorMetadataItem[]
 }
 
 export type SaleorFulfillment = {
