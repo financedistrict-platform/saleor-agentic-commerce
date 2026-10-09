@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { SaleorCheckout, SaleorMetadataItem } from "@financedistrict/saleor-agentic-commerce-core"
+import type { PaymentHandlerAdapter, SaleorCheckout, SaleorMetadataItem } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgentProfileFetcher, AgentProfileResult } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import { PrismPaymentHandler } from "../../../../prism-payment/src/handler.js"
 import { createAgenticCommerce, type AgenticCommerceConfig } from "../../config.js"
+import { createAcpRoutes } from "../acp-routes.js"
 import { createUcpRoutes } from "../ucp-routes.js"
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "core", "src", "__fixtures__")
@@ -40,7 +41,9 @@ export function stubPrismGateway(options: { handlers?: string; requirements?: st
 
 export function fakeSaleor(initial: SaleorCheckout[] = []) {
   const checkouts = new Map(initial.map((c) => [c.id, structuredClone(c)]))
-  const transactions: { checkoutId: string; name: string; pspReference: string }[] = []
+  const transactions: { checkoutId: string; name: string; pspReference: string; amountCharged: { amount: number; currency: string } }[] = []
+  const charged = new Map<string, number>()
+  const completed: string[] = []
   const notFound = { ok: false as const, error: "Checkout not found" }
 
   const client = {
@@ -61,24 +64,44 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
       }
       return { ok: true as const, data: undefined }
     },
-    async createCheckoutTransaction(id: string, tx: { name: string; pspReference: string }) {
+    async createCheckoutTransaction(id: string, tx: { name: string; pspReference: string; amountCharged: { amount: number; currency: string } }) {
       const found = checkouts.get(id)
       if (!found) return notFound
       found.transactions = [...found.transactions, { pspReference: tx.pspReference }]
-      transactions.push({ checkoutId: id, name: tx.name, pspReference: tx.pspReference })
+      transactions.push({ checkoutId: id, name: tx.name, pspReference: tx.pspReference, amountCharged: tx.amountCharged })
+      charged.set(id, (charged.get(id) ?? 0) + tx.amountCharged.amount)
       return { ok: true as const, data: undefined }
+    },
+    async addCheckoutLines(id: string, lines: { variantId: string; quantity: number }[]) {
+      const found = checkouts.get(id)
+      if (!found) return notFound
+      for (const line of lines) {
+        const unit = VARIANT_PRICES[line.variantId] ?? 0
+        found.totalPrice.gross.amount = Math.round((found.totalPrice.gross.amount + unit * line.quantity) * 100) / 100
+      }
+      return { ok: true as const, data: structuredClone(found) }
+    },
+    async updateCheckoutLines() {
+      return { ok: false as const, error: "Insufficient stock", errors: [{ code: "INSUFFICIENT_STOCK", message: "Insufficient stock", field: "quantity" }] }
+    },
+    async deleteCheckoutLines(id: string) {
+      const found = checkouts.get(id)
+      return found ? { ok: true as const, data: structuredClone(found) } : notFound
     },
     async completeCheckout(id: string) {
       const found = checkouts.get(id)
       if (!found) return notFound
-      if (found.transactions.length === 0) {
+      if ((charged.get(id) ?? 0) < found.totalPrice.gross.amount) {
         return { ok: false as const, error: "Not paid", errors: [{ code: "CHECKOUT_NOT_FULLY_PAID", message: "Not paid", field: null }] }
       }
+      completed.push(id)
       return { ok: true as const, data: { id: "T3JkZXI6MQ==", number: "1001" } }
     },
   }
-  return { client, checkouts, transactions }
+  return { client, checkouts, transactions, completed }
 }
+
+export const VARIANT_PRICES: Record<string, number> = { UHJvZHVjdFZhcmlhbnQ6OTk5: 100 }
 
 export function fixedFetcher(profiles: Record<string, AgentProfileResult>): AgentProfileFetcher & { calls: string[] } {
   const calls: string[] = []
@@ -119,6 +142,7 @@ export function buildRoutes(options: {
   config?: Partial<AgenticCommerceConfig>
   checkouts?: SaleorCheckout[]
   prism?: boolean
+  handlers?: PaymentHandlerAdapter[]
 } = {}) {
   const saleor = fakeSaleor(options.checkouts)
   const fetcher = fixedFetcher(PROFILES)
@@ -127,12 +151,12 @@ export function buildRoutes(options: {
     saleorAuthToken: "token",
     storefrontUrl: STOREFRONT,
     storeName: "Demo Store",
-    paymentHandlers: options.prism ? [new PrismPaymentHandler({ apiUrl: "https://gw.example", apiKey: "test-key" })] : [],
+    paymentHandlers: options.handlers ?? (options.prism ? [new PrismPaymentHandler({ apiUrl: "https://gw.example", apiKey: "test-key" })] : []),
     ...options.config,
   })
   instance.saleorClient = saleor.client as unknown as typeof instance.saleorClient
   instance.agentProfileFetcher = fetcher
-  return { routes: createUcpRoutes(instance), saleor, fetcher, instance }
+  return { routes: createUcpRoutes(instance), acpRoutes: createAcpRoutes(instance), saleor, fetcher, instance }
 }
 
 export function ucpRequest(url: string, options: { agent?: string; method?: string; body?: unknown } = {}): Request {

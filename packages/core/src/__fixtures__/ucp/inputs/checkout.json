@@ -197,6 +197,10 @@
   "metadata": [],
   "privateMetadata": [
     {
+      "key": "agentic_commerce__quote",
+      "value": "{\"amount\":5497,\"currency\":\"USD\"}"
+    },
+    {
       "key": "xyz.fd.prism_payment",
       "value": "{\"ucp\":{\"xyz.fd.prism_payment\":[{\"id\":\"x402\",\"version\":\"2026-01-15\",\"config\":{\"x402Version\":2,\"resource\":{\"url\":\"https://gw.example/checkout/1\",\"description\":\"Order checkout at Demo Store\"},\"accepts\":[{\"scheme\":\"exact\",\"network\":\"eip155:84532\",\"payTo\":\"0x1111111111111111111111111111111111111111\",\"maxTimeoutSeconds\":300,\"asset\":\"0x036CbD53842c5426634e7929541eC2318f3dCF7e\",\"extra\":{\"name\":\"USDC\",\"version\":\"2\"},\"amount\":\"1000000\"}]}}]},\"acp\":null,\"preparedAmount\":5497,\"preparedResourceUrl\":\"https://store.test/api/ucp/checkout-sessions/Q2hlY2tvdXQ6MQ==\"}"
     }

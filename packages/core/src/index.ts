@@ -221,3 +221,19 @@ export type {
   ValidationResult,
   ValidationErrorCode,
 } from "./lib/validate-signed-amount.js"
+
+export {
+  PAYMENT_QUOTE_METADATA_KEY,
+  SETTLEMENT_METADATA_KEY,
+  quoteForTotal,
+  minorToSaleorMoney,
+  readPaymentQuote,
+  readSettlementRecord,
+  reconcilePayment,
+} from "./lib/payment-reconciliation.js"
+export type {
+  MinorMoney,
+  SettlementRecord,
+  ReconciliationErrorCode,
+  ReconciliationResult,
+} from "./lib/payment-reconciliation.js"

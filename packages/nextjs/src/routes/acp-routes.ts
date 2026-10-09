@@ -33,13 +33,15 @@ import {
   extractSignedSummary,
   readStoredPrismAccepts,
   validateSignedAgainstStored,
+  PAYMENT_QUOTE_METADATA_KEY,
+  SETTLEMENT_METADATA_KEY,
+  quoteForTotal,
+  minorToSaleorMoney,
+  readPaymentQuote,
+  readSettlementRecord,
+  reconcilePayment,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
-
-// Must match ucp-routes.ts — the checkout privateMetadata key holding the
-// settlement record (SAC-2), so a settle-then-fail is recoverable regardless of
-// which protocol drove the checkout.
-const SETTLEMENT_METADATA_KEY = "agentic_commerce__settlement"
 
 export type AcpRouteHandlers = {
   /** POST /api/acp/checkout_sessions */
@@ -101,20 +103,20 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
    * Returns the final checkout with updated metadata.
    */
   async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string) {
-    const totalAmount = Math.round(checkout.totalPrice.gross.amount * 100)
+    const quote = quoteForTotal(checkout.totalPrice.gross)
     const metadata = metadataToRecord(checkout.privateMetadata)
 
     const prepareResults = await paymentHandlers.prepareCheckoutPayment({
       checkoutId,
-      total: totalAmount,
-      currencyCode: checkout.totalPrice.gross.currency,
+      total: quote.amount,
+      currencyCode: quote.currency,
       checkoutBaseUrl: `${baseUrl}/checkout_sessions`,
       storeName: config.storeName,
       ucpVersion: config.ucpVersion,
       checkoutMetadata: metadata,
     })
 
-    const metadataUpdates = recordToMetadataInput(prepareResults)
+    const metadataUpdates = recordToMetadataInput({ ...prepareResults, [PAYMENT_QUOTE_METADATA_KEY]: quote })
     if (metadataUpdates.length > 0) {
       // Best-effort persist of the prepared payment config. If this write
       // fails the next request will re-prepare (idempotent on Prism's side
@@ -401,16 +403,13 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           }
         }
 
-        // --- Settle + record (SAC-2) — see ucp-routes.ts for the full rationale.
-        const priorSettlement = metadata[SETTLEMENT_METADATA_KEY] as
-          | { reference?: string }
-          | undefined
+        let settlement = readSettlementRecord(metadata)
+        if (!settlement) {
+          const quoted = reconcilePayment({ quote: readPaymentQuote(metadata), total: checkout.totalPrice.gross })
+          if (!quoted.ok) {
+            return acpError(quoted.code, quoted.message, 409)
+          }
 
-        let reference: string | undefined
-        if (priorSettlement?.reference) {
-          // Retry-to-recover: money already moved; don't settle again.
-          reference = priorSettlement.reference
-        } else {
           const settleResult = await paymentHandlers.settlePayment({
             checkoutId: id,
             protocol: "acp",
@@ -422,65 +421,67 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           if (!settleResult.success) {
             return acpError("payment_declined", settleResult.error || "Payment settlement failed", 422)
           }
-          reference = settleResult.transactionReference
+          if (!settleResult.transactionReference) {
+            return acpError("payment_declined", "Payment settlement returned no transaction reference", 422)
+          }
 
-          if (reference) {
-            const record = {
-              handlerId,
-              reference,
-              amount: checkout.totalPrice.gross.amount,
-              currency: checkout.totalPrice.gross.currency,
-              settledAt: new Date().toISOString(),
-            }
-            const recResult = await saleorClient.updatePrivateMetadata(id, [
-              { key: SETTLEMENT_METADATA_KEY, value: JSON.stringify(record) },
-            ])
-            if (!recResult.ok) {
-              console.error(`[acp-routes] settled ${reference} but failed to record settlement on ${id}: ${recResult.error}`)
-              return acpError(
-                "settlement_not_recorded",
-                `Payment settled (reference ${reference}) but recording it failed — the order was not created. Retry to reconcile.`,
-                422,
-              )
-            }
+          settlement = {
+            ...quoted.payable,
+            handlerId,
+            reference: settleResult.transactionReference,
+            settledAt: new Date().toISOString(),
+          }
+          const recResult = await saleorClient.updatePrivateMetadata(id, [
+            { key: SETTLEMENT_METADATA_KEY, value: JSON.stringify(settlement) },
+          ])
+          if (!recResult.ok) {
+            console.error(`[acp-routes] settled ${settlement.reference} but failed to record settlement on ${id}: ${recResult.error}`)
+            return acpError(
+              "settlement_not_recorded",
+              `Payment settled (reference ${settlement.reference}) but recording it failed — the order was not created. Retry to reconcile.`,
+              422,
+            )
+          }
+        }
+        const reference = settlement.reference
+
+        const alreadyRecorded = (checkout.transactions ?? []).some((t) => t.pspReference === reference)
+        if (!alreadyRecorded) {
+          const handler = paymentHandlers.getAdapter(settlement.handlerId)
+          const txResult = await saleorClient.createCheckoutTransaction(id, {
+            name: handler?.name ?? settlement.handlerId,
+            pspReference: reference,
+            amountCharged: minorToSaleorMoney(settlement),
+          })
+          if (!txResult.ok) {
+            return acpError(
+              "order_not_recorded_after_settlement",
+              `Payment settled (reference ${reference}) but recording the order failed: ${txResult.error}. Retry to complete the order.`,
+              422,
+            )
           }
         }
 
-        // Register the settled payment as a Saleor transaction, unless already
-        // recorded (retry after a later failure) — avoids a duplicate charge.
-        if (reference) {
-          const alreadyRecorded = (checkout.transactions ?? []).some((t) => t.pspReference === reference)
-          if (!alreadyRecorded) {
-            const handler = paymentHandlers.getAdapter(handlerId)
-            const txResult = await saleorClient.createCheckoutTransaction(id, {
-              name: handler?.name ?? handlerId,
-              pspReference: reference,
-              amountCharged: {
-                amount: checkout.totalPrice.gross.amount,
-                currency: checkout.totalPrice.gross.currency,
-              },
-            })
-            if (!txResult.ok) {
-              return acpError(
-                "order_not_recorded_after_settlement",
-                `Payment settled (reference ${reference}) but recording the order failed: ${txResult.error}. Retry to complete the order.`,
-                422,
-              )
-            }
-          }
+        const latest = await saleorClient.getCheckout(id)
+        if (!latest.ok) return acpError("not_found", latest.error, 404)
+        const reconciled = reconcilePayment({
+          quote: readPaymentQuote(metadataToRecord(latest.data.privateMetadata)),
+          total: latest.data.totalPrice.gross,
+          settled: settlement,
+        })
+        if (!reconciled.ok) {
+          console.error(`[acp-routes] holding checkout ${id} after settlement ${reference}: ${reconciled.message}`)
+          return acpError(reconciled.code, reconciled.message, 409)
         }
 
         // Complete checkout in Saleor
         const orderResult = await saleorClient.completeCheckout(id)
         if (!orderResult.ok) {
-          if (reference) {
-            return acpError(
-              "order_not_completed_after_settlement",
-              `Payment settled (reference ${reference}) but completing the order failed: ${orderResult.error}. Retry to complete the order.`,
-              422,
-            )
-          }
-          return acpError("processing_error", orderResult.error, 422)
+          return acpError(
+            "order_not_completed_after_settlement",
+            `Payment settled (reference ${reference}) but completing the order failed: ${orderResult.error}. Retry to complete the order.`,
+            422,
+          )
         }
 
         // Return full session with completed status + order

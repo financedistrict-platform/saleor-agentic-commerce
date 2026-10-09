@@ -23,3 +23,7 @@ export type FormatterContext = {
 export function toMinor(amount: number): number {
   return Math.round(amount * 100)
 }
+
+export function fromMinor(amount: number): number {
+  return amount / 100
+}
