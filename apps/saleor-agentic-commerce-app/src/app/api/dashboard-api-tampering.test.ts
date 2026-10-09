@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { readdirSync, readFileSync } from "node:fs"
+import { join, sep } from "node:path"
+import { fileURLToPath } from "node:url"
 import { NextRequest } from "next/server"
 import type { GlobalConfig, PaymentHandlerEntry } from "@/lib/metadata-keys"
 
@@ -84,19 +87,16 @@ const STORED_GLOBAL: GlobalConfig = {
 
 function request(
   path: string,
-  init: { method?: string; body?: unknown; jwt?: string | null } = {},
+  init: { method?: string; body?: unknown; jwt?: string | null; saleorApiUrl?: string } = {},
 ): NextRequest {
   const headers: Record<string, string> = { "content-type": "application/json" }
   if (init.jwt) headers["authorization-bearer"] = init.jwt
-  headers["saleor-api-url"] = SALEOR_API_URL
-  return new NextRequest(
-    `https://app.example${path}?saleorApiUrl=${encodeURIComponent(SALEOR_API_URL)}`,
-    {
-      method: init.method ?? "GET",
-      headers,
-      body: init.body === undefined ? undefined : JSON.stringify(init.body),
-    },
-  )
+  headers["saleor-api-url"] = init.saleorApiUrl ?? SALEOR_API_URL
+  return new NextRequest(`https://app.example${path}`, {
+    method: init.method ?? "GET",
+    headers,
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  })
 }
 
 const fetchSpy = vi.fn()
@@ -126,6 +126,35 @@ describe("dashboard API tampering — config and test-connection fail closed", (
   it("rejects GET /api/config that only names a registered saleorApiUrl", async () => {
     const res = await getConfig(request("/api/config"))
     expect(res.status).toBe(401)
+    expect(state.managers).toBe(0)
+  })
+
+  it("rejects a valid dashboard token sent for an install that is not registered", async () => {
+    const res = await getConfig(
+      request("/api/config", { jwt: VALID_JWT, saleorApiUrl: "https://attacker.example/graphql/" }),
+    )
+    expect(res.status).toBe(401)
+    expect(verifyJWT).not.toHaveBeenCalled()
+    expect(state.managers).toBe(0)
+  })
+
+  it("rejects with 401 when the APL lookup throws for an unknown install", async () => {
+    aplGet.mockRejectedValue(new Error("Unknown saleorApiUrl"))
+    const configRes = await getConfig(
+      request("/api/config", { jwt: VALID_JWT, saleorApiUrl: "https://attacker.example/graphql/" }),
+    )
+    const probeRes = await testConnection(
+      request("/api/payment-handlers/test-connection", {
+        method: "POST",
+        jwt: VALID_JWT,
+        saleorApiUrl: "https://attacker.example/graphql/",
+        body: { handlerId: "xyz.fd.prism_payment", apiUrl: "http://169.254.169.254", apiKey: "k" },
+      }),
+    )
+    expect(configRes.status).toBe(401)
+    expect(probeRes.status).toBe(401)
+    expect(verifyJWT).not.toHaveBeenCalled()
+    expect(fetchSpy).not.toHaveBeenCalled()
     expect(state.managers).toBe(0)
   })
 
@@ -240,5 +269,46 @@ describe("dashboard API tampering — config and test-connection fail closed", (
     expect(fetchSpy).toHaveBeenCalledTimes(1)
     const [, init] = fetchSpy.mock.calls[0]
     expect((init as RequestInit).headers).toMatchObject({ "x-api-key": STORED_PRISM_KEY })
+  })
+})
+
+const API_DIR = fileURLToPath(new URL(".", import.meta.url))
+
+const ROUTES_AUTHENTICATED_OUTSIDE_THE_DASHBOARD = [
+  "config-public",
+  "handlers/register",
+  "manifest",
+  "register",
+  "webhooks/fulfillment-created",
+  "webhooks/order-cancelled",
+  "webhooks/order-created",
+  "webhooks/order-updated",
+]
+
+function apiRoutes(): string[] {
+  return readdirSync(API_DIR, { recursive: true, encoding: "utf8" })
+    .map((file) => file.split(sep))
+    .filter((parts) => parts.at(-1) === "route.ts")
+    .map((parts) => parts.slice(0, -1).join("/"))
+    .sort()
+}
+
+const DASHBOARD_ROUTES = apiRoutes().filter(
+  (route) => !ROUTES_AUTHENTICATED_OUTSIDE_THE_DASHBOARD.includes(route),
+)
+
+describe("dashboard API tampering — every dashboard route requires a verified dashboard token", () => {
+  it("lists only existing routes as authenticated outside the dashboard", () => {
+    expect(apiRoutes()).toEqual(expect.arrayContaining(ROUTES_AUTHENTICATED_OUTSIDE_THE_DASHBOARD))
+    expect(DASHBOARD_ROUTES).toEqual(expect.arrayContaining(["config", "payment-handlers/test-connection"]))
+  })
+
+  it.each(DASHBOARD_ROUTES)("/api/%s guards every handler with getAuthContext", (route) => {
+    const source = readFileSync(join(API_DIR, route, "route.ts"), "utf8")
+    const handlers = source.match(/export (async )?function (GET|POST|PUT|PATCH|DELETE)\b/g) ?? []
+    const guards = source.match(/await getAuthContext\(request\)/g) ?? []
+    expect(handlers.length).toBeGreaterThan(0)
+    expect(guards.length).toBe(handlers.length)
+    expect(source).not.toMatch(/export const (GET|POST|PUT|PATCH|DELETE)\b/)
   })
 })

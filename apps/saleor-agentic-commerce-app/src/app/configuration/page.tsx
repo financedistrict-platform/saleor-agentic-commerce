@@ -46,12 +46,12 @@ export default function ConfigurationPage() {
   const [error, setError] = useState<string | null>(null)
 
   const saleorApiUrl = appBridgeState?.saleorApiUrl ?? null
-  const dashboardToken = appBridgeState?.token ?? null
+  const hasDashboardToken = Boolean(appBridgeState?.token)
   const dashboardFetch = useDashboardFetch()
 
   // Fetch configuration
   useEffect(() => {
-    if (!saleorApiUrl || !dashboardToken) return
+    if (!saleorApiUrl || !hasDashboardToken) return
 
     const loadConfig = async () => {
       try {
@@ -73,7 +73,7 @@ export default function ConfigurationPage() {
     }
 
     loadConfig()
-  }, [saleorApiUrl, dashboardToken, dashboardFetch])
+  }, [saleorApiUrl, hasDashboardToken, dashboardFetch])
 
   // Save configuration
   const saveConfig = async (body: {

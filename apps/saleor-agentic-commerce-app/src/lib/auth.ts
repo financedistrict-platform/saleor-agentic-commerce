@@ -23,25 +23,25 @@ export async function getAuthContext(
     return null
   }
 
-  const authData = await saleorApp.apl.get(saleorApiUrl)
-
-  if (!authData) {
-    return null
-  }
-
   try {
+    const authData = await saleorApp.apl.get(saleorApiUrl)
+
+    if (!authData) {
+      return null
+    }
+
     await verifyJWT({
       token: dashboardToken,
       appId: authData.appId,
       saleorApiUrl: authData.saleorApiUrl,
       requiredPermissions: DASHBOARD_REQUIRED_PERMISSIONS,
     })
+
+    return {
+      saleorApiUrl: authData.saleorApiUrl,
+      token: authData.token,
+    }
   } catch {
     return null
-  }
-
-  return {
-    saleorApiUrl: authData.saleorApiUrl,
-    token: authData.token,
   }
 }
