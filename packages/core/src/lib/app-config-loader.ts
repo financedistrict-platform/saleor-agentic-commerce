@@ -271,9 +271,12 @@ function parseMetadata(entries: MetadataEntry[]): AppConfig {
         // channel entries. Read those too so we don't lose state from a
         // pre-PR-10 install.
         for (const ph of channelConfig.paymentHandlers ?? []) {
-          if (ph.enabled && !allHandlers.has(ph.handlerId)) {
-            allHandlers.set(ph.handlerId, ph)
-          }
+          if (!ph.enabled) continue
+          const known = allHandlers.get(ph.handlerId)
+          allHandlers.set(
+            ph.handlerId,
+            known ? { ...known, channels: [...(known.channels ?? []), slug] } : { ...ph, channels: [slug] }
+          )
         }
       } catch {
         // Skip malformed channel config

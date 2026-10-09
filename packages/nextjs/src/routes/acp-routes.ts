@@ -104,6 +104,7 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
 
     const prepareResults = await paymentHandlers.prepareCheckoutPayment({
       checkoutId,
+      channel: checkout.channel.slug,
       total: quote.amount,
       currencyCode: quote.currency,
       checkoutBaseUrl: `${baseUrl}/checkout_sessions`,

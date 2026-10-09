@@ -190,11 +190,11 @@ async function createFromApp(
   }
 
   // Build payment handlers from App config
-  const appHandlers: PaymentHandlerAdapter[] = []
+  const appHandlers: AppRegisteredHandler[] = []
   if (config.paymentHandlerFactory) {
     for (const ph of appConfig.paymentHandlers) {
-      const handler = config.paymentHandlerFactory(ph)
-      if (handler) appHandlers.push(handler)
+      const adapter = config.paymentHandlerFactory(ph)
+      if (adapter) appHandlers.push({ adapter, channels: ph.channels ?? null })
     }
   }
 
@@ -205,21 +205,23 @@ async function createFromApp(
     storeName,
     storeDescription: config.storeDescription || appConfig.storeDescription,
     acpApiKey: config.acpApiKey || appConfig.acpApiKey,
-    paymentHandlers: [...appHandlers, ...(config.paymentHandlers || [])],
     enabled: config.enabled ?? appConfig.enabled,
     ucpEnabled: config.ucpEnabled ?? appConfig.ucpEnabled,
     acpEnabled: config.acpEnabled ?? appConfig.acpEnabled,
   }
 
-  return buildInstance(mergedConfig, storeName)
+  return buildInstance(mergedConfig, storeName, appHandlers)
 }
 
 /**
  * Build the final instance from resolved config.
  */
+type AppRegisteredHandler = { adapter: PaymentHandlerAdapter; channels: readonly string[] | null }
+
 function buildInstance(
   config: AgenticCommerceConfig,
-  storeName: string
+  storeName: string,
+  appHandlers: AppRegisteredHandler[] = []
 ): AgenticCommerceInstance {
   const ucpRegistry = createUcpVersionRegistry({
     ucpVersion: config.ucpVersion,
@@ -238,6 +240,9 @@ function buildInstance(
 
   // Create and populate payment handler registry
   const paymentHandlers = new PaymentHandlerRegistry()
+  for (const { adapter, channels } of appHandlers) {
+    paymentHandlers.registerAdapter(adapter, channels)
+  }
   for (const handler of config.paymentHandlers || []) {
     paymentHandlers.registerAdapter(handler)
   }

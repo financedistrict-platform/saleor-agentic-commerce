@@ -16,7 +16,10 @@ locally with no remote API calls. It exists to:
 3. **Exercise error paths.** Configurable settlement mode lets tests
    provoke deterministic failures.
 
-Don't use it in production.
+Don't use it in production. The handler is on only when `NODE_ENV` is
+`development` or `test`. Anywhere else, including an unset `NODE_ENV`, it
+is off: it is not advertised, not prepared, and refuses to settle. Only
+code can turn it back on, with `allowInProduction: true`. No env var can.
 
 ## Install
 

@@ -23,19 +23,26 @@ import type {
 
 export class PaymentHandlerRegistry {
   private adapters: PaymentHandlerAdapter[] = []
+  private channelAllowList = new Map<string, readonly string[] | null>()
 
   /**
    * Register a payment handler adapter.
    * Prevents duplicate registration by adapter ID.
    */
-  registerAdapter(adapter: PaymentHandlerAdapter): void {
+  registerAdapter(adapter: PaymentHandlerAdapter, channels: readonly string[] | null = null): void {
     if (this.adapters.some((a) => a.id === adapter.id)) {
       console.warn(`[payment-handler-registry] Adapter "${adapter.id}" already registered, skipping`)
       return
     }
 
     this.adapters.push(adapter)
+    this.channelAllowList.set(adapter.id, channels)
     console.log(`[payment-handler-registry] Registered: ${adapter.name} (${adapter.id})`)
+  }
+
+  private servesChannel(adapter: PaymentHandlerAdapter, channel: string): boolean {
+    const allowed = this.channelAllowList.get(adapter.id)
+    return allowed === null || (allowed !== undefined && allowed.includes(channel))
   }
 
   getAdapters(): readonly PaymentHandlerAdapter[] {
@@ -105,7 +112,7 @@ export class PaymentHandlerRegistry {
     if (this.adapters.length === 0) return {}
 
     const results = await Promise.allSettled(
-      this.adapters.map((a) => a.prepareCheckoutPayment(input)),
+      this.adapters.map((a) => (this.servesChannel(a, input.channel) ? a.prepareCheckoutPayment(input) : null)),
     )
 
     const output: Record<string, unknown | null> = {}
@@ -132,6 +139,23 @@ export class PaymentHandlerRegistry {
       return {
         success: false,
         error: `Unknown payment handler: ${input.handlerId}`,
+      }
+    }
+
+    if (!this.servesChannel(adapter, input.channel)) {
+      return {
+        success: false,
+        code: "payment_handler_unavailable",
+        error: `Payment handler ${adapter.id} is not enabled for channel ${input.channel}`,
+      }
+    }
+
+    const prepared = input.checkoutMetadata?.[adapter.id]
+    if (typeof prepared !== "object" || prepared === null || Array.isArray(prepared)) {
+      return {
+        success: false,
+        code: "payment_handler_not_prepared",
+        error: `Payment handler ${adapter.id} was not prepared for this checkout`,
       }
     }
 
