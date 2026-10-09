@@ -15,6 +15,11 @@ export type SettlementRecord = MinorMoney & {
   settledAt: string
 }
 
+export type SettlementRead =
+  | { kind: "absent" }
+  | { kind: "unreadable"; raw: unknown }
+  | { kind: "ok"; record: SettlementRecord }
+
 export type ReconciliationErrorCode =
   | "payment_quote_missing"
   | "payment_quote_stale"
@@ -36,14 +41,19 @@ export function readPaymentQuote(metadata: Record<string, unknown>): MinorMoney 
   return readMinorMoney(metadata[PAYMENT_QUOTE_METADATA_KEY])
 }
 
-export function readSettlementRecord(metadata: Record<string, unknown>): SettlementRecord | null {
-  const raw = metadata[SETTLEMENT_METADATA_KEY]
+export function readSettlementRecord(metadata: Record<string, unknown>): SettlementRead {
+  if (!(SETTLEMENT_METADATA_KEY in metadata)) return { kind: "absent" }
+  return parseSettlementRecord(metadata[SETTLEMENT_METADATA_KEY])
+}
+
+export function parseSettlementRecord(raw: unknown): SettlementRead {
+  const unreadable = { kind: "unreadable" as const, raw }
   const money = readMinorMoney(raw)
-  if (!money) return null
+  if (!money) return unreadable
   const record = raw as Record<string, unknown>
-  if (typeof record.reference !== "string" || record.reference.length === 0) return null
-  if (typeof record.handlerId !== "string" || typeof record.settledAt !== "string") return null
-  return { ...money, handlerId: record.handlerId, reference: record.reference, settledAt: record.settledAt }
+  if (typeof record.reference !== "string" || record.reference.length === 0) return unreadable
+  if (typeof record.handlerId !== "string" || typeof record.settledAt !== "string") return unreadable
+  return { kind: "ok", record: { ...money, handlerId: record.handlerId, reference: record.reference, settledAt: record.settledAt } }
 }
 
 export function reconcilePayment(input: {
@@ -62,7 +72,7 @@ export function reconcilePayment(input: {
 
   const total = quoteForTotal(input.total)
 
-  if (settled && !sameMoney(settled, total)) {
+  if (settled && !sameMinorMoney(settled, total)) {
     return {
       ok: false,
       code: "order_total_changed_after_settlement",
@@ -70,7 +80,7 @@ export function reconcilePayment(input: {
     }
   }
 
-  if (!sameMoney(quote, total)) {
+  if (!sameMinorMoney(quote, total)) {
     return {
       ok: false,
       code: "payment_quote_stale",
@@ -89,7 +99,7 @@ function readMinorMoney(raw: unknown): MinorMoney | null {
   return { amount, currency }
 }
 
-function sameMoney(a: MinorMoney, b: MinorMoney): boolean {
+export function sameMinorMoney(a: MinorMoney, b: MinorMoney): boolean {
   return a.amount === b.amount && a.currency === b.currency
 }
 

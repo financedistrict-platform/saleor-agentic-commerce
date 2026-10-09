@@ -49,6 +49,33 @@ export function classifyCompleteErrors(errors: unknown): CheckoutReadiness {
   return { status: "incomplete", ready: false, messages }
 }
 
+export type PaidOrdersOnlyResult =
+  | { ok: true }
+  | { ok: false; code: "channel_allows_unpaid_orders" | "channel_order_settings_unreadable"; message: string }
+
+export async function checkPaidOrdersOnly(
+  saleor: Pick<SaleorClient, "getChannelOrderSettings">,
+  checkout: Pick<SaleorCheckout, "channel">,
+): Promise<PaidOrdersOnlyResult> {
+  const slug = checkout.channel.slug
+  const settings = await saleor.getChannelOrderSettings(slug)
+  if (!settings.ok || typeof settings.data.allowUnpaidOrders !== "boolean") {
+    return {
+      ok: false,
+      code: "channel_order_settings_unreadable",
+      message: `Could not confirm that channel ${slug} refuses unpaid orders${settings.ok ? "" : `: ${settings.error}`}. The order was not placed.`,
+    }
+  }
+  if (settings.data.allowUnpaidOrders) {
+    return {
+      ok: false,
+      code: "channel_allows_unpaid_orders",
+      message: `Channel ${slug} allows unpaid orders, so a checkout could complete without full payment. Disable "allow unpaid orders" on the channel.`,
+    }
+  }
+  return { ok: true }
+}
+
 export async function evaluateReadiness(
   saleor: SaleorClient,
   checkout: SaleorCheckout,
@@ -67,6 +94,16 @@ export async function evaluateReadiness(
       status: hasLines ? "ready_for_complete" : "incomplete",
       ready: hasLines,
       messages: [],
+    }
+  }
+
+  const paidOnly = await checkPaidOrdersOnly(saleor, checkout)
+  if (!paidOnly.ok) {
+    console.error(`[checkout-readiness] not probing checkout ${checkout.id}: ${paidOnly.message}`)
+    return {
+      status: "incomplete",
+      ready: false,
+      messages: [{ type: "error", code: paidOnly.code, content: paidOnly.message, severity: "unrecoverable" }],
     }
   }
 

@@ -44,6 +44,7 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
   const transactions: { checkoutId: string; name: string; pspReference: string; amountCharged: { amount: number; currency: string } }[] = []
   const charged = new Map<string, number>()
   const completed: string[] = []
+  const channel: { allowUnpaidOrders: boolean | null } = { allowUnpaidOrders: false }
   const notFound = { ok: false as const, error: "Checkout not found" }
 
   const client = {
@@ -91,15 +92,27 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
     async completeCheckout(id: string) {
       const found = checkouts.get(id)
       if (!found) return notFound
-      if ((charged.get(id) ?? 0) < found.totalPrice.gross.amount) {
+      if (!channel.allowUnpaidOrders && (charged.get(id) ?? 0) < found.totalPrice.gross.amount) {
         return { ok: false as const, error: "Not paid", errors: [{ code: "CHECKOUT_NOT_FULLY_PAID", message: "Not paid", field: null }] }
       }
       completed.push(id)
       return { ok: true as const, data: { id: "T3JkZXI6MQ==", number: "1001" } }
     },
+    async updateCheckoutBillingAddress(id: string) {
+      const found = checkouts.get(id)
+      if (!found) return notFound
+      found.totalPrice.gross.amount = Math.round((found.totalPrice.gross.amount + BILLING_TAX) * 100) / 100
+      return { ok: true as const, data: structuredClone(found) }
+    },
+    async getChannelOrderSettings() {
+      if (channel.allowUnpaidOrders === null) return { ok: false as const, error: "You need one of the following permissions: MANAGE_CHANNELS, MANAGE_ORDERS" }
+      return { ok: true as const, data: { allowUnpaidOrders: channel.allowUnpaidOrders } }
+    },
   }
-  return { client, checkouts, transactions, completed }
+  return { client, checkouts, transactions, completed, channel }
 }
+
+export const BILLING_TAX = 5
 
 export const VARIANT_PRICES: Record<string, number> = { UHJvZHVjdFZhcmlhbnQ6OTk5: 100 }
 

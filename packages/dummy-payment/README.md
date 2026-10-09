@@ -67,7 +67,7 @@ await registerHandler({
 ## Behavior
 
 ### `mode = "always_succeed"` (default)
-Settlement returns `{ success: true, transactionReference: "dummy_tx_<timestamp>_<rand>" }`.
+Settlement returns `{ success: true, transactionReference: "dummy_tx_<timestamp>_<rand>", settled: { amount, currency } }`, where `settled` is the prepared amount stored on the checkout. Without a prepared amount it fails and nothing is settled.
 
 ### `mode = "always_fail"`
 Settlement returns `{ success: false, error: "Dummy handler simulated failure (mode=always_fail)" }`.

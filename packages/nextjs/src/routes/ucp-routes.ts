@@ -34,22 +34,15 @@ import {
   ucpToSaleorAddress,
   metadataToRecord,
   recordToMetadataInput,
-  extractSignedSummary,
-  readStoredPrismAccepts,
-  validateSignedAgainstStored,
   planCartReplacement,
   saleorErrorsToUcpMessages,
   evaluateReadiness,
   isWellFormedInstrument,
   PAYMENT_QUOTE_METADATA_KEY,
-  SETTLEMENT_METADATA_KEY,
   quoteForTotal,
-  minorToSaleorMoney,
-  readPaymentQuote,
-  readSettlementRecord,
-  reconcilePayment,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
+import { settleAndCompleteCheckout } from "./settle-and-complete.js"
 import type { FormatterContext, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
@@ -552,7 +545,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         const checkoutResult = await saleorClient.getCheckout(id)
         if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
 
-        const checkout = checkoutResult.data
+        let checkout = checkoutResult.data
         const metadata = metadataToRecord(checkout.privateMetadata)
         const pinned = pinScope(scope, metadata)
         if (pinned instanceof Response) return pinned
@@ -580,125 +573,36 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           if (!billingResult.ok) {
             return ucpSaleorError(scope.wire, "billing_address_update_failed", 422, billingResult)
           }
+          const refreshed = await saleorClient.getCheckout(id)
+          if (!refreshed.ok) return ucpError(scope.wire, "checkout_not_found", refreshed.error, 404)
+          checkout = refreshed.data
         }
 
-        // Validate the agent's signed payload against the checkout's
-        // stored Prism quote before forwarding to settlement. See
-        // validate-signed-amount.ts for details. Skipped if the credential
-        // shape is unrecognised or the checkout has no stored Prism quote
-        // (non-Prism handler) — those cases fall through to existing
-        // downstream validation.
-        const signedSummary = extractSignedSummary(selectedInstrument.credential)
-        if (signedSummary) {
-          const storedAccepts = readStoredPrismAccepts(metadata, "ucp")
-          if (storedAccepts) {
-            const validation = validateSignedAgainstStored(signedSummary, storedAccepts)
-            if (!validation.ok) {
-              return ucpError(scope.wire, validation.code, validation.message, 422)
-            }
-          }
-        }
-
-        let settlement = readSettlementRecord(metadata)
-        if (!settlement) {
-          const readiness = await evaluateReadiness(saleorClient, checkout)
-          if (!readiness.ready) {
-            return Response.json(
-              formatUcpCheckoutSession(scope.ctx, checkout, readiness),
-            )
-          }
-
-          const quoted = reconcilePayment({ quote: readPaymentQuote(metadata), total: checkout.totalPrice.gross })
-          if (!quoted.ok) {
-            return ucpError(scope.wire, quoted.code, quoted.message, 409, "recoverable")
-          }
-
-          const settleResult = await paymentHandlers.settlePayment({
-            checkoutId: id,
+        const completion = await settleAndCompleteCheckout({
+          instance,
+          checkout,
+          payment: {
             protocol: "ucp",
             handlerId,
             ucpVersion: scope.version,
             instrumentType: selectedInstrument.type,
             credential: selectedInstrument.credential,
-            checkoutMetadata: metadata,
-          })
-          if (!settleResult.success) {
-            return ucpError(scope.wire, "payment_failed", settleResult.error || "Payment settlement failed", 422, "recoverable")
-          }
-          if (!settleResult.transactionReference) {
-            return ucpError(scope.wire, "payment_failed", "Payment settlement returned no transaction reference", 422, "recoverable")
-          }
-
-          settlement = {
-            ...quoted.payable,
-            handlerId,
-            reference: settleResult.transactionReference,
-            settledAt: new Date().toISOString(),
-          }
-          const recResult = await saleorClient.updatePrivateMetadata(id, [
-            { key: SETTLEMENT_METADATA_KEY, value: JSON.stringify(settlement) },
-          ])
-          if (!recResult.ok) {
-            console.error(`[ucp-routes] settled ${settlement.reference} but failed to record settlement on ${id}: ${recResult.error}`)
-            return ucpError(
-              scope.wire,
-              "settlement_not_recorded",
-              `Payment settled on-chain (reference ${settlement.reference}) but recording it failed — the order was not created. Retry to reconcile.`,
-              422,
-              "recoverable",
-            )
-          }
-        }
-        const reference = settlement.reference
-
-        const alreadyRecorded = (checkout.transactions ?? []).some((t) => t.pspReference === reference)
-        if (!alreadyRecorded) {
-          const handler = paymentHandlers.getAdapter(settlement.handlerId)
-          const txResult = await saleorClient.createCheckoutTransaction(id, {
-            name: handler?.name ?? settlement.handlerId,
-            pspReference: reference,
-            amountCharged: minorToSaleorMoney(settlement),
-          })
-          if (!txResult.ok) {
-            return ucpError(
-              scope.wire,
-              "order_not_recorded_after_settlement",
-              `Payment settled (reference ${reference}) but recording the order failed: ${txResult.error}. Retry to complete the order.`,
-              422,
-              "recoverable",
-            )
-          }
-        }
-
-        const latest = await saleorClient.getCheckout(id)
-        if (!latest.ok) return ucpError(scope.wire, "checkout_not_found", latest.error, 404)
-        const reconciled = reconcilePayment({
-          quote: readPaymentQuote(metadataToRecord(latest.data.privateMetadata)),
-          total: latest.data.totalPrice.gross,
-          settled: settlement,
+          },
+          beforeSettle: async () => {
+            const readiness = await evaluateReadiness(saleorClient, checkout)
+            return readiness.ready ? null : Response.json(formatUcpCheckoutSession(scope.ctx, checkout, readiness))
+          },
+          fail: ({ code, message, status, severity }) => ucpError(scope.wire, code, message, status, severity),
+          logPrefix: "[ucp-routes]",
         })
-        if (!reconciled.ok) {
-          console.error(`[ucp-routes] holding checkout ${id} after settlement ${reference}: ${reconciled.message}`)
-          return ucpError(scope.wire, reconciled.code, reconciled.message, 409, "requires_buyer_input")
-        }
-
-        // Complete checkout in Saleor
-        const orderResult = await saleorClient.completeCheckout(id)
-        if (!orderResult.ok) {
-          return ucpError(
-            scope.wire,
-            "order_not_completed_after_settlement",
-            `Payment settled (reference ${reference}) but completing the order failed: ${orderResult.error}. Retry to complete the order.`,
-            422,
-            "recoverable",
-          )
-        }
+        if (!completion.ok) return completion.response
+        const order = completion.order
 
         // Return checkout session with completed status and order confirmation
         const orderConfirmation = {
-          id: orderResult.data.id,
-          label: orderResult.data.number ?? undefined,
-          permalink_url: `${config.storefrontUrl}/orders/${orderResult.data.id}`,
+          id: order.id,
+          label: order.number ?? undefined,
+          permalink_url: `${config.storefrontUrl}/orders/${order.id}`,
         }
 
         const response = formatUcpCompleteResponse(scope.ctx, checkout, orderConfirmation)

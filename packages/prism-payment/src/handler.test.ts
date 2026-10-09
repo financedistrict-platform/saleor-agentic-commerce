@@ -296,7 +296,7 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
     const stale = {
       ucp: sampleUcpPrepare,
       acp: sampleAcpHandler,
-      preparedAmount: 999,
+      preparedAmount: 999, preparedCurrency: "USD",
       preparedResourceUrl: "https://store.test/checkout/abc",
     }
 
@@ -317,7 +317,7 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
     const stored = {
       ucp: sampleUcpPrepare,
       acp: sampleAcpHandler,
-      preparedAmount: 1099,
+      preparedAmount: 1099, preparedCurrency: "USD",
       preparedResourceUrl: "https://store.test/checkout/abc",
     }
 
@@ -339,7 +339,7 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
     const stored = {
       ucp: sampleUcpPrepare,
       acp: sampleAcpHandler,
-      preparedAmount: 999, // different from baseInput.total
+      preparedAmount: 999, preparedCurrency: "USD", // different from baseInput.total
       preparedResourceUrl: "https://store.test/checkout/abc",
     }
 
@@ -414,7 +414,7 @@ describe("PrismPaymentHandler — checkout-context handlers", () => {
     const stored = {
       ucp: sampleUcpPrepare,
       acp: sampleAcpHandler,
-      preparedAmount: 1099,
+      preparedAmount: 1099, preparedCurrency: "USD",
       preparedResourceUrl: "https://store.test/checkout/abc",
     }
 
@@ -428,7 +428,7 @@ describe("PrismPaymentHandler — checkout-context handlers", () => {
     const stored = {
       ucp: sampleUcpPrepare,
       acp: sampleAcpHandler,
-      preparedAmount: 1099,
+      preparedAmount: 1099, preparedCurrency: "USD",
       preparedResourceUrl: "https://store.test/checkout/abc",
     }
 
@@ -462,7 +462,7 @@ describe("PrismPaymentHandler — settlement", () => {
         [PRISM_HANDLER_ID]: {
           ucp: sampleUcpPrepare,
           acp: null,
-          preparedAmount: 1099,
+          preparedAmount: 1099, preparedCurrency: "USD",
           preparedResourceUrl: "https://store.test/checkout/abc",
         },
       },
@@ -493,7 +493,7 @@ describe("PrismPaymentHandler — settlement", () => {
         [PRISM_HANDLER_ID]: {
           ucp: null,
           acp: sampleAcpHandler,
-          preparedAmount: 1099,
+          preparedAmount: 1099, preparedCurrency: "USD",
           preparedResourceUrl: "https://store.test/checkout/abc",
         },
       },
@@ -507,7 +507,7 @@ describe("PrismPaymentHandler — settlement", () => {
 
   it("settles an ACP credential without applying the UCP type rule", async () => {
     const { handler, mock } = makeHandler()
-    mock.settle.mockResolvedValue({ success: true })
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xacp" })
 
     const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
 
@@ -521,7 +521,7 @@ describe("PrismPaymentHandler — settlement", () => {
         [PRISM_HANDLER_ID]: {
           ucp: null,
           acp: sampleAcpHandler,
-          preparedAmount: 1099,
+          preparedAmount: 1099, preparedCurrency: "USD",
           preparedResourceUrl: "https://store.test/checkout/abc",
         },
       },
@@ -559,7 +559,7 @@ describe("PrismPaymentHandler — settlement", () => {
         [PRISM_HANDLER_ID]: {
           ucp: multiUcp,
           acp: null,
-          preparedAmount: 1099,
+          preparedAmount: 1099, preparedCurrency: "USD",
           preparedResourceUrl: "https://store.test/checkout/abc",
         },
       },
@@ -575,7 +575,7 @@ describe("PrismPaymentHandler — settlement", () => {
     [PRISM_HANDLER_ID]: {
       ucp: sampleUcpPrepare,
       acp: null,
-      preparedAmount: 1099,
+      preparedAmount: 1099, preparedCurrency: "USD",
       preparedResourceUrl: "https://store.test/checkout/abc",
     },
   }
@@ -677,7 +677,7 @@ describe("PrismPaymentHandler — settlement", () => {
         [PRISM_HANDLER_ID]: {
           ucp: multiUcp,
           acp: null,
-          preparedAmount: 1099,
+          preparedAmount: 1099, preparedCurrency: "USD",
           preparedResourceUrl: "https://store.test/checkout/abc",
         },
       },
@@ -779,10 +779,44 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       instrumentType,
       credential: { ...credentialType, x402Version: 2, network: "base-sepolia", payload: {} },
       checkoutMetadata: {
-        [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedResourceUrl: "https://store.test/checkout/abc" },
+        [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc" },
       },
     })
 
-    expect(result).toEqual({ success: true, transactionReference: "0xabc" })
+    expect(result).toEqual({ success: true, transactionReference: "0xabc", settled: { amount: 1099, currency: "USD" } })
+  })
+})
+
+describe("PrismPaymentHandler — settled amount", () => {
+  const credential = { type: "x402", x402Version: 2, network: "base-sepolia", payload: {} }
+
+  it("refuses to settle when the stored config has no prepared amount", async () => {
+    const { handler, mock } = makeHandler()
+    const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
+      checkoutId: "abc",
+      handlerId: PRISM_HANDLER_ID,
+      instrumentType: "x402",
+      credential,
+      checkoutMetadata: { [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedResourceUrl: "https://store.test/checkout/abc" } },
+    })
+
+    expect(result).toEqual({ success: false, error: "Prism payment config has no prepared amount" })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("fails when the gateway reports success without a transaction reference", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true })
+    const result = await handler.settlePayment({
+      ucpVersion: TEST_UCP_VERSION,
+      checkoutId: "abc",
+      handlerId: PRISM_HANDLER_ID,
+      instrumentType: "x402",
+      credential,
+      checkoutMetadata: { [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc" } },
+    })
+
+    expect(result).toEqual({ success: false, error: "Prism settlement returned no transaction reference" })
   })
 })

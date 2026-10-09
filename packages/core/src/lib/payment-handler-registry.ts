@@ -105,20 +105,19 @@ export class PaymentHandlerRegistry {
     if (this.adapters.length === 0) return {}
 
     const results = await Promise.allSettled(
-      this.adapters.map(async (a) => ({
-        id: a.id,
-        result: await a.prepareCheckoutPayment(input),
-      })),
+      this.adapters.map((a) => a.prepareCheckoutPayment(input)),
     )
 
     const output: Record<string, unknown | null> = {}
-    for (const result of results) {
+    results.forEach((result, index) => {
+      const id = this.adapters[index].id
       if (result.status === "fulfilled") {
-        output[result.value.id] = result.value.result
+        output[id] = result.value
       } else {
-        console.error(`[payment-handler-registry] Checkout-prepare failed:`, result.reason)
+        console.error(`[payment-handler-registry] Checkout-prepare failed for ${id}:`, result.reason)
+        output[id] = null
       }
-    }
+    })
 
     return output
   }
