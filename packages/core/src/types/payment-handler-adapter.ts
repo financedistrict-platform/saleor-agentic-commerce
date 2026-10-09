@@ -141,4 +141,5 @@ export type PaymentSettleResult =
       success: false
       /** Error message on failure */
       error: string
+      code?: string
     }
