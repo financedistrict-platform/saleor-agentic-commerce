@@ -15,15 +15,3 @@ export type FormatterContext = {
   acpVersion: string
   paymentHandlers: PaymentHandlerRegistry
 }
-
-/**
- * Convert Saleor amount to minor units (cents).
- * Saleor returns amounts as decimals (e.g., 12.50 for $12.50).
- */
-export function toMinor(amount: number): number {
-  return Math.round(amount * 100)
-}
-
-export function fromMinor(amount: number): number {
-  return amount / 100
-}

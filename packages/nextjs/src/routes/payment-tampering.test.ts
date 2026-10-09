@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import type { CheckoutPrepareInput, PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
-import { buildRoutes, CHECKOUT_ID, checkoutTemplate, params, ucpRequest } from "./__tests__/harness.js"
+import { buildRoutes, CHECKOUT_ID, checkoutTemplate, params, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 
 const UCP_SESSIONS = "https://store.test/api/ucp/checkout-sessions"
 const ACP_SESSIONS = "https://store.test/api/acp/checkout_sessions"
@@ -201,10 +201,153 @@ describe("ACP complete with a cart changed after the quote", () => {
   })
 })
 
+function inCurrency(checkout: SaleorCheckout, currency: string, scale = 1): SaleorCheckout {
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) return node.forEach(visit)
+    if (typeof node !== "object" || node === null) return
+    const record = node as Record<string, unknown>
+    if (typeof record.amount === "number" && typeof record.currency === "string") {
+      record.amount = Math.round(record.amount * scale * 100) / 100
+      record.currency = currency
+    }
+    Object.values(record).forEach(visit)
+  }
+  const copy = structuredClone(checkout)
+  visit(copy)
+  return copy
+}
+
 function quotedIn(checkout: SaleorCheckout, quote: { amount: number; currency: string }): SaleorCheckout {
   checkout.privateMetadata = [{ key: QUOTE_KEY, value: JSON.stringify(quote) }, preparedFor(quote.amount, quote.currency)]
   return checkout
 }
+
+function createFrom(saleor: ReturnType<typeof buildRoutes>["saleor"], checkout: SaleorCheckout) {
+  checkout.privateMetadata = []
+  saleor.client.createCheckout = async () => {
+    saleor.checkouts.set(checkout.id, structuredClone(checkout))
+    return { ok: true as const, data: structuredClone(checkout) }
+  }
+}
+
+function storedQuote(saleor: ReturnType<typeof buildRoutes>["saleor"], id: string) {
+  const raw = saleor.checkouts.get(id)!.privateMetadata.find((m) => m.key === QUOTE_KEY)?.value
+  return raw ? JSON.parse(raw) : null
+}
+
+function ucpCreate(routes: ReturnType<typeof buildRoutes>["routes"]) {
+  return routes.checkoutSessions.POST(ucpRequest(UCP_SESSIONS, { body: { line_items: [{ item: { id: "v1" }, quantity: 1 }] } }))
+}
+
+describe("Checkout in a currency without two decimals", () => {
+  let gateway: ReturnType<typeof stubPrismGateway>
+  beforeEach(() => { gateway = stubPrismGateway() })
+  afterEach(() => gateway.restore())
+
+  const requirementsBodies = () =>
+    gateway.requests.filter((r) => r.url.endsWith("/payment-requirements")).map((r) => r.body as { amount: string; currency: string })
+
+  it("asks Prism for exactly the KWD total, not a tenth of it", async () => {
+    const { routes, saleor } = buildRoutes({ prism: true })
+    createFrom(saleor, inCurrency(checkoutTemplate(), "KWD"))
+
+    const response = await ucpCreate(routes)
+
+    expect(response.status).toBe(201)
+    expect(requirementsBodies()).toEqual([expect.objectContaining({ amount: "54.970", currency: "KWD" })])
+    expect(storedQuote(saleor, CHECKOUT_ID)).toEqual({ amount: 54970, currency: "KWD" })
+  })
+
+  it("asks Prism for exactly the JPY total, not a hundred times more", async () => {
+    const { routes, saleor } = buildRoutes({ prism: true })
+    createFrom(saleor, inCurrency(checkoutTemplate(), "JPY", 100))
+
+    const response = await ucpCreate(routes)
+    const session = await response.json()
+
+    expect(response.status).toBe(201)
+    expect(requirementsBodies()).toEqual([expect.objectContaining({ amount: "5497", currency: "JPY" })])
+    expect(session.totals.find((t: { type: string }) => t.type === "total").amount).toBe(5497)
+    expect(storedQuote(saleor, CHECKOUT_ID)).toEqual({ amount: 5497, currency: "JPY" })
+  })
+
+  it("rejects a currency with no known minor unit before any quote is made", async () => {
+    const { routes, saleor } = buildRoutes({ prism: true })
+    createFrom(saleor, inCurrency(checkoutTemplate(), "ZZZ"))
+
+    const response = await ucpCreate(routes)
+    const body = await response.json()
+
+    expect(response.status).toBe(422)
+    expect(body.messages[0].code).toBe("unsupported_currency")
+    expect(requirementsBodies()).toHaveLength(0)
+    expect(storedQuote(saleor, CHECKOUT_ID)).toBeNull()
+  })
+
+  it("answers a read of an unsupported-currency checkout with unsupported_currency, not a server error", async () => {
+    const { routes, acpRoutes } = buildRoutes({ checkouts: [inCurrency(checkoutTemplate(), "ZZZ")] })
+
+    const ucp = await routes.checkoutSession.GET(ucpRequest(`${UCP_SESSIONS}/${CHECKOUT_ID}`), params({ id: CHECKOUT_ID }))
+    const acp = await acpRoutes.checkoutSession.GET(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}`), params({ id: CHECKOUT_ID }))
+
+    expect(ucp.status).toBe(422)
+    expect((await ucp.json()).messages[0].code).toBe("unsupported_currency")
+    expect(acp.status).toBe(422)
+    expect((await acp.json()).code).toBe("unsupported_currency")
+  })
+
+  it("re-quotes Prism when the currency changes but the minor amount stays the same", async () => {
+    const { instance } = buildRoutes({ prism: true })
+    const prism = instance.paymentHandlers.getAdapter("xyz.fd.prism_payment")!
+    const input = { checkoutId: CHECKOUT_ID, total: 10500, currencyCode: "USD", checkoutBaseUrl: UCP_SESSIONS, storeName: "Demo Store", ucpVersion: "2026-04-08" }
+
+    const first = await prism.prepareCheckoutPayment(input)
+    await prism.prepareCheckoutPayment({ ...input, currencyCode: "KWD", checkoutMetadata: { "xyz.fd.prism_payment": first } })
+
+    expect(requirementsBodies()).toEqual([
+      expect.objectContaining({ amount: "105.00", currency: "USD" }),
+      expect.objectContaining({ amount: "10.500", currency: "KWD" }),
+    ])
+  })
+})
+
+describe("Complete in KWD", () => {
+  it("UCP settles the three-decimal quote and records the charge in KWD", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [quotedIn(inCurrency(checkoutTemplate(), "KWD"), { amount: 54970, currency: "KWD" })] })
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(200)
+    expect(pay.settled).toHaveLength(1)
+    expect(saleor.transactions.map((t) => t.amountCharged)).toEqual([{ amount: 54.97, currency: "KWD" }])
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("UCP refuses a quote written with two-decimal minor units for a KWD total", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [quotedIn(inCurrency(checkoutTemplate(), "KWD"), { amount: 5497, currency: "KWD" })] })
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.messages[0].code).toBe("payment_quote_stale")
+    expect(pay.settled).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("ACP settles the three-decimal quote and records the charge in KWD", async () => {
+    const pay = recordingHandler()
+    const { acpRoutes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [quotedIn(inCurrency(checkoutTemplate(), "KWD"), { amount: 54970, currency: "KWD" })] })
+
+    const response = await acpComplete(acpRoutes, CHECKOUT_ID)
+
+    expect(response.status).toBe(200)
+    expect(saleor.transactions.map((t) => t.amountCharged)).toEqual([{ amount: 54.97, currency: "KWD" }])
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})
 
 function metadataValue(saleor: ReturnType<typeof buildRoutes>["saleor"], id: string, key: string) {
   const raw = saleor.checkouts.get(id)!.privateMetadata.find((m) => m.key === key)?.value

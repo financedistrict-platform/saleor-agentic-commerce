@@ -23,7 +23,7 @@ import { saleorToAcpAddress } from "../address-translator.js"
 import { resolveAcpCheckoutStatus } from "../status-maps.js"
 import { metadataToRecord } from "../metadata.js"
 import type { FormatterContext } from "./types.js"
-import { toMinor } from "./types.js"
+import { toMinor } from "../money.js"
 
 // =====================================================
 // Checkout Session
@@ -142,9 +142,9 @@ function formatCapabilities(
 
 function formatLineItems(checkout: SaleorCheckout): AcpLineItem[] {
   return checkout.lines.map((line) => {
-    const unitAmount = toMinor(line.unitPrice.gross.amount)
-    const total = toMinor(line.totalPrice.gross.amount)
-    const tax = toMinor(line.totalPrice.tax.amount)
+    const unitAmount = toMinor(line.unitPrice.gross)
+    const total = toMinor(line.totalPrice.gross)
+    const tax = toMinor(line.totalPrice.tax)
     const subtotal = total - tax
     const baseAmount = unitAmount * line.quantity
     const discount = baseAmount - subtotal
@@ -176,11 +176,11 @@ function formatLineItems(checkout: SaleorCheckout): AcpLineItem[] {
 // =====================================================
 
 function formatTotals(checkout: SaleorCheckout): AcpTotal[] {
-  const subtotal = toMinor(checkout.subtotalPrice.gross.amount)
-  const tax = toMinor(checkout.totalPrice.tax.amount)
-  const shipping = toMinor(checkout.shippingPrice.gross.amount)
-  const discount = toMinor(checkout.discount?.amount ?? 0)
-  const total = toMinor(checkout.totalPrice.gross.amount)
+  const subtotal = toMinor(checkout.subtotalPrice.gross)
+  const tax = toMinor(checkout.totalPrice.tax)
+  const shipping = toMinor(checkout.shippingPrice.gross)
+  const discount = checkout.discount ? toMinor(checkout.discount) : 0
+  const total = toMinor(checkout.totalPrice.gross)
 
   const totals: AcpTotal[] = [
     { type: "items_base_amount", display_text: "Items", amount: subtotal + discount },
@@ -213,7 +213,7 @@ function formatFulfillmentOptions(
   checkout: SaleorCheckout,
 ): AcpFulfillmentOptionShipping[] {
   return checkout.shippingMethods.map((sm) => {
-    const total = toMinor(sm.price.amount)
+    const total = toMinor(sm.price)
 
     return {
       type: "shipping" as const,

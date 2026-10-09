@@ -35,7 +35,7 @@ import { resolveUcpCheckoutStatus } from "../status-maps.js"
 import { metadataToRecord } from "../metadata.js"
 import type { FormatterContext } from "./types.js"
 import { ucpWireOf } from "../ucp-version-registry.js"
-import { toMinor } from "./types.js"
+import { toMinor } from "../money.js"
 
 // =====================================================
 // UCP Profile (Discovery)
@@ -141,21 +141,21 @@ export function formatUcpOrder(
   const currency = order.total.gross.currency.toLowerCase()
 
   const totals: UcpTotal[] = [
-    { type: "subtotal", amount: toMinor(order.subtotal.gross.amount) },
-    { type: "fulfillment", amount: toMinor(order.shippingPrice.gross.amount) },
+    { type: "subtotal", amount: toMinor(order.subtotal.gross) },
+    { type: "fulfillment", amount: toMinor(order.shippingPrice.gross) },
   ]
 
-  const tax = toMinor(order.total.tax.amount)
+  const tax = toMinor(order.total.tax)
   if (tax > 0) {
     totals.push({ type: "tax", amount: tax })
   }
 
-  const discount = toMinor(order.discount?.amount ?? 0)
+  const discount = order.discount ? toMinor(order.discount) : 0
   if (discount > 0) {
     totals.push({ type: "discount", amount: -discount })
   }
 
-  totals.push({ type: "total", amount: toMinor(order.total.gross.amount) })
+  totals.push({ type: "total", amount: toMinor(order.total.gross) })
 
   const fulfilledByLine = fulfilledQtyByLine(order)
   const lineItems = formatOrderLineItems(order.lines, fulfilledByLine)
@@ -192,25 +192,25 @@ function formatBuyer(checkout: SaleorCheckout): UcpBuyer | undefined {
 
 function formatCheckoutTotals(checkout: SaleorCheckout): UcpTotal[] {
   const totals: UcpTotal[] = [
-    { type: "subtotal", amount: toMinor(checkout.subtotalPrice.gross.amount) },
+    { type: "subtotal", amount: toMinor(checkout.subtotalPrice.gross) },
   ]
 
-  const discount = toMinor(checkout.discount?.amount ?? 0)
+  const discount = checkout.discount ? toMinor(checkout.discount) : 0
   if (discount > 0) {
     totals.push({ type: "discount", amount: -discount })
   }
 
-  const shipping = toMinor(checkout.shippingPrice.gross.amount)
+  const shipping = toMinor(checkout.shippingPrice.gross)
   if (shipping > 0) {
     totals.push({ type: "fulfillment", amount: shipping })
   }
 
-  const tax = toMinor(checkout.totalPrice.tax.amount)
+  const tax = toMinor(checkout.totalPrice.tax)
   if (tax > 0) {
     totals.push({ type: "tax", amount: tax })
   }
 
-  totals.push({ type: "total", amount: toMinor(checkout.totalPrice.gross.amount) })
+  totals.push({ type: "total", amount: toMinor(checkout.totalPrice.gross) })
 
   return totals
 }
@@ -225,14 +225,14 @@ function formatCheckoutLineItems(lines: SaleorCheckoutLine[], currency: string):
     item: {
       id: line.variant.id,
       title: `${line.variant.product.name} - ${line.variant.name}`,
-      price: toMinor(line.unitPrice.gross.amount),
+      price: toMinor(line.unitPrice.gross),
       ...(line.variant.product.thumbnail?.url
         ? { image_url: line.variant.product.thumbnail.url }
         : {}),
     },
     quantity: line.quantity,
     totals: [
-      { type: "total" as const, amount: toMinor(line.totalPrice.gross.amount) },
+      { type: "total" as const, amount: toMinor(line.totalPrice.gross) },
     ],
   }))
 }
@@ -260,7 +260,7 @@ function formatCheckoutFulfillment(
     : undefined
 
   const options = checkout.shippingMethods.map((sm) => {
-    const total = toMinor(sm.price.amount)
+    const total = toMinor(sm.price)
     return {
       id: sm.id,
       title: sm.name,
@@ -307,7 +307,7 @@ function formatOrderLineItems(
       item: {
         id: line.variant?.id || line.id,
         title: `${line.productName} - ${line.variantName}`,
-        price: toMinor(line.unitPrice.gross.amount),
+        price: toMinor(line.unitPrice.gross),
         ...(line.thumbnail?.url || line.variant?.product.thumbnail?.url
           ? { image_url: line.thumbnail?.url || line.variant?.product.thumbnail?.url }
           : {}),
@@ -318,7 +318,7 @@ function formatOrderLineItems(
         fulfilled,
       },
       totals: [
-        { type: "total" as const, amount: toMinor(line.totalPrice.gross.amount) },
+        { type: "total" as const, amount: toMinor(line.totalPrice.gross) },
       ],
       status: deriveOrderLineStatus(total, fulfilled),
     }
@@ -547,7 +547,7 @@ function formatCatalogVariant(
     ...(v.sku ? { sku: v.sku } : {}),
     price: v.pricing?.price
       ? {
-          amount: toMinor(v.pricing.price.gross.amount),
+          amount: toMinor(v.pricing.price.gross),
           currency: v.pricing.price.gross.currency.toUpperCase(),
         }
       : null,
