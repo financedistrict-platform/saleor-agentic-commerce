@@ -1,36 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { PrismClient, minorUnitsToDecimalString } from "./prism-client.js"
-
-describe("minorUnitsToDecimalString", () => {
-  it("formats USD cents as a 2-decimal major-unit string", () => {
-    expect(minorUnitsToDecimalString(11480, "USD")).toBe("114.80")
-    expect(minorUnitsToDecimalString(1, "USD")).toBe("0.01")
-    expect(minorUnitsToDecimalString(100, "USD")).toBe("1.00")
-  })
-
-  it("formats JPY (zero-decimal currency) as an integer string", () => {
-    expect(minorUnitsToDecimalString(100, "JPY")).toBe("100")
-    expect(minorUnitsToDecimalString(11480, "JPY")).toBe("11480")
-  })
-
-  it("formats KWD (3-decimal currency) with 3 fractional digits", () => {
-    expect(minorUnitsToDecimalString(11480, "KWD")).toBe("11.480")
-    expect(minorUnitsToDecimalString(1, "KWD")).toBe("0.001")
-  })
-
-  it("is case-insensitive on the currency code", () => {
-    expect(minorUnitsToDecimalString(11480, "usd")).toBe("114.80")
-  })
-
-  it("falls back to 2 decimals for unknown currency codes", () => {
-    expect(minorUnitsToDecimalString(11480, "XYZ")).toBe("114.80")
-  })
-
-  it("handles zero", () => {
-    expect(minorUnitsToDecimalString(0, "USD")).toBe("0.00")
-    expect(minorUnitsToDecimalString(0, "JPY")).toBe("0")
-  })
-})
+import { PrismClient } from "./prism-client.js"
 
 describe("PrismClient — payload formatting", () => {
   let fetchMock: ReturnType<typeof vi.fn>

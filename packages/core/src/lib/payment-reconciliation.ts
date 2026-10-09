@@ -1,4 +1,4 @@
-import { fromMinor, toMinor } from "./formatters/types.js"
+import { AmountPrecisionError, UnsupportedCurrencyError, fromMinor, isSupportedCurrency, toMinor } from "./money.js"
 import type { SaleorMoney } from "../types/saleor.js"
 
 export const PAYMENT_QUOTE_METADATA_KEY = "agentic_commerce__quote"
@@ -20,7 +20,14 @@ export type SettlementRead =
   | { kind: "unreadable"; raw: unknown }
   | { kind: "ok"; record: SettlementRecord }
 
+export type MoneyErrorCode = "unsupported_currency" | "amount_precision_invalid"
+
+export type QuoteResult =
+  | { ok: true; quote: MinorMoney }
+  | { ok: false; code: MoneyErrorCode; message: string }
+
 export type ReconciliationErrorCode =
+  | MoneyErrorCode
   | "payment_quote_missing"
   | "payment_quote_stale"
   | "order_total_changed_after_settlement"
@@ -29,12 +36,19 @@ export type ReconciliationResult =
   | { ok: true; payable: MinorMoney }
   | { ok: false; code: ReconciliationErrorCode; message: string }
 
-export function quoteForTotal(total: SaleorMoney): MinorMoney {
-  return { amount: toMinor(total.amount), currency: total.currency }
+export function quoteForTotal(total: SaleorMoney): QuoteResult {
+  try {
+    return { ok: true, quote: { amount: toMinor(total), currency: total.currency } }
+  } catch (error) {
+    if (error instanceof UnsupportedCurrencyError || error instanceof AmountPrecisionError) {
+      return { ok: false, code: error.code, message: error.message }
+    }
+    throw error
+  }
 }
 
 export function minorToSaleorMoney(money: MinorMoney): SaleorMoney {
-  return { amount: fromMinor(money.amount), currency: money.currency }
+  return fromMinor(money.amount, money.currency)
 }
 
 export function readPaymentQuote(metadata: Record<string, unknown>): MinorMoney | null {
@@ -70,7 +84,9 @@ export function reconcilePayment(input: {
     }
   }
 
-  const total = quoteForTotal(input.total)
+  const priced = quoteForTotal(input.total)
+  if (!priced.ok) return priced
+  const total = priced.quote
 
   if (settled && !sameMinorMoney(settled, total)) {
     return {
@@ -95,7 +111,7 @@ function readMinorMoney(raw: unknown): MinorMoney | null {
   if (typeof raw !== "object" || raw === null) return null
   const { amount, currency } = raw as Record<string, unknown>
   if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) return null
-  if (typeof currency !== "string" || currency.length === 0) return null
+  if (typeof currency !== "string" || !isSupportedCurrency(currency)) return null
   return { amount, currency }
 }
 

@@ -147,7 +147,6 @@ export { formatAcpCheckoutSession, formatAcpCompleteResponse } from "./lib/forma
 
 // Formatter Types
 export type { FormatterContext } from "./lib/formatters/types.js"
-export { toMinor } from "./lib/formatters/types.js"
 
 // Address Translation
 export {
@@ -224,6 +223,17 @@ export type {
 } from "./lib/validate-signed-amount.js"
 
 export {
+  toMinor,
+  fromMinor,
+  minorToDecimalString,
+  currencyExponent,
+  isSupportedCurrency,
+  UnsupportedCurrencyError,
+  AmountPrecisionError,
+} from "./lib/money.js"
+export type { Money } from "./lib/money.js"
+
+export {
   PAYMENT_QUOTE_METADATA_KEY,
   SETTLEMENT_METADATA_KEY,
   quoteForTotal,
@@ -236,6 +246,8 @@ export {
 } from "./lib/payment-reconciliation.js"
 export type {
   MinorMoney,
+  MoneyErrorCode,
+  QuoteResult,
   SettlementRecord,
   SettlementRead,
   ReconciliationErrorCode,

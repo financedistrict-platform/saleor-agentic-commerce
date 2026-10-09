@@ -54,7 +54,7 @@ const acpHandlers = await prism.getAcpDiscoveryHandlers("2026-08-25")
 // Prepare — create a payment session for a checkout
 const prepared = await prism.prepareCheckoutPayment({
   checkoutId: "checkout_123",
-  amount: 5000,      // $50.00 in minor units
+  amount: 5000,      // $50.00 in minor units (JPY 5000 = ¥5000, KWD 5000 = 5.000 KWD)
   currency: "usd",
   metadata: {},
 })

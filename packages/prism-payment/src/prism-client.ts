@@ -1,3 +1,5 @@
+import { minorToDecimalString } from "@financedistrict/saleor-agentic-commerce-core"
+
 const PRISM_UCP_HANDLER_ID = "xyz.fd.prism_payment"
 const PRISM_UCP_HANDLER_IDS: readonly unknown[] = [PRISM_UCP_HANDLER_ID, "x402"]
 
@@ -8,29 +10,6 @@ export type PreparePaymentInput = {
   resourceUrl: string
   resourceDescription?: string
 }
-
-export function minorUnitsToDecimalString(amount: number, currency: string): string {
-  const exponent = currencyExponent(currency)
-  if (exponent === 0) return String(amount)
-  const negative = amount < 0
-  const abs = Math.abs(amount).toString().padStart(exponent + 1, "0")
-  const whole = abs.slice(0, -exponent)
-  const frac = abs.slice(-exponent)
-  return `${negative ? "-" : ""}${whole}.${frac}`
-}
-
-function currencyExponent(currency: string): number {
-  try {
-    const fmt = new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: currency.toUpperCase(),
-    })
-    return fmt.resolvedOptions().maximumFractionDigits ?? 2
-  } catch {
-    return 2
-  }
-}
-
 
 export type UcpHandlerDiscoveryEntry = {
   id: string
@@ -184,7 +163,7 @@ export class PrismClient {
 
   private preparePayload(input: PreparePaymentInput) {
     return {
-      amount: minorUnitsToDecimalString(input.amount, input.currency),
+      amount: minorToDecimalString(input.amount, input.currency),
       currency: input.currency.toUpperCase(),
       resource: {
         url: input.resourceUrl,

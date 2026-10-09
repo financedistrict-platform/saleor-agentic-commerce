@@ -54,6 +54,7 @@ import {
   unsupportedVersionMessage,
   type UcpResolution,
 } from "../middleware/ucp-version.js"
+import { rejectMoneyErrors } from "./money-errors.js"
 
 type UcpRequestScope = {
   resolution: UcpResolution
@@ -199,7 +200,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
    * Returns the final checkout with updated metadata.
    */
   async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string, ucpVersion: string, pin?: string) {
-    const quote = quoteForTotal(checkout.totalPrice.gross)
+    const quoted = quoteForTotal(checkout.totalPrice.gross)
+    if (!quoted.ok) return quoted
+    const { quote } = quoted
     const metadata = metadataToRecord(checkout.privateMetadata)
 
     const prepareResults = await paymentHandlers.prepareCheckoutPayment({
@@ -234,10 +237,10 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     }
 
     const updatedCheckout = await saleorClient.getCheckout(checkoutId)
-    return updatedCheckout.ok ? updatedCheckout.data : checkout
+    return { ok: true as const, checkout: updatedCheckout.ok ? updatedCheckout.data : checkout }
   }
 
-  return {
+  return rejectMoneyErrors({
     // =====================================================
     // Discovery — GET /.well-known/ucp
     // =====================================================
@@ -353,9 +356,11 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         }
 
         const baseUrl = endpointBaseUrl(request)
-        const finalCheckout = await preparePaymentAndRefetch(
+        const prepared = await preparePaymentAndRefetch(
           checkoutResult.data.id, checkoutResult.data, baseUrl, scope.version, sessionPinFor(scope.resolution),
         )
+        if (!prepared.ok) return ucpError(scope.wire, prepared.code, prepared.message, 422, "unrecoverable")
+        const finalCheckout = prepared.checkout
 
         const readiness = await evaluateReadiness(saleorClient, finalCheckout)
         const session = formatUcpCheckoutSession(scope.ctx, finalCheckout, readiness)
@@ -503,7 +508,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
 
         const baseUrl = endpointBaseUrl(request)
-        const finalCheckout = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl, scope.version)
+        const prepared = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl, scope.version)
+        if (!prepared.ok) return ucpError(scope.wire, prepared.code, prepared.message, 422, "unrecoverable")
+        const finalCheckout = prepared.checkout
 
         const readiness = await evaluateReadiness(saleorClient, finalCheckout)
         const session = formatUcpCheckoutSession(scope.ctx, finalCheckout, readiness)
@@ -763,5 +770,5 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         return Response.json(response)
       },
     },
-  }
+  }, (code, message) => ucpError(ucpRegistry.currentWire(), code, message, 422, "unrecoverable"))
 }

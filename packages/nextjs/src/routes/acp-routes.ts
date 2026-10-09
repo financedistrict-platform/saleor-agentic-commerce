@@ -35,6 +35,7 @@ import {
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
+import { rejectMoneyErrors } from "./money-errors.js"
 
 export type AcpRouteHandlers = {
   /** POST /api/acp/checkout_sessions */
@@ -96,7 +97,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
    * Returns the final checkout with updated metadata.
    */
   async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string) {
-    const quote = quoteForTotal(checkout.totalPrice.gross)
+    const quoted = quoteForTotal(checkout.totalPrice.gross)
+    if (!quoted.ok) return quoted
+    const { quote } = quoted
     const metadata = metadataToRecord(checkout.privateMetadata)
 
     const prepareResults = await paymentHandlers.prepareCheckoutPayment({
@@ -127,10 +130,10 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
     }
 
     const updatedCheckout = await saleorClient.getCheckout(checkoutId)
-    return updatedCheckout.ok ? updatedCheckout.data : checkout
+    return { ok: true as const, checkout: updatedCheckout.ok ? updatedCheckout.data : checkout }
   }
 
-  return {
+  return rejectMoneyErrors({
     // =====================================================
     // Create Checkout — POST /api/acp/checkout_sessions
     // =====================================================
@@ -199,9 +202,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         }
 
         const baseUrl = endpointBaseUrl(request)
-        const finalCheckout = await preparePaymentAndRefetch(
-          checkoutResult.data.id, checkoutResult.data, baseUrl,
-        )
+        const prepared = await preparePaymentAndRefetch(checkoutResult.data.id, checkoutResult.data, baseUrl)
+        if (!prepared.ok) return acpError(prepared.code, prepared.message, 422)
+        const finalCheckout = prepared.checkout
 
         const session = formatAcpCheckoutSession(formatterContext, finalCheckout)
         return Response.json(session, { status: 201 })
@@ -313,7 +316,9 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         if (!checkoutResult.ok) return acpError("not_found", checkoutResult.error, 404)
 
         const baseUrl = endpointBaseUrl(request)
-        const finalCheckout = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl)
+        const prepared = await preparePaymentAndRefetch(id, checkoutResult.data, baseUrl)
+        if (!prepared.ok) return acpError(prepared.code, prepared.message, 422)
+        const finalCheckout = prepared.checkout
 
         const session = formatAcpCheckoutSession(formatterContext, finalCheckout)
         return Response.json(session)
@@ -439,5 +444,5 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         })
       },
     },
-  }
+  }, (code, message) => acpError(code, message, 422))
 }
