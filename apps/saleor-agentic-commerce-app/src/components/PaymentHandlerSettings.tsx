@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
+import { useDashboardFetch } from "@/lib/dashboard-fetch"
 import {
   PRISM_HANDLER_ID,
   type HandlerManifest,
@@ -13,11 +14,6 @@ type Props = {
   /** Persist updated entries; key is handlerId, value is full replace. */
   onSave: (handlers: Record<string, PaymentHandlerEntry>) => Promise<void>
   saving: boolean
-  /**
-   * Saleor API URL of the dashboard session. Forwarded to internal API
-   * routes so they can resolve the correct App auth context.
-   */
-  saleorApiUrl: string
 }
 
 // =====================================================
@@ -28,7 +24,6 @@ export function PaymentHandlerSettings({
   handlers,
   onSave,
   saving,
-  saleorApiUrl,
 }: Props) {
   const entries = Object.entries(handlers)
 
@@ -61,7 +56,6 @@ export function PaymentHandlerSettings({
             entry={entry}
             onSave={(updated) => onSave({ [handlerId]: updated })}
             saving={saving}
-            saleorApiUrl={saleorApiUrl}
           />
         ))
       )}
@@ -78,7 +72,6 @@ type HandlerCardProps = {
   entry: PaymentHandlerEntry
   onSave: (entry: PaymentHandlerEntry) => Promise<void>
   saving: boolean
-  saleorApiUrl: string
 }
 
 function HandlerCard({
@@ -86,8 +79,8 @@ function HandlerCard({
   entry,
   onSave,
   saving,
-  saleorApiUrl,
 }: HandlerCardProps) {
+  const dashboardFetch = useDashboardFetch()
   const manifest = entry.manifest
   const initialConfig = (entry.config ?? {}) as Record<string, unknown>
 
@@ -128,8 +121,8 @@ function HandlerCard({
     setTesting(true)
     setTestResult(null)
     try {
-      const res = await fetch(
-        `/api/payment-handlers/test-connection?saleorApiUrl=${encodeURIComponent(saleorApiUrl)}`,
+      const res = await dashboardFetch(
+        "/api/payment-handlers/test-connection",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

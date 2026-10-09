@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getAuthContext } from "@/lib/auth"
 import { ConfigManager } from "@/lib/config-manager"
+import {
+  redactGlobalConfig,
+  redactPaymentHandlers,
+  restoreGlobalSecrets,
+  restoreHandlerSecrets,
+} from "@/lib/config-secrets"
 
 /**
  * GET /api/config
@@ -29,12 +35,12 @@ export async function GET(request: NextRequest) {
       ])
 
     return NextResponse.json({
-      global: globalConfig,
+      global: redactGlobalConfig(globalConfig),
       channels: channels.map((ch) => ({
         ...ch,
         agenticConfig: channelConfigs[ch.slug] ?? null,
       })),
-      paymentHandlers,
+      paymentHandlers: redactPaymentHandlers(paymentHandlers),
     })
   } catch (error) {
     console.error("[Config API] Failed to load config:", error)
@@ -65,7 +71,9 @@ export async function POST(request: NextRequest) {
 
     // Save global config
     if (body.global) {
-      await manager.saveGlobalConfig(body.global)
+      await manager.saveGlobalConfig(
+        restoreGlobalSecrets(body.global, await manager.getGlobalConfig())
+      )
     }
 
     // Save per-channel configs
@@ -79,7 +87,13 @@ export async function POST(request: NextRequest) {
     // PaymentHandlerEntry (full replace per handler).
     if (body.paymentHandlers) {
       for (const [handlerId, entry] of Object.entries(body.paymentHandlers)) {
-        await manager.savePaymentHandler(handlerId, entry as any)
+        await manager.savePaymentHandler(
+          handlerId,
+          restoreHandlerSecrets(
+            entry as any,
+            await manager.getPaymentHandler(handlerId)
+          )
+        )
       }
     }
 
