@@ -23,7 +23,7 @@ export function checkoutTemplate(): SaleorCheckout {
 
 export type PrismRequest = { url: string; method: string; headers: Record<string, string>; body?: unknown }
 
-export function stubPrismGateway(options: { handlers?: string; requirements?: string } = {}) {
+export function stubPrismGateway(options: { handlers?: string; requirements?: string; settle?: (body: unknown) => unknown } = {}) {
   const requests: PrismRequest[] = []
   const original = globalThis.fetch
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -33,7 +33,7 @@ export function stubPrismGateway(options: { handlers?: string; requirements?: st
     const json = (text: string) => new Response(text, { status: 200, headers: { "content-type": "application/json" } })
     if (/\/ucp\/[^/]+\/handlers$/.test(url)) return json(readFixture(`prism/${options.handlers ?? "current-handlers-2026-04-08.json"}`))
     if (/\/api\/v2\/merchant\/payment-requirements$/.test(url)) return json(readFixture(`prism/${options.requirements ?? "current-payment-requirements.json"}`))
-    if (url.includes("/payment/settle")) return json(JSON.stringify({ success: true, transaction: "0xsettled" }))
+    if (url.includes("/payment/settle")) return json(JSON.stringify(options.settle ? options.settle(body) : { success: true, transaction: "0xsettled" }))
     return new Response("not found", { status: 404 })
   }) as typeof fetch
   return { requests, restore: () => { globalThis.fetch = original } }

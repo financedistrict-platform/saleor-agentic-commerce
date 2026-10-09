@@ -211,8 +211,10 @@ export type {
 
 // Signed-amount validation (Prism x402)
 export {
+  canonicalOnNetwork,
   extractSignedSummary,
   readStoredPrismAccepts,
+  signedAuthorizationReplayKey,
   validateSignedAgainstStored,
 } from "./lib/validate-signed-amount.js"
 export type {
@@ -253,3 +255,6 @@ export type {
   ReconciliationErrorCode,
   ReconciliationResult,
 } from "./lib/payment-reconciliation.js"
+
+export { createMemoryPaymentReplayStore, resolvePaymentReplayStore, settlementReplayKey } from "./lib/payment-replay.js"
+export type { PaymentReplayClaim, PaymentReplayStore } from "./lib/payment-replay.js"

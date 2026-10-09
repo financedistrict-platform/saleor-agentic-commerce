@@ -4,7 +4,7 @@ import type {
   PaymentSettleInput,
   PaymentSettleResult,
 } from "@financedistrict/saleor-agentic-commerce-core"
-import { extractSignedSummary, validateSignedAgainstStored } from "@financedistrict/saleor-agentic-commerce-core"
+import { canonicalOnNetwork, extractSignedSummary, signedAuthorizationReplayKey, validateSignedAgainstStored } from "@financedistrict/saleor-agentic-commerce-core"
 import {
   PrismClient,
   canonicalUcpHandlerEntry,
@@ -177,16 +177,25 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       })
 
       if (!result.success) {
-        return { success: false, error: result.error ?? "Prism settlement failed" }
+        return { success: false, error: result.error }
       }
-      if (!result.transactionHash) {
-        return { success: false, error: "Prism settlement returned no transaction reference" }
+      const { network } = signed
+      const settledReference = result.transactionHash
+      if (result.network !== undefined && result.network !== network) {
+        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} on ${result.network}, not on the signed network ${network}` }
+      }
+      if (result.payer !== undefined && canonicalOnNetwork(network, result.payer) !== canonicalOnNetwork(network, signed.from)) {
+        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} from another payer than the signed authorization` }
       }
 
       return {
         success: true,
         transactionReference: result.transactionHash,
         settled,
+        replayKeys: [
+          signedAuthorizationReplayKey(signed),
+          JSON.stringify(["x402-transaction", network, canonicalOnNetwork(network, result.transactionHash)]),
+        ],
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown error"

@@ -7,6 +7,7 @@ import {
   readSettlementRecord,
   reconcilePayment,
   sameMinorMoney,
+  settlementReplayKey,
   SETTLEMENT_METADATA_KEY,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type {
@@ -34,18 +35,29 @@ export type SettleAndCompleteResult =
   | { ok: false; response: Response }
 
 export async function settleAndCompleteCheckout(input: {
-  instance: Pick<AgenticCommerceInstance, "saleorClient" | "paymentHandlers">
+  instance: Pick<AgenticCommerceInstance, "saleorClient" | "paymentHandlers" | "paymentReplayStore">
   checkout: SaleorCheckout
   payment: SettleRequest
   beforeSettle?: () => Promise<Response | null>
   fail: (failure: CompletionFailure) => Response
   logPrefix: string
 }): Promise<SettleAndCompleteResult> {
-  const { saleorClient, paymentHandlers } = input.instance
+  const { saleorClient, paymentHandlers, paymentReplayStore } = input.instance
   const { checkout, payment, fail, logPrefix } = input
   const id = checkout.id
   const metadata = metadataToRecord(checkout.privateMetadata)
   const reject = (failure: CompletionFailure): SettleAndCompleteResult => ({ ok: false, response: fail(failure) })
+  const claimOrReject = async (keys: readonly string[], reference: string): Promise<SettleAndCompleteResult | null> => {
+    const claim = await paymentReplayStore.claim(keys, id)
+    if (claim.ok) return null
+    console.error(`${logPrefix} refusing checkout ${id}: settlement ${reference} is already used by checkout ${claim.heldBy} (${claim.key})`)
+    return reject({
+      code: "payment_already_used",
+      message: `This payment (reference ${reference}) was already used for another checkout. The order was not placed.`,
+      status: 409,
+      severity: "unrecoverable",
+    })
+  }
 
   const paidOnly = await checkPaidOrdersOnly(saleorClient, checkout)
   if (!paidOnly.ok) {
@@ -68,6 +80,8 @@ export async function settleAndCompleteCheckout(input: {
   let settledAgainstQuote = true
   if (stored.kind === "ok") {
     settlement = stored.record
+    const replayed = await claimOrReject([settlementReplayKey(settlement.handlerId, settlement.reference)], settlement.reference)
+    if (replayed) return replayed
   } else {
     const early = await input.beforeSettle?.()
     if (early) return { ok: false, response: early }
@@ -76,6 +90,15 @@ export async function settleAndCompleteCheckout(input: {
     if (!quoted.ok) return reject({ code: quoted.code, message: quoted.message, status: 409, severity: "recoverable" })
 
     const result = await paymentHandlers.settlePayment({ ...payment, checkoutId: id, channel: checkout.channel.slug, checkoutMetadata: metadata } as PaymentSettleInput)
+    if (!result.success && result.settledReference) {
+      console.error(`${logPrefix} handler ${payment.handlerId} settled ${result.settledReference} on ${id} but refused the settlement: ${result.error}`)
+      return reject({
+        code: result.code ?? "settled_payment_refused",
+        message: `Payment settled (reference ${result.settledReference}) but the settlement did not match the signed payment. The order was not placed.`,
+        status: 409,
+        severity: "unrecoverable",
+      })
+    }
     if (!result.success || !result.transactionReference) {
       return reject({
         code: (!result.success && result.code) || (payment.protocol === "acp" ? "payment_declined" : "payment_failed"),
@@ -85,9 +108,25 @@ export async function settleAndCompleteCheckout(input: {
       })
     }
 
+    const handlerId = paymentHandlers.getAdapter(payment.handlerId)?.id ?? payment.handlerId
+    if (!Array.isArray(result.replayKeys) || !result.replayKeys.every((key) => typeof key === "string" && key.length > 0)) {
+      console.error(`${logPrefix} handler ${handlerId} settled ${result.transactionReference} on ${id} without readable replay keys`)
+      return reject({
+        code: "settled_payment_unchecked",
+        message: `Payment settled (reference ${result.transactionReference}) but the handler did not report how to detect its reuse. The order was not placed.`,
+        status: 409,
+        severity: "unrecoverable",
+      })
+    }
+    const replayed = await claimOrReject(
+      [settlementReplayKey(handlerId, result.transactionReference), ...result.replayKeys],
+      result.transactionReference,
+    )
+    if (replayed) return replayed
+
     const raw = {
       ...result.settled,
-      handlerId: payment.handlerId,
+      handlerId,
       reference: result.transactionReference,
       settledAt: new Date().toISOString(),
     }

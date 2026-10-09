@@ -138,10 +138,12 @@ export type PaymentSettleResult =
       /** Transaction reference (e.g., blockchain tx hash) */
       transactionReference: string
       settled: SettledAmount
+      replayKeys: readonly string[]
     }
   | {
       success: false
       /** Error message on failure */
       error: string
       code?: string
+      settledReference?: string
     }

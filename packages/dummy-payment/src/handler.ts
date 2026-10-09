@@ -213,6 +213,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
       success: true,
       transactionReference: txRef,
       settled: { amount: prepared._prepared_amount as number, currency: prepared._prepared_currency },
+      replayKeys: [],
     }
   }
 

@@ -792,7 +792,7 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       },
     })
 
-    expect(result).toEqual({ success: true, transactionReference: "0xabc", settled: { amount: 1099, currency: "USD" } })
+    expect(result).toMatchObject({ success: true, transactionReference: "0xabc", settled: { amount: 1099, currency: "USD" } })
   })
 })
 
@@ -814,9 +814,9 @@ describe("PrismPaymentHandler — settled amount", () => {
     expect(mock.settle).not.toHaveBeenCalled()
   })
 
-  it("fails when the gateway reports success without a transaction reference", async () => {
+  it("reports the signed authorization and the settled transaction as replay keys", async () => {
     const { handler, mock } = makeHandler()
-    mock.settle.mockResolvedValue({ success: true })
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xABC" })
     const result = await handler.settlePayment({
       ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
@@ -826,7 +826,17 @@ describe("PrismPaymentHandler — settled amount", () => {
       checkoutMetadata: { [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc" } },
     })
 
-    expect(result).toEqual({ success: false, error: "Prism settlement returned no transaction reference" })
+    const { network, asset } = samplePaymentHandlerConfig.accepts[0]
+    const { from, nonce } = SIGNED.payload.authorization
+    expect(result).toEqual({
+      success: true,
+      transactionReference: "0xABC",
+      settled: { amount: 1099, currency: "USD" },
+      replayKeys: [
+        JSON.stringify(["x402-authorization", network, asset, from, nonce]),
+        JSON.stringify(["x402-transaction", network, "0xabc"]),
+      ],
+    })
   })
 })
 

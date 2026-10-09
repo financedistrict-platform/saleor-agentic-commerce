@@ -87,11 +87,9 @@ export type SettleInput = {
   paymentRequirements: unknown
 }
 
-export type SettleResult = {
-  success: boolean
-  transactionHash?: string
-  error?: string
-}
+export type SettleResult =
+  | { success: true; transactionHash: string; network?: string; payer?: string }
+  | { success: false; error: string }
 
 
 export type PrismClientOptions = {
@@ -152,12 +150,25 @@ export class PrismClient {
       return { success: false, error: `Settlement failed: ${response.status} ${errorText}` }
     }
 
-    const data = (await response.json()) as Record<string, unknown>
-    return {
-      success: data.success !== false,
-      transactionHash: (data.transaction ?? data.transactionHash) as string | undefined,
-      error: data.errorReason as string | undefined,
+    const data: unknown = await response.json().catch(() => null)
+    if (typeof data !== "object" || data === null) {
+      return { success: false, error: "Prism settlement returned an unreadable reply" }
     }
+    const reply = data as Record<string, unknown>
+    if (reply.success !== true) {
+      return { success: false, error: nonEmptyString(reply.errorReason) ? reply.errorReason : "Prism settlement did not report success" }
+    }
+    const transactionHash = reply.transaction ?? reply.transactionHash
+    if (!nonEmptyString(transactionHash)) {
+      return { success: false, error: "Prism settlement returned no transaction reference" }
+    }
+    if (reply.network !== undefined && !nonEmptyString(reply.network)) {
+      return { success: false, error: "Prism settlement returned an unreadable network" }
+    }
+    if (reply.payer !== undefined && !nonEmptyString(reply.payer)) {
+      return { success: false, error: "Prism settlement returned an unreadable payer" }
+    }
+    return { success: true, transactionHash, network: reply.network, payer: reply.payer }
   }
 
 

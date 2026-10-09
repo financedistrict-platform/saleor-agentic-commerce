@@ -141,7 +141,34 @@ createAgenticCommerce({
   acpVersion?: string,         // ACP version (default: "2026-01-30")
   acpApiKey?: string,          // API key for ACP Bearer token auth
   paymentHandlers?: PaymentHandlerAdapter[],  // Payment handler adapters
+  paymentReplayStore?: PaymentReplayStore,     // Required outside development and test
 })
+```
+
+### Payment replay store
+
+Before a checkout is marked paid, the settle path claims the settlement
+reference and the keys the payment handler reports (for Prism: the signed
+authorization's network, asset, payer and nonce, and the transaction hash).
+A key held by another checkout stops the order with `payment_already_used`.
+
+`claim(keys, checkoutId)` must be atomic: claim every key or none, and succeed
+again when the same checkout claims its own keys. Back it with a unique index
+(for example a Postgres table with a primary key on `key`, or Redis `SET NX`)
+shared by every storefront instance.
+
+`createAgenticCommerce()` throws when no store is passed and `NODE_ENV` is not
+`development` or `test`. In development and test it falls back to
+`createMemoryPaymentReplayStore()`, which only protects one process.
+
+```ts
+import type { PaymentReplayStore } from "@financedistrict/saleor-agentic-commerce-core"
+
+const paymentReplayStore: PaymentReplayStore = {
+  async claim(keys, checkoutId) {
+    return db.claimPaymentKeys(keys, checkoutId)
+  },
+}
 ```
 
 ## UCP versions

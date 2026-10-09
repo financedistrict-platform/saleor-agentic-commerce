@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import { createMemoryPaymentReplayStore } from "@financedistrict/saleor-agentic-commerce-core"
 import type { CheckoutPrepareInput, PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
 import { buildRoutes, CHECKOUT_ID, checkoutTemplate, fakeSaleor, fixedFetcher, params, PROFILES, STOREFRONT, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 import { createAgenticCommerce } from "../config.js"
@@ -32,6 +33,7 @@ function recordingHandler(options: { failPrepare?: () => boolean; settles?: (pre
       return {
         success: true,
         transactionReference: `0xsettled${settled.length}`,
+        replayKeys: [],
         settled: { amount: charged.preparedAmount, currency: charged.preparedCurrency },
       }
     },
@@ -451,7 +453,7 @@ describe("Complete when the handler settles a different amount than the quote", 
     const pay = recordingHandler()
     pay.adapter.settlePayment = async (input) => {
       pay.settled.push(input)
-      return { success: true, transactionReference: "0xunreported" } as never
+      return { success: true, transactionReference: "0xunreported", replayKeys: [] } as never
     }
     const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [preparedCheckout()] })
 
@@ -725,7 +727,7 @@ function alwaysPaysQuote(id: string) {
     async prepareCheckoutPayment() { return null },
     async settlePayment(input: PaymentSettleInput) {
       settled.push(input)
-      return { success: true, transactionReference: `0xfree${settled.length}`, settled: { amount: 5497, currency: "USD" } }
+      return { success: true, transactionReference: `0xfree${settled.length}`, settled: { amount: 5497, currency: "USD" }, replayKeys: [] }
     },
     getUcpCheckoutHandlers() { return {} },
     getAcpCheckoutHandlers() { return [] },
@@ -882,5 +884,247 @@ describe("Complete on a channel the handler is not enabled for", () => {
     expect(pay.settled).toHaveLength(1)
     expect(pay.settled[0].channel).toBe("default-channel")
     expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})
+
+describe("The same signed payment on two checkouts", () => {
+  const PRISM = "xyz.fd.prism_payment"
+  const OTHER_ID = "Q2hlY2tvdXQ6Mg=="
+  const QUOTED = {
+    scheme: "exact",
+    network: "eip155:84532",
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    payTo: "0x1111111111111111111111111111111111111111",
+    amount: "1000000",
+  }
+
+  let gateway: ReturnType<typeof stubPrismGateway>
+  afterEach(() => gateway?.restore())
+
+  const settleRequests = () => gateway.requests.filter((r) => r.url.endsWith("/api/v2/payment/settle"))
+
+  function signed(nonce = "0x01", from = "0xbuyer") {
+    return {
+      type: "x402",
+      x402Version: 2,
+      accepted: { ...QUOTED, maxTimeoutSeconds: 300 },
+      payload: {
+        signature: "0xsig",
+        authorization: { from, to: QUOTED.payTo, value: QUOTED.amount, validAfter: "0", validBefore: "9999999999", nonce } as Record<string, string>,
+      },
+    }
+  }
+
+  function twoCheckouts() {
+    const other = checkoutTemplate()
+    other.id = OTHER_ID
+    return buildRoutes({ prism: true, checkouts: [checkoutTemplate(), other], config: { acpEnabled: true } })
+  }
+
+  function ucpPay(routes: ReturnType<typeof buildRoutes>["routes"], id: string, credential: object) {
+    return routes.checkoutSessionComplete.POST(
+      ucpRequest(`${UCP_SESSIONS}/${id}/complete`, {
+        body: { payment: { instruments: [{ id: "inst_1", handler_id: PRISM, type: "x402", credential }] } },
+      }),
+      params({ id }),
+    )
+  }
+
+  function acpPay(acpRoutes: ReturnType<typeof buildRoutes>["acpRoutes"], id: string, credential: object) {
+    return acpRoutes.checkoutSessionComplete.POST(
+      new Request(`${ACP_SESSIONS}/${id}/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ payment_data: { handler_id: PRISM, instrument: { credential } } }),
+      }),
+      params({ id }),
+    )
+  }
+
+  it("UCP refuses a second checkout paid with an authorization already settled, even when the gateway repeats success", async () => {
+    gateway = stubPrismGateway({ settle: () => ({ success: true, transaction: "0xsame" }) })
+    const { routes, saleor } = twoCheckouts()
+
+    const first = await ucpPay(routes, CHECKOUT_ID, signed())
+    const second = await ucpPay(routes, OTHER_ID, signed())
+    const body = await second.json()
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(409)
+    expect(body.messages[0].code).toBe("payment_already_used")
+    expect(saleor.transactions.map((t) => t.checkoutId)).toEqual([CHECKOUT_ID])
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("UCP refuses a second checkout when the gateway returns a transaction already used for another checkout", async () => {
+    gateway = stubPrismGateway({ settle: () => ({ success: true, transaction: "0xsame" }) })
+    const { routes, saleor } = twoCheckouts()
+
+    await ucpPay(routes, CHECKOUT_ID, signed("0x01"))
+    const second = await ucpPay(routes, OTHER_ID, signed("0x02"))
+
+    expect(second.status).toBe(409)
+    expect((await second.json()).messages[0].code).toBe("payment_already_used")
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("ACP refuses a second checkout paid with an authorization already settled", async () => {
+    let count = 0
+    gateway = stubPrismGateway({ settle: () => ({ success: true, transaction: `0xtx${++count}` }) })
+    const { acpRoutes, saleor } = twoCheckouts()
+
+    const first = await acpPay(acpRoutes, CHECKOUT_ID, signed())
+    const second = await acpPay(acpRoutes, OTHER_ID, signed())
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(409)
+    expect((await second.json()).code).toBe("payment_already_used")
+    expect(saleor.transactions.map((t) => t.checkoutId)).toEqual([CHECKOUT_ID])
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("treats an EVM nonce from the same payer in another letter case as the same authorization", async () => {
+    let count = 0
+    gateway = stubPrismGateway({ settle: () => ({ success: true, transaction: `0xtx${++count}` }) })
+    const { routes, saleor } = twoCheckouts()
+
+    await ucpPay(routes, CHECKOUT_ID, signed("0xabcdef", "0xBuyer"))
+    const second = await ucpPay(routes, OTHER_ID, signed("0xABCDEF", "0xbuyer"))
+
+    expect(second.status).toBe(409)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("completes two checkouts paid with different authorizations", async () => {
+    let count = 0
+    gateway = stubPrismGateway({ settle: () => ({ success: true, transaction: `0xtx${++count}` }) })
+    const { routes, saleor } = twoCheckouts()
+
+    const first = await ucpPay(routes, CHECKOUT_ID, signed("0x01"))
+    const second = await ucpPay(routes, OTHER_ID, signed("0x02"))
+
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(saleor.completed).toEqual([CHECKOUT_ID, OTHER_ID])
+  })
+
+  it("refuses a credential whose authorization has no nonce", async () => {
+    gateway = stubPrismGateway()
+    const { routes, saleor } = twoCheckouts()
+    const credential = signed()
+    delete credential.payload.authorization.nonce
+
+    const response = await ucpPay(routes, CHECKOUT_ID, credential)
+
+    expect(response.status).toBe(422)
+    expect(settleRequests()).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it.each([
+    ["has no success flag", { transaction: "0xtx" }],
+    ["has a success flag that is not true", { success: "true", transaction: "0xtx" }],
+    ["has a transaction that is not a string", { success: true, transaction: 12345 }],
+  ])("refuses to mark paid when the settle reply %s", async (_case, reply) => {
+    gateway = stubPrismGateway({ settle: () => reply })
+    const { routes, saleor } = twoCheckouts()
+
+    const response = await ucpPay(routes, CHECKOUT_ID, signed())
+
+    expect(response.status).toBe(422)
+    expect(saleor.transactions).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it.each([
+    ["another network", { success: true, transaction: "0xmoved", network: "eip155:1" }],
+    ["another payer", { success: true, transaction: "0xmoved", payer: "0xsomeoneelse" }],
+  ])("holds the order and reports the transaction when the gateway settled on %s", async (_case, reply) => {
+    gateway = stubPrismGateway({ settle: () => reply })
+    const { routes, saleor } = twoCheckouts()
+
+    const response = await ucpPay(routes, CHECKOUT_ID, signed())
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.messages[0].code).toBe("settled_payment_mismatch")
+    expect(body.messages[0].content).toContain("0xmoved")
+    expect(saleor.transactions).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("ACP refuses a second checkout that names the same handler by its alias", async () => {
+    gateway = stubPrismGateway()
+    const reused = alwaysPaysQuote("test.reused")
+    Object.assign(reused.adapter, { aliases: ["reused-alias"] })
+    reused.adapter.settlePayment = async () => ({ success: true, transactionReference: "0xreused", settled: { amount: 5497, currency: "USD" }, replayKeys: [] })
+    const prepared = { key: "test.reused", value: JSON.stringify({ prepared: true }) }
+    const first = preparedCheckout([prepared])
+    const other = preparedCheckout([prepared])
+    other.id = OTHER_ID
+    const { acpRoutes, saleor } = buildRoutes({ handlers: [reused.adapter], checkouts: [first, other], config: { acpEnabled: true } })
+
+    const ok = await acpCompleteWith(acpRoutes, CHECKOUT_ID, "test.reused")
+    const replayed = await acpCompleteWith(acpRoutes, OTHER_ID, "reused-alias")
+
+    expect(ok.status).toBe(200)
+    expect(replayed.status).toBe(409)
+    expect((await replayed.json()).code).toBe("payment_already_used")
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("holds the order when a handler settles without reporting replay keys", async () => {
+    gateway = stubPrismGateway()
+    const unchecked = alwaysPaysQuote("test.unchecked")
+    unchecked.adapter.settlePayment = async () => ({ success: true, transactionReference: "0xunchecked", settled: { amount: 5497, currency: "USD" } }) as never
+    const { routes, saleor } = buildRoutes({ handlers: [unchecked.adapter], checkouts: [preparedCheckout([{ key: "test.unchecked", value: "{}" }])] })
+
+    const response = await ucpCompleteWith(routes, CHECKOUT_ID, "test.unchecked")
+
+    expect(response.status).toBe(409)
+    expect((await response.json()).messages[0].code).toBe("settled_payment_unchecked")
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("completes when the settle reply names the signed network and payer", async () => {
+    gateway = stubPrismGateway({ settle: () => ({ success: true, transaction: "0xtx", network: QUOTED.network, payer: "0xBUYER" }) })
+    const { routes, saleor } = twoCheckouts()
+
+    const response = await ucpPay(routes, CHECKOUT_ID, signed())
+
+    expect(response.status).toBe(200)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("refuses a second checkout paid through a handler that reuses a transaction reference", async () => {
+    gateway = stubPrismGateway()
+    const reused = alwaysPaysQuote("test.reused")
+    reused.adapter.settlePayment = async () => ({ success: true, transactionReference: "0xreused", settled: { amount: 5497, currency: "USD" }, replayKeys: [] })
+    const prepared = { key: "test.reused", value: JSON.stringify({ prepared: true }) }
+    const first = preparedCheckout([prepared])
+    const other = preparedCheckout([prepared])
+    other.id = OTHER_ID
+    const { routes, saleor } = buildRoutes({ handlers: [reused.adapter], checkouts: [first, other] })
+
+    const ok = await ucpCompleteWith(routes, CHECKOUT_ID, "test.reused")
+    const replayed = await ucpCompleteWith(routes, OTHER_ID, "test.reused")
+
+    expect(ok.status).toBe(200)
+    expect(replayed.status).toBe(409)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})
+
+describe("Payment replay store in production", () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  it("refuses to start in production without a payment replay store", () => {
+    vi.stubEnv("NODE_ENV", "production")
+    expect(() => buildRoutes()).toThrow(/paymentReplayStore/)
+  })
+
+  it("starts in production with an explicit payment replay store", () => {
+    vi.stubEnv("NODE_ENV", "production")
+    expect(() => buildRoutes({ config: { paymentReplayStore: createMemoryPaymentReplayStore() } })).not.toThrow()
   })
 })

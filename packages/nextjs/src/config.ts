@@ -17,6 +17,8 @@ import {
   type SaleorClientOptions,
   type AppConfig,
   type AppPaymentHandlerConfig,
+  resolvePaymentReplayStore,
+  type PaymentReplayStore,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import {
   createAgentProfileFetcher,
@@ -85,6 +87,7 @@ export type AgenticCommerceConfig = {
   acpApiKey?: string
   /** Payment handler adapters to register (added alongside App-managed handlers) */
   paymentHandlers?: PaymentHandlerAdapter[]
+  paymentReplayStore?: PaymentReplayStore
   /**
    * Master enable for the agentic commerce stack. When `false`, all routes
    * (UCP discovery, ACP discovery, protocol endpoints) return 404 — the
@@ -114,6 +117,7 @@ export type AgenticCommerceConfig = {
 export type AgenticCommerceInstance = {
   saleorClient: SaleorClient
   paymentHandlers: PaymentHandlerRegistry
+  paymentReplayStore: PaymentReplayStore
   formatterContext: FormatterContext
   ucpRegistry?: UcpVersionRegistry
   agentProfileFetcher?: AgentProfileFetcher
@@ -259,6 +263,7 @@ function buildInstance(
   return {
     saleorClient,
     paymentHandlers,
+    paymentReplayStore: resolvePaymentReplayStore(config.paymentReplayStore),
     formatterContext,
     ucpRegistry,
     agentProfileFetcher: createAgentProfileFetcher(),

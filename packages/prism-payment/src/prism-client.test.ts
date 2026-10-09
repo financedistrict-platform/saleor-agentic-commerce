@@ -67,3 +67,35 @@ describe("PrismClient — payload formatting", () => {
     expect(JSON.parse(init.body as string)).toEqual({ x402Version: 2, paymentPayload: { a: 1 }, paymentRequirements: { b: 2 } })
   })
 })
+
+describe("PrismClient — settle reply", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function replying(reply: unknown) {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => reply }))
+    return new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" }).settle({ paymentPayload: {}, paymentRequirements: {} })
+  }
+
+  it.each([
+    ["no success flag", { transaction: "0x1" }],
+    ["a success flag that is not true", { success: 1, transaction: "0x1" }],
+    ["no transaction reference", { success: true }],
+    ["an empty transaction reference", { success: true, transaction: "" }],
+    ["a network that is not a string", { success: true, transaction: "0x1", network: 8453 }],
+    ["a payer that is not a string", { success: true, transaction: "0x1", payer: {} }],
+    ["no object", null],
+  ])("fails a reply with %s", async (_case, reply) => {
+    expect((await replying(reply)).success).toBe(false)
+  })
+
+  it("passes on the transaction, network and payer of a successful reply", async () => {
+    expect(await replying({ success: true, transaction: "0x1", network: "eip155:8453", payer: "0xbuyer" })).toEqual({
+      success: true,
+      transactionHash: "0x1",
+      network: "eip155:8453",
+      payer: "0xbuyer",
+    })
+  })
+})

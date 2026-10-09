@@ -13,7 +13,7 @@ function adapter(id: string, aliases?: readonly string[]) {
     prepareCheckoutPayment: async () => null,
     settlePayment: async (input) => {
       settled.push(input)
-      return { success: true, transactionReference: "0xabc", settled: { amount: 1000, currency: "USD" } }
+      return { success: true, transactionReference: "0xabc", settled: { amount: 1000, currency: "USD" }, replayKeys: [] }
     },
     getUcpCheckoutHandlers: () => ({}),
     getAcpCheckoutHandlers: () => [],
