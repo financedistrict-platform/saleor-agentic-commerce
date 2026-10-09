@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import { PaymentHandlerRegistry } from "./payment-handler-registry.js"
 import type { PaymentHandlerAdapter, PaymentSettleInput } from "../types/payment-handler-adapter.js"
 
@@ -13,7 +13,7 @@ function adapter(id: string, aliases?: readonly string[]) {
     prepareCheckoutPayment: async () => null,
     settlePayment: async (input) => {
       settled.push(input)
-      return { success: true, transactionReference: "0xabc" }
+      return { success: true, transactionReference: "0xabc", settled: { amount: 1000, currency: "USD" } }
     },
     getUcpCheckoutHandlers: () => ({}),
     getAcpCheckoutHandlers: () => [],
@@ -65,5 +65,30 @@ describe("PaymentHandlerRegistry handler aliases", () => {
     await registry.getUcpDiscoveryHandlers("2026-01-23")
     await registry.getUcpDiscoveryHandlers()
     expect(seen).toEqual(["2026-01-23", undefined])
+  })
+})
+
+describe("PaymentHandlerRegistry checkout prepare", () => {
+  it("returns null for an adapter whose prepare throws, so its old requirements are cleared with the new quote", async () => {
+    const healthy = adapter("healthy")
+    healthy.instance.prepareCheckoutPayment = async () => ({ prepared: true })
+    const broken = adapter("broken")
+    broken.instance.prepareCheckoutPayment = async () => { throw new Error("gateway unavailable") }
+    const registry = new PaymentHandlerRegistry()
+    vi.spyOn(console, "log").mockImplementation(() => {})
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    registry.registerAdapter(healthy.instance)
+    registry.registerAdapter(broken.instance)
+
+    const output = await registry.prepareCheckoutPayment({
+      checkoutId: "c1",
+      total: 1000,
+      currencyCode: "USD",
+      checkoutBaseUrl: "https://store.test",
+      storeName: "Store",
+      ucpVersion: "2026-04-08",
+    })
+
+    expect(output).toEqual({ healthy: { prepared: true }, broken: null })
   })
 })

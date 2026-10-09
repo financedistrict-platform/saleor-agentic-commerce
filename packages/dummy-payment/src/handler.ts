@@ -138,9 +138,9 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
 
     // Idempotency — return prior config if amount unchanged.
     const existing = checkoutMetadata?.[DUMMY_HANDLER_ID] as
-      | { _prepared_amount?: number }
+      | { _prepared_amount?: number; _prepared_currency?: string }
       | undefined
-    if (existing && existing._prepared_amount === total) {
+    if (existing && existing._prepared_amount === total && existing._prepared_currency === currencyCode) {
       return existing
     }
 
@@ -154,6 +154,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
         mode: this.mode,
       },
       _prepared_amount: total,
+      _prepared_currency: currencyCode,
     }
   }
 
@@ -165,6 +166,14 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
     input: PaymentSettleInput,
   ): Promise<PaymentSettleResult> {
     if (this.delayMs > 0) await sleep(this.delayMs)
+
+    const prepared = input.checkoutMetadata?.[DUMMY_HANDLER_ID] as
+      | { _prepared_amount?: number; _prepared_currency?: string }
+      | null
+      | undefined
+    if (!Number.isSafeInteger(prepared?._prepared_amount) || typeof prepared?._prepared_currency !== "string") {
+      return { success: false, error: "No prepared dummy payment found on checkout" }
+    }
 
     const succeed =
       this.mode === "always_succeed"
@@ -187,6 +196,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
     return {
       success: true,
       transactionReference: txRef,
+      settled: { amount: prepared._prepared_amount as number, currency: prepared._prepared_currency },
     }
   }
 

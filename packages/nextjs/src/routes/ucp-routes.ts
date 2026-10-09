@@ -34,15 +34,15 @@ import {
   ucpToSaleorAddress,
   metadataToRecord,
   recordToMetadataInput,
-  extractSignedSummary,
-  readStoredPrismAccepts,
-  validateSignedAgainstStored,
   planCartReplacement,
   saleorErrorsToUcpMessages,
   evaluateReadiness,
   isWellFormedInstrument,
+  PAYMENT_QUOTE_METADATA_KEY,
+  quoteForTotal,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
+import { settleAndCompleteCheckout } from "./settle-and-complete.js"
 import type { FormatterContext, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
@@ -61,12 +61,6 @@ type UcpRequestScope = {
   wire: UcpWire
   ctx: FormatterContext
 }
-
-// Checkout privateMetadata key holding the settlement record (SAC-2): the tx
-// reference + amount, written the moment a payment settles — BEFORE the Saleor
-// writes that can fail. Turns a settle-then-fail into a recoverable, auditable
-// state, and lets a retried complete skip re-settling. Must match acp-routes.ts.
-const SETTLEMENT_METADATA_KEY = "agentic_commerce__settlement"
 
 export type UcpRouteHandlers = {
   /** GET /.well-known/ucp */
@@ -205,13 +199,13 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
    * Returns the final checkout with updated metadata.
    */
   async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string, ucpVersion: string, pin?: string) {
-    const totalAmount = Math.round(checkout.totalPrice.gross.amount * 100)
+    const quote = quoteForTotal(checkout.totalPrice.gross)
     const metadata = metadataToRecord(checkout.privateMetadata)
 
     const prepareResults = await paymentHandlers.prepareCheckoutPayment({
       checkoutId,
-      total: totalAmount,
-      currencyCode: checkout.totalPrice.gross.currency,
+      total: quote.amount,
+      currencyCode: quote.currency,
       checkoutBaseUrl: `${baseUrl}/checkout-sessions`,
       storeName: config.storeName,
       ucpVersion,
@@ -220,6 +214,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
     const metadataUpdates = recordToMetadataInput({
       ...prepareResults,
+      [PAYMENT_QUOTE_METADATA_KEY]: quote,
       ...(pin ? { [UCP_VERSION_METADATA_KEY]: pin } : {}),
     })
     if (metadataUpdates.length > 0) {
@@ -550,7 +545,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         const checkoutResult = await saleorClient.getCheckout(id)
         if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
 
-        const checkout = checkoutResult.data
+        let checkout = checkoutResult.data
         const metadata = metadataToRecord(checkout.privateMetadata)
         const pinned = pinScope(scope, metadata)
         if (pinned instanceof Response) return pinned
@@ -578,148 +573,36 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           if (!billingResult.ok) {
             return ucpSaleorError(scope.wire, "billing_address_update_failed", 422, billingResult)
           }
+          const refreshed = await saleorClient.getCheckout(id)
+          if (!refreshed.ok) return ucpError(scope.wire, "checkout_not_found", refreshed.error, 404)
+          checkout = refreshed.data
         }
 
-        // Validate the agent's signed payload against the checkout's
-        // stored Prism quote before forwarding to settlement. See
-        // validate-signed-amount.ts for details. Skipped if the credential
-        // shape is unrecognised or the checkout has no stored Prism quote
-        // (non-Prism handler) — those cases fall through to existing
-        // downstream validation.
-        const signedSummary = extractSignedSummary(selectedInstrument.credential)
-        if (signedSummary) {
-          const storedAccepts = readStoredPrismAccepts(metadata, "ucp")
-          if (storedAccepts) {
-            const validation = validateSignedAgainstStored(signedSummary, storedAccepts)
-            if (!validation.ok) {
-              return ucpError(scope.wire, validation.code, validation.message, 422)
-            }
-          }
-        }
-
-        // --- Settle + record (SAC-2) ----------------------------------------
-        // A prior `complete` may have settled on-chain (irreversible) and then
-        // failed before the order was recorded. To make that recoverable rather
-        // than a silent charged-no-order, the settlement is written to checkout
-        // privateMetadata the instant it succeeds, BEFORE the Saleor writes that
-        // can fail. On a retry we find that record and skip re-settling.
-        const priorSettlement = metadata[SETTLEMENT_METADATA_KEY] as
-          | { reference?: string }
-          | undefined
-
-        let reference: string | undefined
-        if (priorSettlement?.reference) {
-          // Retry-to-recover: the money already moved (the EIP-3009 nonce makes a
-          // repeat settle a no-op anyway). Don't settle again — resume bookkeeping.
-          reference = priorSettlement.reference
-        } else {
-          // Settle only once Saleor confirms the sole outstanding requirement is
-          // payment; otherwise surface its status + messages and move no funds.
-          const readiness = await evaluateReadiness(saleorClient, checkout)
-          if (!readiness.ready) {
-            return Response.json(
-              formatUcpCheckoutSession(scope.ctx, checkout, readiness),
-            )
-          }
-
-          const settleResult = await paymentHandlers.settlePayment({
-            checkoutId: id,
+        const completion = await settleAndCompleteCheckout({
+          instance,
+          checkout,
+          payment: {
             protocol: "ucp",
             handlerId,
             ucpVersion: scope.version,
             instrumentType: selectedInstrument.type,
             credential: selectedInstrument.credential,
-            checkoutMetadata: metadata,
-          })
-          if (!settleResult.success) {
-            return ucpError(scope.wire, "payment_failed", settleResult.error || "Payment settlement failed", 422, "recoverable")
-          }
-          reference = settleResult.transactionReference
-
-          // Record the settlement BEFORE createCheckoutTransaction/completeCheckout
-          // (either can fail). Saleor's per-checkout privateMetadata is the direct
-          // analog of Shopware's settlement table; the response is stored opaquely.
-          if (reference) {
-            const record = {
-              handlerId,
-              reference,
-              amount: checkout.totalPrice.gross.amount,
-              currency: checkout.totalPrice.gross.currency,
-              settledAt: new Date().toISOString(),
-            }
-            const recResult = await saleorClient.updatePrivateMetadata(id, [
-              { key: SETTLEMENT_METADATA_KEY, value: JSON.stringify(record) },
-            ])
-            if (!recResult.ok) {
-              // Settled but the marker did not persist. Refuse to go further and
-              // lose the trail — return an HONEST, recoverable error naming the
-              // settled payment; a retry re-persists (the nonce blocks any
-              // double-charge).
-              console.error(`[ucp-routes] settled ${reference} but failed to record settlement on ${id}: ${recResult.error}`)
-              return ucpError(
-                scope.wire,
-                "settlement_not_recorded",
-                `Payment settled on-chain (reference ${reference}) but recording it failed — the order was not created. Retry to reconcile.`,
-                422,
-                "recoverable",
-              )
-            }
-          }
-        }
-
-        // Register the settled payment as a Saleor transaction — unless it is
-        // already recorded (retry after a later failure), which would otherwise
-        // double the charged amount on the checkout.
-        if (reference) {
-          const alreadyRecorded = (checkout.transactions ?? []).some((t) => t.pspReference === reference)
-          if (!alreadyRecorded) {
-            const handler = paymentHandlers.getAdapter(handlerId)
-            const txResult = await saleorClient.createCheckoutTransaction(id, {
-              name: handler?.name ?? handlerId,
-              pspReference: reference,
-              amountCharged: {
-                amount: checkout.totalPrice.gross.amount,
-                currency: checkout.totalPrice.gross.currency,
-              },
-            })
-            if (!txResult.ok) {
-              // Honest reporting (SAC-2): the PAYMENT succeeded; recording the
-              // order failed — not payment_failed. Settlement is recorded, so a
-              // retry resumes here.
-              return ucpError(
-                scope.wire,
-                "order_not_recorded_after_settlement",
-                `Payment settled (reference ${reference}) but recording the order failed: ${txResult.error}. Retry to complete the order.`,
-                422,
-                "recoverable",
-              )
-            }
-          }
-        }
-
-        // Complete checkout in Saleor
-        const orderResult = await saleorClient.completeCheckout(id)
-        if (!orderResult.ok) {
-          // Honest reporting (SAC-2): if a settlement exists, the payment
-          // succeeded and only order placement failed (e.g. stock/voucher at
-          // commit) — say so, and let a retry resume without re-charging.
-          if (reference) {
-            return ucpError(
-              scope.wire,
-              "order_not_completed_after_settlement",
-              `Payment settled (reference ${reference}) but completing the order failed: ${orderResult.error}. Retry to complete the order.`,
-              422,
-              "recoverable",
-            )
-          }
-          return ucpSaleorError(scope.wire, "checkout_complete_failed", 422, orderResult)
-        }
+          },
+          beforeSettle: async () => {
+            const readiness = await evaluateReadiness(saleorClient, checkout)
+            return readiness.ready ? null : Response.json(formatUcpCheckoutSession(scope.ctx, checkout, readiness))
+          },
+          fail: ({ code, message, status, severity }) => ucpError(scope.wire, code, message, status, severity),
+          logPrefix: "[ucp-routes]",
+        })
+        if (!completion.ok) return completion.response
+        const order = completion.order
 
         // Return checkout session with completed status and order confirmation
         const orderConfirmation = {
-          id: orderResult.data.id,
-          label: orderResult.data.number ?? undefined,
-          permalink_url: `${config.storefrontUrl}/orders/${orderResult.data.id}`,
+          id: order.id,
+          label: order.number ?? undefined,
+          permalink_url: `${config.storefrontUrl}/orders/${order.id}`,
         }
 
         const response = formatUcpCompleteResponse(scope.ctx, checkout, orderConfirmation)

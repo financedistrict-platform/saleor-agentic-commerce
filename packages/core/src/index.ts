@@ -12,6 +12,7 @@ export type {
   CheckoutPrepareInput,
   PaymentSettleInput,
   PaymentSettleResult,
+  SettledAmount,
 } from "./types/payment-handler-adapter.js"
 
 // Types — UCP Protocol
@@ -110,8 +111,8 @@ export { SaleorClient } from "./lib/saleor-client.js"
 export type { SaleorClientOptions, SaleorResult, SaleorAddressInput } from "./lib/saleor-client.js"
 
 // Checkout readiness — Saleor-authoritative validation probe → UCP status/messages
-export { evaluateReadiness, classifyCompleteErrors, PAYMENT_PENDING_CODE } from "./lib/checkout-readiness.js"
-export type { CheckoutReadiness } from "./lib/checkout-readiness.js"
+export { evaluateReadiness, classifyCompleteErrors, checkPaidOrdersOnly, PAYMENT_PENDING_CODE } from "./lib/checkout-readiness.js"
+export type { CheckoutReadiness, PaidOrdersOnlyResult } from "./lib/checkout-readiness.js"
 
 export { UCP_VERSION } from "./lib/ucp-version.js"
 export { isWellFormedInstrument } from "./lib/ucp-instrument.js"
@@ -221,3 +222,22 @@ export type {
   ValidationResult,
   ValidationErrorCode,
 } from "./lib/validate-signed-amount.js"
+
+export {
+  PAYMENT_QUOTE_METADATA_KEY,
+  SETTLEMENT_METADATA_KEY,
+  quoteForTotal,
+  minorToSaleorMoney,
+  readPaymentQuote,
+  readSettlementRecord,
+  parseSettlementRecord,
+  reconcilePayment,
+  sameMinorMoney,
+} from "./lib/payment-reconciliation.js"
+export type {
+  MinorMoney,
+  SettlementRecord,
+  SettlementRead,
+  ReconciliationErrorCode,
+  ReconciliationResult,
+} from "./lib/payment-reconciliation.js"

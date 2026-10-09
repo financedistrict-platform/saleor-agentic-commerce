@@ -227,6 +227,16 @@ export class SaleorClient {
     return { ok: true, data: order }
   }
 
+  async getChannelOrderSettings(slug: string): Promise<SaleorResult<{ allowUnpaidOrders: boolean }>> {
+    const result = await this.execute<{
+      channel: { orderSettings: { allowUnpaidOrders: boolean } } | null
+    }>(CHANNEL_ORDER_SETTINGS_QUERY, { slug })
+
+    if (!result.ok) return result
+    if (!result.data.channel) return { ok: false, error: `Channel ${slug} not found` }
+    return { ok: true, data: result.data.channel.orderSettings }
+  }
+
   // -------------------------------------------------
   // Catalog Operations
   // -------------------------------------------------
@@ -517,6 +527,14 @@ const CHECKOUT_LINES_DELETE = `
     checkoutLinesDelete(id: $checkoutId, linesIds: $linesIds) {
       checkout { ${CHECKOUT_FIELDS} }
       errors { field message code }
+    }
+  }
+`
+
+const CHANNEL_ORDER_SETTINGS_QUERY = `
+  query ChannelOrderSettings($slug: String!) {
+    channel(slug: $slug) {
+      orderSettings { allowUnpaidOrders }
     }
   }
 `

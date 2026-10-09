@@ -125,10 +125,20 @@ export type PaymentSettleInput =
   | (PaymentSettleInputBase & { protocol?: "ucp"; instrumentType?: string })
   | (PaymentSettleInputBase & { protocol: "acp" })
 
-export type PaymentSettleResult = {
-  success: boolean
-  /** Transaction reference (e.g., blockchain tx hash) */
-  transactionReference?: string
-  /** Error message on failure */
-  error?: string
+export type SettledAmount = {
+  amount: number
+  currency: string
 }
+
+export type PaymentSettleResult =
+  | {
+      success: true
+      /** Transaction reference (e.g., blockchain tx hash) */
+      transactionReference: string
+      settled: SettledAmount
+    }
+  | {
+      success: false
+      /** Error message on failure */
+      error: string
+    }

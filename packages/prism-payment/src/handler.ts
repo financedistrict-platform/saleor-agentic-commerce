@@ -28,6 +28,7 @@ type PrismCheckoutData = {
   ucp: UcpCheckoutPrepareResponse | null
   acp: AcpHandler | null
   preparedAmount: number
+  preparedCurrency: string
   preparedResourceUrl: string
 }
 
@@ -80,6 +81,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       existing &&
       existing.preparedResourceUrl === resourceUrl &&
       existing.preparedAmount === total &&
+      existing.preparedCurrency === currencyCode &&
       (existing.ucp || existing.acp)
     ) {
       return existing
@@ -121,6 +123,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       ucp,
       acp,
       preparedAmount: total,
+      preparedCurrency: currencyCode,
       preparedResourceUrl: resourceUrl,
     }
   }
@@ -142,6 +145,12 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       return { success: false, error: "No Prism payment config found on checkout" }
     }
 
+    const prepared = checkoutMetadata?.[PRISM_HANDLER_ID] as Partial<PrismCheckoutData>
+    if (!Number.isSafeInteger(prepared.preparedAmount) || typeof prepared.preparedCurrency !== "string") {
+      return { success: false, error: "Prism payment config has no prepared amount" }
+    }
+    const settled = { amount: prepared.preparedAmount as number, currency: prepared.preparedCurrency }
+
     const accepts = config.accepts ?? []
     if (accepts.length === 0) {
       return { success: false, error: "Prism payment config has no accepts entries" }
@@ -162,12 +171,16 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       })
 
       if (!result.success) {
-        return { success: false, error: result.error }
+        return { success: false, error: result.error ?? "Prism settlement failed" }
+      }
+      if (!result.transactionHash) {
+        return { success: false, error: "Prism settlement returned no transaction reference" }
       }
 
       return {
         success: true,
         transactionReference: result.transactionHash,
+        settled,
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown error"
