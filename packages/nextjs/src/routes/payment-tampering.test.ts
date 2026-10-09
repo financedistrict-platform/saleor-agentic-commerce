@@ -562,3 +562,152 @@ describe("Complete happy path and currency checks", () => {
     expect(saleor.completed).toHaveLength(0)
   })
 })
+
+describe("Complete with a Prism credential the signed-amount check cannot read", () => {
+  const PRISM = "xyz.fd.prism_payment"
+  const QUOTED = {
+    scheme: "exact",
+    network: "eip155:84532",
+    asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    payTo: "0x1111111111111111111111111111111111111111",
+    amount: "1000000",
+  }
+
+  let gateway: ReturnType<typeof stubPrismGateway>
+  beforeEach(() => { gateway = stubPrismGateway() })
+  afterEach(() => gateway.restore())
+
+  const settleRequests = () => gateway.requests.filter((r) => r.url.endsWith("/api/v2/payment/settle"))
+
+  function signed(value: string, authorization: Record<string, unknown> = {}) {
+    return {
+      x402Version: 2,
+      accepted: { ...QUOTED, maxTimeoutSeconds: 300 },
+      payload: {
+        signature: "0xsig",
+        authorization: { from: "0xbuyer", to: QUOTED.payTo, value, validAfter: "0", validBefore: "9999999999", nonce: "0x01", ...authorization },
+      },
+    }
+  }
+
+  function withoutAccepted(value: string) {
+    const { accepted: _accepted, ...rest } = signed(value)
+    return { ...rest, scheme: "exact", network: QUOTED.network }
+  }
+
+  function prismCheckout(mutate?: (blob: { ucp: Record<string, { config: { accepts: Record<string, unknown>[] } }[]> }) => void): SaleorCheckout {
+    const checkout = checkoutTemplate()
+    if (mutate) {
+      checkout.privateMetadata = checkout.privateMetadata.map((m) => {
+        if (m.key !== PRISM) return m
+        const blob = JSON.parse(m.value)
+        mutate(blob)
+        return { key: m.key, value: JSON.stringify(blob) }
+      })
+    }
+    return checkout
+  }
+
+  async function ucpPay(credential: object, checkout = prismCheckout()) {
+    const { routes, saleor } = buildRoutes({ prism: true, checkouts: [checkout] })
+    const response = await routes.checkoutSessionComplete.POST(
+      ucpRequest(`${UCP_SESSIONS}/${CHECKOUT_ID}/complete`, {
+        body: { payment: { instruments: [{ id: "inst_1", handler_id: PRISM, type: "x402", credential: { type: "x402", ...credential } }] } },
+      }),
+      params({ id: CHECKOUT_ID }),
+    )
+    return { response, saleor }
+  }
+
+  async function acpPay(credential: object, checkout = prismCheckout()) {
+    const { acpRoutes, saleor } = buildRoutes({ prism: true, checkouts: [checkout] })
+    const response = await acpRoutes.checkoutSessionComplete.POST(
+      new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}/complete`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ payment_data: { handler_id: PRISM, instrument: { credential } } }),
+      }),
+      params({ id: CHECKOUT_ID }),
+    )
+    return { response, saleor }
+  }
+
+  function expectRefusedBeforeSettling(saleor: ReturnType<typeof buildRoutes>["saleor"]) {
+    expect(settleRequests()).toHaveLength(0)
+    expect(saleor.transactions).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  }
+
+  it("UCP settles a signed payment that matches the stored quote", async () => {
+    const { response, saleor } = await ucpPay(signed(QUOTED.amount))
+
+    expect(response.status).toBe(200)
+    expect(settleRequests()).toHaveLength(1)
+    expect(settleRequests()[0].body).toMatchObject({ paymentPayload: signed(QUOTED.amount), paymentRequirements: QUOTED })
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("UCP refuses a credential without an accepted block instead of skipping the amount check", async () => {
+    const { response, saleor } = await ucpPay(withoutAccepted("1"))
+
+    expect(response.status).toBe(422)
+    expectRefusedBeforeSettling(saleor)
+  })
+
+  it("UCP refuses a payload that is not an EIP-3009 authorization", async () => {
+    const { payload: _payload, ...rest } = signed("1")
+    const permit2 = { signature: "0xsig", permit2Authorization: { from: "0xbuyer", spender: QUOTED.payTo, permitted: { token: QUOTED.asset, amount: "1" } } }
+    const { response, saleor } = await ucpPay({ ...rest, payload: permit2 })
+
+    expect(response.status).toBe(422)
+    expectRefusedBeforeSettling(saleor)
+  })
+
+  it("UCP refuses when the stored quote entry has no amount", async () => {
+    const checkout = prismCheckout((blob) => { delete blob.ucp[PRISM][0].config.accepts[0].amount })
+    const { response, saleor } = await ucpPay(signed("1"), checkout)
+
+    expect(response.status).toBe(422)
+    expectRefusedBeforeSettling(saleor)
+  })
+
+  it("UCP refuses a quote entry in a scheme it cannot check", async () => {
+    const checkout = prismCheckout((blob) => { blob.ucp[PRISM][0].config.accepts[0].scheme = "upto" })
+    const { response, saleor } = await ucpPay({ ...signed(QUOTED.amount), accepted: { ...QUOTED, scheme: "upto" } }, checkout)
+
+    expect(response.status).toBe(422)
+    expectRefusedBeforeSettling(saleor)
+  })
+
+  it("UCP checks the payload it would settle when a legacy authorization rides along", async () => {
+    const legacy = btoa(JSON.stringify(signed(QUOTED.amount)))
+    const { response, saleor } = await ucpPay({ authorization: legacy, paymentPayload: signed("1") })
+
+    expect(response.status).toBe(422)
+    expect((await response.json()).messages[0].code).toBe("amount_mismatch")
+    expectRefusedBeforeSettling(saleor)
+  })
+
+  it("UCP refuses a signed payment to another recipient", async () => {
+    const { response, saleor } = await ucpPay(signed(QUOTED.amount, { to: "0x2222222222222222222222222222222222222222" }))
+
+    expect(response.status).toBe(422)
+    expectRefusedBeforeSettling(saleor)
+  })
+
+  it("ACP checks the signed amount against the same stored quote the settlement uses", async () => {
+    const { response, saleor } = await acpPay(signed("1"))
+
+    expect(response.status).toBe(422)
+    expect((await response.json()).code).toBe("amount_mismatch")
+    expectRefusedBeforeSettling(saleor)
+  })
+
+  it("ACP settles a signed payment that matches the stored quote", async () => {
+    const { response, saleor } = await acpPay(signed(QUOTED.amount))
+
+    expect(response.status).toBe(200)
+    expect(settleRequests()).toHaveLength(1)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})

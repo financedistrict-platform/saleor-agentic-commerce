@@ -66,6 +66,16 @@ const sampleUcpPrepare: UcpCheckoutPrepareResponse = {
 
 const TEST_UCP_VERSION = "2026-08-25"
 
+function signedFor(entry: { scheme: string; network: string; asset: string; payTo: string; amount?: string | null }, value = entry.amount ?? "0") {
+  return {
+    x402Version: 2,
+    accepted: { scheme: entry.scheme, network: entry.network, asset: entry.asset, payTo: entry.payTo, amount: value },
+    payload: { signature: "0xsig", authorization: { from: "0xbuyer", to: entry.payTo, value, validAfter: "0", validBefore: "9999999999", nonce: "0x01" } },
+  }
+}
+
+const SIGNED = signedFor(samplePaymentHandlerConfig.accepts[0])
+
 const baseInput = {
   ucpVersion: TEST_UCP_VERSION,
   checkoutId: "abc",
@@ -399,7 +409,7 @@ describe("PrismPaymentHandler — prepareCheckoutPayment", () => {
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
       instrumentType: "x402",
-      credential: { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} },
+      credential: { type: "x402", ...SIGNED },
       checkoutMetadata: { [PRISM_HANDLER_ID]: data },
     })
 
@@ -449,7 +459,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true, transactionHash: "0xdeadbeef" })
 
-    const credential = { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
+    const credential = { type: "x402", ...SIGNED }
 
     const result = await handler.settlePayment({
       ucpVersion: TEST_UCP_VERSION,
@@ -480,7 +490,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true })
 
-    const credential = { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
+    const credential = { type: "x402", ...SIGNED }
 
     await handler.settlePayment({
       ucpVersion: TEST_UCP_VERSION,
@@ -509,7 +519,7 @@ describe("PrismPaymentHandler — settlement", () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true, transactionHash: "0xacp" })
 
-    const credential = { x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} }
+    const credential = SIGNED
 
     const result = await handler.settlePayment({
       ucpVersion: TEST_UCP_VERSION,
@@ -554,7 +564,7 @@ describe("PrismPaymentHandler — settlement", () => {
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
       instrumentType: "x402",
-      credential: { type: "x402", x402Version: 2, scheme: "exact", network: "base-sepolia", payload: {} },
+      credential: { type: "x402", ...SIGNED },
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
           ucp: multiUcp,
@@ -617,7 +627,7 @@ describe("PrismPaymentHandler — settlement", () => {
   it("settles a typed wrapper credential with only the inner paymentPayload", async () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
-    const paymentPayload = { x402Version: 2, accepted: { network: "base-sepolia", asset: "USDC" }, payload: {} }
+    const paymentPayload = SIGNED
 
     const result = await handler.settlePayment({
       ucpVersion: TEST_UCP_VERSION,
@@ -672,7 +682,7 @@ describe("PrismPaymentHandler — settlement", () => {
       protocol: "ucp",
       handlerId: PRISM_HANDLER_ID,
       instrumentType: "x402",
-      credential: { type: "x402", x402Version: 2, scheme: "exact", network: "polygon-mumbai", payload: {} },
+      credential: { type: "x402", ...signedFor({ ...baseEntry, network: "polygon-mumbai" }) },
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: {
           ucp: multiUcp,
@@ -683,8 +693,7 @@ describe("PrismPaymentHandler — settlement", () => {
       },
     })
 
-    expect(result.success).toBe(false)
-    expect(result.error).toMatch(/could not match/i)
+    expect(result).toMatchObject({ success: false, code: "no_matching_accepts_entry" })
     expect(mock.settle).not.toHaveBeenCalled()
   })
 })
@@ -777,7 +786,7 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       checkoutId: "abc",
       handlerId: PRISM_HANDLER_ID,
       instrumentType,
-      credential: { ...credentialType, x402Version: 2, network: "base-sepolia", payload: {} },
+      credential: { ...credentialType, ...SIGNED },
       checkoutMetadata: {
         [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc" },
       },
@@ -788,7 +797,7 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
 })
 
 describe("PrismPaymentHandler — settled amount", () => {
-  const credential = { type: "x402", x402Version: 2, network: "base-sepolia", payload: {} }
+  const credential = { type: "x402", ...SIGNED }
 
   it("refuses to settle when the stored config has no prepared amount", async () => {
     const { handler, mock } = makeHandler()
@@ -818,5 +827,84 @@ describe("PrismPaymentHandler — settled amount", () => {
     })
 
     expect(result).toEqual({ success: false, error: "Prism settlement returned no transaction reference" })
+  })
+})
+
+describe("PrismPaymentHandler — signed credential check", () => {
+  const stored = { [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc" } }
+  const settle = (handler: PrismPaymentHandler, credential: unknown) =>
+    handler.settlePayment({ ucpVersion: TEST_UCP_VERSION, checkoutId: "abc", protocol: "acp", handlerId: PRISM_HANDLER_ID, credential, checkoutMetadata: stored })
+
+  it("settles the decoded payload of a base64 credential, the same object it checked", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xb64" })
+
+    const result = await settle(handler, btoa(JSON.stringify(SIGNED)))
+
+    expect(result.success).toBe(true)
+    expect(mock.settle).toHaveBeenCalledWith({ paymentPayload: SIGNED, paymentRequirements: samplePaymentHandlerConfig.accepts[0] })
+  })
+
+  it.each([
+    ["a payload without a signed authorization", { ...SIGNED, payload: { signature: "0xsig" } }],
+    ["a base64 credential that does not decode", "%%%"],
+    ["a non-object credential", 42],
+  ])("refuses %s without settling", async (_label, credential) => {
+    const { handler, mock } = makeHandler()
+
+    const result = await settle(handler, credential)
+
+    expect(result).toMatchObject({ success: false, code: "unreadable_payment_credential" })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  const withAccepts = (accepts: PaymentHandlerConfig["accepts"]) => ({
+    [PRISM_HANDLER_ID]: {
+      ucp: { [PRISM_HANDLER_ID]: [{ id: PRISM_HANDLER_ID, version: "2026-10-07", config: { ...samplePaymentHandlerConfig, accepts } }] },
+      acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc",
+    },
+  })
+  const settleAgainst = (handler: PrismPaymentHandler, credential: unknown, accepts: PaymentHandlerConfig["accepts"]) =>
+    handler.settlePayment({ ucpVersion: TEST_UCP_VERSION, checkoutId: "abc", protocol: "acp", handlerId: PRISM_HANDLER_ID, credential, checkoutMetadata: withAccepts(accepts) })
+
+  it("matches an EVM recipient and asset regardless of checksum case", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xevm" })
+    const entry = { ...samplePaymentHandlerConfig.accepts[0], network: "eip155:84532", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", payTo: "0xAbCdEf0000000000000000000000000000000001" }
+    const credential = signedFor({ ...entry, asset: entry.asset.toLowerCase(), payTo: entry.payTo.toLowerCase() })
+
+    const result = await settleAgainst(handler, credential, [entry])
+
+    expect(result.success).toBe(true)
+    expect(mock.settle).toHaveBeenCalledWith({ paymentPayload: credential, paymentRequirements: entry })
+  })
+
+  it("compares a non-EVM recipient exactly", async () => {
+    const { handler, mock } = makeHandler()
+    const entry = { ...samplePaymentHandlerConfig.accepts[0], network: "solana:devnet", asset: "MintAbc", payTo: "PayToAbc" }
+
+    const result = await settleAgainst(handler, signedFor({ ...entry, payTo: "paytoabc" }), [entry])
+
+    expect(result).toMatchObject({ success: false, code: "wrong_recipient" })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("refuses a quote with two entries for the same network and asset", async () => {
+    const { handler, mock } = makeHandler()
+    const entry = samplePaymentHandlerConfig.accepts[0]
+
+    const result = await settleAgainst(handler, SIGNED, [entry, { ...entry, payTo: "0xother" }])
+
+    expect(result).toMatchObject({ success: false, code: "no_matching_accepts_entry", error: expect.stringMatching(/more than one entry/) })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("refuses a hex-encoded signed value instead of reading it as the same amount", async () => {
+    const { handler, mock } = makeHandler()
+
+    const result = await settle(handler, signedFor(samplePaymentHandlerConfig.accepts[0], "0xF4240"))
+
+    expect(result).toMatchObject({ success: false, code: "amount_mismatch" })
+    expect(mock.settle).not.toHaveBeenCalled()
   })
 })

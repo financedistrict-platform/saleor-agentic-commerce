@@ -11,7 +11,18 @@ import {
 } from "./__tests__/harness.js"
 
 const COMPLETE = `https://store.test/api/ucp/checkout-sessions/${CHECKOUT_ID}/complete`
-const SIGNED = { x402Version: 2, payload: { signature: "0xsig", authorization: { from: "0xbuyer" } } }
+const QUOTED = {
+  scheme: "exact",
+  network: "eip155:84532",
+  asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+  payTo: "0x1111111111111111111111111111111111111111",
+  amount: "1000000",
+}
+const SIGNED = {
+  x402Version: 2,
+  accepted: QUOTED,
+  payload: { signature: "0xsig", authorization: { from: "0xbuyer", to: QUOTED.payTo, value: QUOTED.amount, validAfter: "0", validBefore: "9999999999", nonce: "0x01" } },
+}
 
 let gateway: ReturnType<typeof stubPrismGateway>
 

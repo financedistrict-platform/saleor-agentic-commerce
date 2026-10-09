@@ -1,94 +1,56 @@
-/**
- * Validate the agent's signed x402 payment payload against the checkout's
- * stored Prism quote on (network, asset, amount, recipient). Strict
- * equality on amount — FX and buffer are baked in at prepare time.
- */
-
 const PRISM_HANDLER_ID = "xyz.fd.prism_payment"
-
-// =====================================================
-// Public types
-// =====================================================
+const CHECKED_SCHEME = "exact"
 
 export type SignedPaymentSummary = {
   network: string
   asset: string
-  /** EIP-3009 signed `value` as an atomic-unit string */
+  scheme?: string
   value: string
-  /** EIP-3009 signed recipient (`authorization.to`) */
   to: string
+  payload: Record<string, unknown>
 }
 
 export type StoredAcceptEntry = {
+  scheme?: string
   network: string
   asset: string
-  amount: string
+  amount?: string | null
   payTo: string
 }
 
-export type ValidationResult =
-  | { ok: true }
+export type ValidationResult<T extends StoredAcceptEntry = StoredAcceptEntry> =
+  | { ok: true; entry: T }
   | { ok: false; code: ValidationErrorCode; message: string }
 
 export type ValidationErrorCode =
   | "no_payment_quote"
   | "no_matching_accepts_entry"
+  | "unsupported_payment_scheme"
   | "amount_mismatch"
   | "wrong_recipient"
 
-// =====================================================
-// Extraction — handles every credential shape we've seen on the wire
-// =====================================================
-
-/**
- * Extract (network, asset, value, to) from a UCP/ACP credential.
- * Handles base64-string, legacy single-field, wrapper, and flat shapes.
- * Returns null if the input is unrecognised or missing required fields.
- */
 export function extractSignedSummary(input: unknown): SignedPaymentSummary | null {
-  if (typeof input === "string") {
-    return extractFromBase64(input)
-  }
-  if (typeof input !== "object" || input === null) {
-    return null
-  }
+  if (typeof input === "string") return extractFromBase64(input)
+  if (typeof input !== "object" || input === null) return null
   const obj = input as Record<string, unknown>
 
-  // Legacy single-field shape: { authorization: "<b64>" } or { token: "<b64>" }
-  if (
-    typeof obj.authorization === "string" &&
-    obj.authorization.length > 0 &&
-    !obj.paymentPayload &&
-    !obj.payload
-  ) {
-    return extractFromBase64(obj.authorization)
-  }
-  if (
-    typeof obj.token === "string" &&
-    obj.token.length > 0 &&
-    !obj.paymentPayload &&
-    !obj.payload
-  ) {
-    return extractFromBase64(obj.token)
+  if (!obj.paymentPayload && !obj.payload) {
+    const legacy = nonEmptyString(obj.authorization) ?? nonEmptyString(obj.token)
+    return legacy ? extractFromBase64(legacy) : null
   }
 
-  // Wrapper { paymentPayload, ... } or flat (obj IS the paymentPayload).
-  const pp =
-    obj.paymentPayload && typeof obj.paymentPayload === "object"
-      ? (obj.paymentPayload as Record<string, unknown>)
-      : obj
+  const pp = isRecord(obj.paymentPayload) ? obj.paymentPayload : obj
+  const accepted = isRecord(pp.accepted) ? pp.accepted : undefined
+  const payload = isRecord(pp.payload) ? pp.payload : undefined
+  const authz = payload && isRecord(payload.authorization) ? payload.authorization : undefined
 
-  const accepted = pp.accepted as Record<string, unknown> | undefined
-  const payload = pp.payload as Record<string, unknown> | undefined
-  const authz = payload?.authorization as Record<string, unknown> | undefined
-
-  const network = readNonEmptyString(accepted, "network")
-  const asset = readNonEmptyString(accepted, "asset")
-  const value = readNonEmptyString(authz, "value")
-  const to = readNonEmptyString(authz, "to")
+  const network = nonEmptyString(accepted?.network)
+  const asset = nonEmptyString(accepted?.asset)
+  const value = nonEmptyString(authz?.value)
+  const to = nonEmptyString(authz?.to)
 
   if (!network || !asset || !value || !to) return null
-  return { network, asset, value, to }
+  return { network, asset, scheme: nonEmptyString(accepted?.scheme), value, to, payload: pp }
 }
 
 function extractFromBase64(b64: string): SignedPaymentSummary | null {
@@ -96,147 +58,112 @@ function extractFromBase64(b64: string): SignedPaymentSummary | null {
     const binary = atob(b64)
     const bytes = new Uint8Array(binary.length)
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-    const decoded = new TextDecoder("utf-8").decode(bytes)
-    const parsed = JSON.parse(decoded)
-    return extractSignedSummary(parsed)
+    const parsed: unknown = JSON.parse(new TextDecoder("utf-8").decode(bytes))
+    return isRecord(parsed) ? extractSignedSummary(parsed) : null
   } catch {
     return null
   }
 }
 
-// =====================================================
-// Stored-accepts reader
-// =====================================================
-
-/**
- * Read the checkout's stored Prism accepts[] for the given protocol.
- * Returns null if the checkout wasn't prepared for Prism. The handler
- * config is set on Saleor's private metadata at prepare time under
- * the Prism handler id.
- */
 export function readStoredPrismAccepts(
   checkoutMetadata: Record<string, unknown> | undefined,
-  protocol: "ucp" | "acp",
+  _protocol?: "ucp" | "acp",
 ): StoredAcceptEntry[] | null {
-  if (!checkoutMetadata) return null
-  const data = checkoutMetadata[PRISM_HANDLER_ID]
-  if (typeof data !== "object" || data === null) return null
-  const d = data as Record<string, unknown>
-
-  if (protocol === "ucp") {
-    const ucp = d.ucp
-    if (typeof ucp !== "object" || ucp === null) return null
-    const firstNs = Object.values(ucp as Record<string, unknown>)[0]
-    if (!Array.isArray(firstNs) || firstNs.length === 0) return null
-    const firstEntry = firstNs[0] as Record<string, unknown>
-    const config = firstEntry?.config as Record<string, unknown> | undefined
-    return readAcceptsFromConfig(config)
-  }
-
-  // ACP
-  const acp = d.acp
-  if (typeof acp !== "object" || acp === null) return null
-  const config = (acp as Record<string, unknown>).config as
-    | Record<string, unknown>
-    | undefined
-  return readAcceptsFromConfig(config)
-}
-
-function readAcceptsFromConfig(
-  config: Record<string, unknown> | undefined,
-): StoredAcceptEntry[] | null {
-  if (!config) return null
-  const accepts = config.accepts
-  if (!Array.isArray(accepts)) return null
-  const filtered = accepts.filter(
+  const data = checkoutMetadata?.[PRISM_HANDLER_ID]
+  if (!isRecord(data)) return null
+  const ucpEntry = isRecord(data.ucp) ? Object.values(data.ucp)[0] : undefined
+  const ucpConfig = Array.isArray(ucpEntry) && isRecord(ucpEntry[0]) ? ucpEntry[0].config : undefined
+  const acpConfig = isRecord(data.acp) ? data.acp.config : undefined
+  const config = isRecord(ucpConfig) ? ucpConfig : acpConfig
+  if (!isRecord(config) || !Array.isArray(config.accepts)) return null
+  const accepts = config.accepts.filter(
     (a): a is StoredAcceptEntry =>
-      typeof a === "object" &&
-      a !== null &&
-      typeof (a as Record<string, unknown>).network === "string" &&
-      typeof (a as Record<string, unknown>).asset === "string" &&
-      typeof (a as Record<string, unknown>).amount === "string" &&
-      typeof (a as Record<string, unknown>).payTo === "string",
+      isRecord(a) &&
+      typeof a.network === "string" &&
+      typeof a.asset === "string" &&
+      typeof a.amount === "string" &&
+      typeof a.payTo === "string",
   )
-  return filtered.length > 0 ? filtered : null
+  return accepts.length > 0 ? accepts : null
 }
 
-// =====================================================
-// Validation
-// =====================================================
-
-/**
- * Validate the signed summary against the checkout's stored accepts.
- * Strict equality on network (exact), asset & recipient (case-insensitive
- * for address checksum tolerance), and amount (BigInt comparison).
- */
-export function validateSignedAgainstStored(
+export function validateSignedAgainstStored<T extends StoredAcceptEntry>(
   summary: SignedPaymentSummary,
-  storedAccepts: StoredAcceptEntry[] | null,
-): ValidationResult {
+  storedAccepts: readonly T[] | null | undefined,
+): ValidationResult<T> {
   if (!storedAccepts || storedAccepts.length === 0) {
     return {
       ok: false,
       code: "no_payment_quote",
-      message:
-        "No payment quote found on the checkout. Prepare payment before completing.",
+      message: "No payment quote found on the checkout. Prepare payment before completing.",
     }
   }
 
-  const match = storedAccepts.find(
-    (a) => a.network === summary.network && sameAddress(a.asset, summary.asset),
+  const matches = storedAccepts.filter(
+    (a) =>
+      a.network === summary.network &&
+      sameAddress(summary.network, a.asset, summary.asset) &&
+      (summary.scheme === undefined || a.scheme === summary.scheme),
   )
 
-  if (!match) {
-    const quoted = storedAccepts
-      .map((a) => `(${a.network}, ${a.asset})`)
-      .join(", ")
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      code: "no_matching_accepts_entry",
+      message: `The checkout quote has more than one entry for (${summary.network}, ${summary.asset}), so the signed payment cannot be bound to one.`,
+    }
+  }
+
+  if (matches.length === 0) {
+    const quoted = storedAccepts.map((a) => `(${a.network}, ${a.asset})`).join(", ")
     return {
       ok: false,
       code: "no_matching_accepts_entry",
       message: `Signed payment uses (${summary.network}, ${summary.asset}) but the checkout was quoted for: ${quoted}.`,
     }
   }
+  const match = matches[0]
 
-  if (!sameAtomicValue(match.amount, summary.value)) {
+  if (match.scheme !== CHECKED_SCHEME) {
+    return {
+      ok: false,
+      code: "unsupported_payment_scheme",
+      message: `The checkout was quoted in scheme "${match.scheme}", which cannot be checked against a signed amount.`,
+    }
+  }
+
+  if (typeof match.amount !== "string" || !sameAtomicValue(match.amount, summary.value)) {
     return {
       ok: false,
       code: "amount_mismatch",
-      message: `Signed value (${summary.value}) does not match the checkout's quoted amount (${match.amount}) for asset ${summary.asset} on ${summary.network}.`,
+      message: `Signed value (${summary.value}) does not match the checkout's quoted amount (${match.amount ?? "none"}) for asset ${summary.asset} on ${summary.network}.`,
     }
   }
 
-  if (!sameAddress(match.payTo, summary.to)) {
+  if (!sameAddress(summary.network, match.payTo, summary.to)) {
     return {
       ok: false,
       code: "wrong_recipient",
-      message: `Signed payment recipient does not match the merchant's settlement address. Re-sign with the correct recipient.`,
+      message: "Signed payment recipient does not match the merchant's settlement address. Re-sign with the correct recipient.",
     }
   }
 
-  return { ok: true }
+  return { ok: true, entry: match }
 }
 
-// =====================================================
-// Internal helpers
-// =====================================================
-
-function sameAddress(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase()
+function sameAddress(network: string, a: string, b: string): boolean {
+  return network.startsWith("eip155:") ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
-function sameAtomicValue(a: string, b: string): boolean {
-  try {
-    return BigInt(a) === BigInt(b)
-  } catch {
-    return false
-  }
+function sameAtomicValue(quoted: string, signed: string): boolean {
+  if (!/^\d+$/.test(quoted) || !/^\d+$/.test(signed)) return false
+  return BigInt(quoted) === BigInt(signed)
 }
 
-function readNonEmptyString(
-  obj: Record<string, unknown> | undefined,
-  key: string,
-): string | undefined {
-  if (!obj) return undefined
-  const v = obj[key]
-  return typeof v === "string" && v.length > 0 ? v : undefined
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined
 }

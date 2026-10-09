@@ -4,6 +4,7 @@ import type {
   PaymentSettleInput,
   PaymentSettleResult,
 } from "@financedistrict/saleor-agentic-commerce-core"
+import { extractSignedSummary, validateSignedAgainstStored } from "@financedistrict/saleor-agentic-commerce-core"
 import {
   PrismClient,
   canonicalUcpHandlerEntry,
@@ -11,7 +12,6 @@ import {
   type PaymentHandlerConfig,
   type UcpCheckoutPrepareResponse,
   type UcpHandlersDiscoveryResponse,
-  type X402AcceptEntry,
 } from "./prism-client.js"
 
 
@@ -156,18 +156,24 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       return { success: false, error: "Prism payment config has no accepts entries" }
     }
 
-    const requirements = pickAcceptsEntryForCredential(accepts, credential)
-    if (!requirements) {
+    const signed = extractSignedSummary(credential)
+    if (!signed) {
       return {
         success: false,
-        error: "Could not match a payment-requirements entry to the submitted credential",
+        code: "unreadable_payment_credential",
+        error: "The credential is not a signed x402 exact payment with an accepted network and asset and an EIP-3009 authorization",
       }
+    }
+
+    const checked = validateSignedAgainstStored(signed, accepts)
+    if (!checked.ok) {
+      return { success: false, code: checked.code, error: checked.message }
     }
 
     try {
       const result = await this.client.settle({
-        paymentPayload: unwrapCredentialForSettle(credential),
-        paymentRequirements: requirements,
+        paymentPayload: signed.payload,
+        paymentRequirements: checked.entry,
       })
 
       if (!result.success) {
@@ -277,66 +283,8 @@ export function isContractEntry(data: unknown): data is UcpHandlersDiscoveryResp
   return firstCanonicalEntry(data) !== null
 }
 
-export function unwrapCredentialForSettle(credential: unknown): unknown {
-  if (credential && typeof credential === "object" && "paymentPayload" in credential) {
-    return (credential as { paymentPayload: unknown }).paymentPayload
-  }
-  return credential
-}
-
-export function pickAcceptsEntryForCredential(
-  accepts: X402AcceptEntry[],
-  credential: unknown,
-): X402AcceptEntry | null {
-  const { network: signedNetwork, asset: signedAsset } =
-    readAcceptedFromCredential(credential)
-
-  if (signedNetwork && signedAsset) {
-    const match = accepts.find(
-      (a) =>
-        a.network === signedNetwork &&
-        a.asset.toLowerCase() === signedAsset.toLowerCase(),
-    )
-    return match ?? null
-  }
-
-  const network = readString(credential, "network")
-  const scheme = readString(credential, "scheme")
-  if (network) {
-    const byNetworkAndScheme = scheme
-      ? accepts.find((a) => a.network === network && a.scheme === scheme)
-      : undefined
-    if (byNetworkAndScheme) return byNetworkAndScheme
-
-    const byNetwork = accepts.filter((a) => a.network === network)
-    if (byNetwork.length === 1) return byNetwork[0]
-    if (byNetwork.length > 1) return null
-  }
-
-  return accepts.length === 1 ? accepts[0] : null
-}
-
 function readString(value: unknown, key: string): string | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const v = (value as Record<string, unknown>)[key]
   return typeof v === "string" && v.length > 0 ? v : undefined
-}
-
-function readAcceptedFromCredential(
-  credential: unknown,
-): { network?: string; asset?: string } {
-  if (typeof credential !== "object" || credential === null) return {}
-  const obj = credential as Record<string, unknown>
-  const pp =
-    obj.paymentPayload && typeof obj.paymentPayload === "object"
-      ? (obj.paymentPayload as Record<string, unknown>)
-      : obj
-  const accepted = pp.accepted
-  if (typeof accepted !== "object" || accepted === null) return {}
-  const ar = accepted as Record<string, unknown>
-  const network =
-    typeof ar.network === "string" && ar.network.length > 0 ? ar.network : undefined
-  const asset =
-    typeof ar.asset === "string" && ar.asset.length > 0 ? ar.asset : undefined
-  return { network, asset }
 }

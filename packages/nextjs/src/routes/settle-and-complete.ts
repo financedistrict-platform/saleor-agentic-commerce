@@ -1,15 +1,12 @@
 import {
   checkPaidOrdersOnly,
-  extractSignedSummary,
   metadataToRecord,
   minorToSaleorMoney,
   parseSettlementRecord,
   readPaymentQuote,
   readSettlementRecord,
-  readStoredPrismAccepts,
   reconcilePayment,
   sameMinorMoney,
-  validateSignedAgainstStored,
   SETTLEMENT_METADATA_KEY,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type {
@@ -56,15 +53,6 @@ export async function settleAndCompleteCheckout(input: {
     return reject({ code: paidOnly.code, message: paidOnly.message, status: 409, severity: "unrecoverable" })
   }
 
-  const signedSummary = extractSignedSummary(payment.credential)
-  if (signedSummary) {
-    const storedAccepts = readStoredPrismAccepts(metadata, payment.protocol === "acp" ? "acp" : "ucp")
-    if (storedAccepts) {
-      const validation = validateSignedAgainstStored(signedSummary, storedAccepts)
-      if (!validation.ok) return reject({ code: validation.code, message: validation.message, status: 422 })
-    }
-  }
-
   const stored = readSettlementRecord(metadata)
   if (stored.kind === "unreadable") {
     console.error(`${logPrefix} settlement record on checkout ${id} is unreadable: ${JSON.stringify(stored.raw)}`)
@@ -90,7 +78,7 @@ export async function settleAndCompleteCheckout(input: {
     const result = await paymentHandlers.settlePayment({ ...payment, checkoutId: id, checkoutMetadata: metadata } as PaymentSettleInput)
     if (!result.success || !result.transactionReference) {
       return reject({
-        code: payment.protocol === "acp" ? "payment_declined" : "payment_failed",
+        code: (!result.success && result.code) || (payment.protocol === "acp" ? "payment_declined" : "payment_failed"),
         message: (!result.success && result.error) || "Payment settlement failed",
         status: 422,
         severity: "recoverable",
