@@ -102,11 +102,19 @@ export function validateSignedAgainstStored<T extends StoredAcceptEntry>(
   const matches = storedAccepts.filter(
     (a) =>
       a.network === summary.network &&
-      sameAddress(a.asset, summary.asset) &&
+      sameAddress(summary.network, a.asset, summary.asset) &&
       (summary.scheme === undefined || a.scheme === summary.scheme),
   )
 
-  if (matches.length !== 1) {
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      code: "no_matching_accepts_entry",
+      message: `The checkout quote has more than one entry for (${summary.network}, ${summary.asset}), so the signed payment cannot be bound to one.`,
+    }
+  }
+
+  if (matches.length === 0) {
     const quoted = storedAccepts.map((a) => `(${a.network}, ${a.asset})`).join(", ")
     return {
       ok: false,
@@ -132,7 +140,7 @@ export function validateSignedAgainstStored<T extends StoredAcceptEntry>(
     }
   }
 
-  if (!sameAddress(match.payTo, summary.to)) {
+  if (!sameAddress(summary.network, match.payTo, summary.to)) {
     return {
       ok: false,
       code: "wrong_recipient",
@@ -143,8 +151,8 @@ export function validateSignedAgainstStored<T extends StoredAcceptEntry>(
   return { ok: true, entry: match }
 }
 
-function sameAddress(a: string, b: string): boolean {
-  return a.toLowerCase() === b.toLowerCase()
+function sameAddress(network: string, a: string, b: string): boolean {
+  return network.startsWith("eip155:") ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
 function sameAtomicValue(quoted: string, signed: string): boolean {

@@ -858,6 +858,47 @@ describe("PrismPaymentHandler — signed credential check", () => {
     expect(mock.settle).not.toHaveBeenCalled()
   })
 
+  const withAccepts = (accepts: PaymentHandlerConfig["accepts"]) => ({
+    [PRISM_HANDLER_ID]: {
+      ucp: { [PRISM_HANDLER_ID]: [{ id: PRISM_HANDLER_ID, version: "2026-10-07", config: { ...samplePaymentHandlerConfig, accepts } }] },
+      acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc",
+    },
+  })
+  const settleAgainst = (handler: PrismPaymentHandler, credential: unknown, accepts: PaymentHandlerConfig["accepts"]) =>
+    handler.settlePayment({ ucpVersion: TEST_UCP_VERSION, checkoutId: "abc", protocol: "acp", handlerId: PRISM_HANDLER_ID, credential, checkoutMetadata: withAccepts(accepts) })
+
+  it("matches an EVM recipient and asset regardless of checksum case", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xevm" })
+    const entry = { ...samplePaymentHandlerConfig.accepts[0], network: "eip155:84532", asset: "0x036CbD53842c5426634e7929541eC2318f3dCF7e", payTo: "0xAbCdEf0000000000000000000000000000000001" }
+    const credential = signedFor({ ...entry, asset: entry.asset.toLowerCase(), payTo: entry.payTo.toLowerCase() })
+
+    const result = await settleAgainst(handler, credential, [entry])
+
+    expect(result.success).toBe(true)
+    expect(mock.settle).toHaveBeenCalledWith({ paymentPayload: credential, paymentRequirements: entry })
+  })
+
+  it("compares a non-EVM recipient exactly", async () => {
+    const { handler, mock } = makeHandler()
+    const entry = { ...samplePaymentHandlerConfig.accepts[0], network: "solana:devnet", asset: "MintAbc", payTo: "PayToAbc" }
+
+    const result = await settleAgainst(handler, signedFor({ ...entry, payTo: "paytoabc" }), [entry])
+
+    expect(result).toMatchObject({ success: false, code: "wrong_recipient" })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("refuses a quote with two entries for the same network and asset", async () => {
+    const { handler, mock } = makeHandler()
+    const entry = samplePaymentHandlerConfig.accepts[0]
+
+    const result = await settleAgainst(handler, SIGNED, [entry, { ...entry, payTo: "0xother" }])
+
+    expect(result).toMatchObject({ success: false, code: "no_matching_accepts_entry", error: expect.stringMatching(/more than one entry/) })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
   it("refuses a hex-encoded signed value instead of reading it as the same amount", async () => {
     const { handler, mock } = makeHandler()
 
