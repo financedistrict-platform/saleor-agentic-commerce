@@ -603,7 +603,7 @@ describe("PrismPaymentHandler — settlement", () => {
       checkoutMetadata: storedUcpOnly,
     })
 
-    expect(result).toEqual({ success: false, error: 'Prism instrument and credential type must be "x402"' })
+    expect(result).toEqual({ success: false, outcome: "declined", error: 'Prism instrument and credential type must be "x402"' })
     expect(mock.settle).not.toHaveBeenCalled()
   })
 
@@ -620,7 +620,7 @@ describe("PrismPaymentHandler — settlement", () => {
       checkoutMetadata: storedUcpOnly,
     })
 
-    expect(result).toEqual({ success: false, error: 'Prism instrument and credential type must be "x402"' })
+    expect(result).toEqual({ success: false, outcome: "declined", error: 'Prism instrument and credential type must be "x402"' })
     expect(mock.settle).not.toHaveBeenCalled()
   })
 
@@ -792,7 +792,7 @@ describe("PrismPaymentHandler — multi-version UCP", () => {
       },
     })
 
-    expect(result).toEqual({ success: true, transactionReference: "0xabc", settled: { amount: 1099, currency: "USD" } })
+    expect(result).toMatchObject({ success: true, transactionReference: "0xabc", settled: { amount: 1099, currency: "USD" } })
   })
 })
 
@@ -810,13 +810,13 @@ describe("PrismPaymentHandler — settled amount", () => {
       checkoutMetadata: { [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedResourceUrl: "https://store.test/checkout/abc" } },
     })
 
-    expect(result).toEqual({ success: false, error: "Prism payment config has no prepared amount" })
+    expect(result).toEqual({ success: false, outcome: "declined", error: "Prism payment config has no prepared amount" })
     expect(mock.settle).not.toHaveBeenCalled()
   })
 
-  it("fails when the gateway reports success without a transaction reference", async () => {
+  it("reports the signed authorization and the settled transaction as replay keys", async () => {
     const { handler, mock } = makeHandler()
-    mock.settle.mockResolvedValue({ success: true })
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xABC" })
     const result = await handler.settlePayment({
       ucpVersion: TEST_UCP_VERSION,
       checkoutId: "abc",
@@ -826,7 +826,17 @@ describe("PrismPaymentHandler — settled amount", () => {
       checkoutMetadata: { [PRISM_HANDLER_ID]: { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc" } },
     })
 
-    expect(result).toEqual({ success: false, error: "Prism settlement returned no transaction reference" })
+    const { network, asset } = samplePaymentHandlerConfig.accepts[0]
+    const { from, nonce } = SIGNED.payload.authorization
+    expect(result).toEqual({
+      success: true,
+      transactionReference: "0xABC",
+      settled: { amount: 1099, currency: "USD" },
+      replayKeys: [
+        JSON.stringify(["x402-authorization", network, asset, from, nonce]),
+        JSON.stringify(["x402-transaction", network, "0xabc"]),
+      ],
+    })
   })
 })
 
@@ -906,5 +916,88 @@ describe("PrismPaymentHandler — signed credential check", () => {
 
     expect(result).toMatchObject({ success: false, code: "amount_mismatch" })
     expect(mock.settle).not.toHaveBeenCalled()
+  })
+})
+
+describe("PrismPaymentHandler — settlement declaration and outcome", () => {
+  const prepared = { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: "https://store.test/checkout/abc" }
+  const settleInput = (credential: unknown) => ({
+    ucpVersion: TEST_UCP_VERSION,
+    checkoutId: "abc",
+    handlerId: PRISM_HANDLER_ID,
+    instrumentType: "x402",
+    credential,
+    checkoutMetadata: { [PRISM_HANDLER_ID]: prepared },
+  })
+  const withValidBefore = (validBefore: string) => ({
+    type: "x402",
+    ...SIGNED,
+    payload: { ...SIGNED.payload, authorization: { ...SIGNED.payload.authorization, validBefore } },
+  })
+
+  it("declares the signed authorization as the key of the payment and when it expires", () => {
+    const { handler } = makeHandler()
+    const { network, asset } = samplePaymentHandlerConfig.accepts[0]
+    const { from, nonce } = SIGNED.payload.authorization
+
+    expect(handler.settlementKeys(settleInput({ type: "x402", ...SIGNED }))).toEqual({
+      ok: true,
+      keys: [JSON.stringify(["x402-authorization", network, asset, from, nonce])],
+      settled: { amount: 1099, currency: "USD" },
+      expiresAt: 9999999999 * 1000,
+      details: { network, asset, payer: from, nonce, validBefore: "9999999999" },
+    })
+  })
+
+  it("declares no expiry for an authorization without a readable validBefore", () => {
+    const { handler } = makeHandler()
+
+    const declared = handler.settlementKeys(settleInput(withValidBefore("soon")))
+
+    expect(declared).not.toHaveProperty("expiresAt")
+    expect(declared).toMatchObject({ ok: true, details: { validBefore: "soon" } })
+  })
+
+  it("keeps the signature out of what it declares", () => {
+    const { handler } = makeHandler()
+
+    expect(JSON.stringify(handler.settlementKeys(settleInput({ type: "x402", ...SIGNED })))).not.toContain(SIGNED.payload.signature)
+  })
+
+  it("refuses an authorization that has already expired, both when declaring and when settling, and never calls the gateway", async () => {
+    const { handler, mock } = makeHandler()
+    const expired = settleInput(withValidBefore("1"))
+
+    expect(handler.settlementKeys(expired)).toMatchObject({ ok: false, code: "payment_expired" })
+    expect(await handler.settlePayment(expired)).toMatchObject({ success: false, outcome: "declined", code: "payment_expired" })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("refuses to declare keys for a credential it cannot read", () => {
+    const { handler } = makeHandler()
+
+    expect(handler.settlementKeys(settleInput({ type: "x402" }))).toMatchObject({ ok: false, code: "unreadable_payment_credential" })
+  })
+
+  it("passes on the outcome the gateway client reports for a failure", async () => {
+    const { handler, mock } = makeHandler()
+    const credential = { type: "x402", ...SIGNED }
+
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "declined", error: "insufficient_funds" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "declined", error: "insufficient_funds" })
+
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "unknown", error: "unreadable" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "unknown", error: "unreadable" })
+  })
+
+  it("reports an unknown outcome when the request to the gateway throws", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockRejectedValue(new Error("socket hang up"))
+
+    expect(await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }))).toEqual({
+      success: false,
+      outcome: "unknown",
+      error: "Prism settlement failed: socket hang up",
+    })
   })
 })

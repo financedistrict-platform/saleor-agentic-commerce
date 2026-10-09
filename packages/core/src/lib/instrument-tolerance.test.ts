@@ -11,9 +11,10 @@ function adapter(id: string, aliases?: readonly string[]) {
     getUcpDiscoveryHandlers: async () => ({}),
     getAcpDiscoveryHandlers: async () => [],
     prepareCheckoutPayment: async () => null,
+    settlementKeys: () => ({ ok: true, keys: [id] }),
     settlePayment: async (input) => {
       settled.push(input)
-      return { success: true, transactionReference: "0xabc", settled: { amount: 1000, currency: "USD" } }
+      return { success: true, transactionReference: "0xabc", settled: { amount: 1000, currency: "USD" }, replayKeys: [] }
     },
     getUcpCheckoutHandlers: () => ({}),
     getAcpCheckoutHandlers: () => [],
@@ -55,6 +56,7 @@ describe("PaymentHandlerRegistry handler aliases", () => {
     registry.registerAdapter(adapter("xyz.fd.prism_payment", ["x402"]).instance)
     expect(await registry.settlePayment({ checkoutId: "c1", handlerId: "other", credential: {} })).toEqual({
       success: false,
+      outcome: "declined",
       error: "Unknown payment handler: other",
     })
   })

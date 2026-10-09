@@ -19,7 +19,15 @@ import type {
   CheckoutPrepareInput,
   PaymentSettleInput,
   PaymentSettleResult,
+  SettledAmount,
 } from "../types/payment-handler-adapter.js"
+
+type RefusedSettlement = Extract<PaymentSettleResult, { success: false }>
+
+export type ResolvedSettlement =
+  | { kind: "declared"; handlerId: string; keys: readonly string[]; settled?: SettledAmount; expiresAt?: number; details?: Readonly<Record<string, string>> }
+  | { kind: "unchecked"; handlerId: string }
+  | { kind: "refused"; code?: string; error: string }
 
 export class PaymentHandlerRegistry {
   private adapters: PaymentHandlerAdapter[] = []
@@ -134,32 +142,60 @@ export class PaymentHandlerRegistry {
   // -------------------------------------------------
 
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
+    const resolved = this.resolveSettlementAdapter(input)
+    if ("refusal" in resolved) return resolved.refusal
+    return resolved.adapter.settlePayment({ ...input, handlerId: resolved.adapter.id })
+  }
+
+  resolveSettlement(input: PaymentSettleInput): ResolvedSettlement {
+    const resolved = this.resolveSettlementAdapter(input)
+    if ("refusal" in resolved) return { kind: "refused", code: resolved.refusal.code, error: resolved.refusal.error }
+    const { adapter } = resolved
+    const declared = adapter.settlementKeys?.({ ...input, handlerId: adapter.id })
+    if (declared && !declared.ok) return { kind: "refused", code: declared.code, error: declared.error }
+    if (!declared || declared.keys.length === 0 || !declared.keys.every((key) => typeof key === "string" && key.length > 0)) {
+      return { kind: "unchecked", handlerId: adapter.id }
+    }
+    return {
+      kind: "declared",
+      handlerId: adapter.id,
+      keys: declared.keys,
+      ...(declared.settled === undefined ? {} : { settled: declared.settled }),
+      ...(declared.expiresAt === undefined ? {} : { expiresAt: declared.expiresAt }),
+      ...(declared.details === undefined ? {} : { details: declared.details }),
+    }
+  }
+
+  private resolveSettlementAdapter(input: PaymentSettleInput): { adapter: PaymentHandlerAdapter } | { refusal: RefusedSettlement } {
     const adapter = this.getAdapter(input.handlerId)
     if (!adapter) {
-      return {
-        success: false,
-        error: `Unknown payment handler: ${input.handlerId}`,
-      }
+      return { refusal: { success: false, outcome: "declined", error: `Unknown payment handler: ${input.handlerId}` } }
     }
 
     if (!this.servesChannel(adapter, input.channel)) {
       return {
-        success: false,
-        code: "payment_handler_unavailable",
-        error: `Payment handler ${adapter.id} is not enabled for channel ${input.channel}`,
+        refusal: {
+          success: false,
+          outcome: "declined",
+          code: "payment_handler_unavailable",
+          error: `Payment handler ${adapter.id} is not enabled for channel ${input.channel}`,
+        },
       }
     }
 
     const prepared = input.checkoutMetadata?.[adapter.id]
     if (typeof prepared !== "object" || prepared === null || Array.isArray(prepared)) {
       return {
-        success: false,
-        code: "payment_handler_not_prepared",
-        error: `Payment handler ${adapter.id} was not prepared for this checkout`,
+        refusal: {
+          success: false,
+          outcome: "declined",
+          code: "payment_handler_not_prepared",
+          error: `Payment handler ${adapter.id} was not prepared for this checkout`,
+        },
       }
     }
 
-    return adapter.settlePayment({ ...input, handlerId: adapter.id })
+    return { adapter }
   }
 
   // -------------------------------------------------

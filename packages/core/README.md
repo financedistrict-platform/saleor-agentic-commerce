@@ -72,6 +72,7 @@ class MyPaymentHandler implements PaymentHandlerAdapter {
   getAcpCheckoutHandlers(metadata?) { /* ... */ }
   prepareCheckoutPayment(input) { /* ... */ }
   settlePayment(input) { /* ... */ }
+  settlementKeys(input) { /* required: keys that identify this payment and the amount it will settle, declared before it is submitted */ }
 }
 ```
 

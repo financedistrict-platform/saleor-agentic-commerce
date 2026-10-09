@@ -78,4 +78,4 @@ Show the developer:
 If the developer asks about other payment handlers:
 
 - **Stripe** — Not yet available. The SDK's `PaymentHandlerAdapter` interface supports any payment provider. A Stripe adapter could be built by implementing `prepareCheckoutPayment()` and `settlePayment()`.
-- **Custom** — Point to the `PaymentHandlerAdapter` interface in `@financedistrict/saleor-agentic-commerce-core`. It requires: `id`, `getUcpDiscoveryHandlers()`, `getAcpDiscoveryHandlers()`, `prepareCheckoutPayment()`, `settlePayment()`.
+- **Custom** — Point to the `PaymentHandlerAdapter` interface in `@financedistrict/saleor-agentic-commerce-core`. It requires: `id`, `getUcpDiscoveryHandlers()`, `getAcpDiscoveryHandlers()`, `prepareCheckoutPayment()`, `settlementKeys()`, `settlePayment()`.

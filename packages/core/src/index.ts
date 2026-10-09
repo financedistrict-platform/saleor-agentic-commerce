@@ -13,6 +13,8 @@ export type {
   PaymentSettleInput,
   PaymentSettleResult,
   SettledAmount,
+  SettleOutcome,
+  SettlementDeclaration,
 } from "./types/payment-handler-adapter.js"
 
 // Types — UCP Protocol
@@ -105,6 +107,7 @@ export type {
 
 // Payment Handler Registry
 export { PaymentHandlerRegistry } from "./lib/payment-handler-registry.js"
+export type { ResolvedSettlement } from "./lib/payment-handler-registry.js"
 
 // Saleor GraphQL Client
 export { SaleorClient } from "./lib/saleor-client.js"
@@ -211,8 +214,10 @@ export type {
 
 // Signed-amount validation (Prism x402)
 export {
+  canonicalOnNetwork,
   extractSignedSummary,
   readStoredPrismAccepts,
+  signedAuthorizationReplayKey,
   validateSignedAgainstStored,
 } from "./lib/validate-signed-amount.js"
 export type {
@@ -241,6 +246,11 @@ export {
   readPaymentQuote,
   readSettlementRecord,
   parseSettlementRecord,
+  pendingSettlementRecord,
+  heldSettlementRecord,
+  failedSettlementRecord,
+  settledSettlementRecord,
+  canTransition,
   reconcilePayment,
   sameMinorMoney,
 } from "./lib/payment-reconciliation.js"
@@ -250,6 +260,14 @@ export type {
   QuoteResult,
   SettlementRecord,
   SettlementRead,
+  SettlementState,
+  SettlementAttempt,
+  PendingSettlement,
+  HeldSettlement,
+  FailedSettlement,
   ReconciliationErrorCode,
   ReconciliationResult,
 } from "./lib/payment-reconciliation.js"
+
+export { createMemoryPaymentReplayStore, resolvePaymentReplayStore, settledReferenceFromKeys, settlementReplayKey } from "./lib/payment-replay.js"
+export type { PaymentReplayClaim, PaymentReplayStore } from "./lib/payment-replay.js"

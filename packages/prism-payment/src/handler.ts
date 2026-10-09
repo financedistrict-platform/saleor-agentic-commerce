@@ -3,8 +3,11 @@ import type {
   CheckoutPrepareInput,
   PaymentSettleInput,
   PaymentSettleResult,
+  SettledAmount,
+  SettlementDeclaration,
+  SignedPaymentSummary,
 } from "@financedistrict/saleor-agentic-commerce-core"
-import { extractSignedSummary, validateSignedAgainstStored } from "@financedistrict/saleor-agentic-commerce-core"
+import { canonicalOnNetwork, extractSignedSummary, signedAuthorizationReplayKey, validateSignedAgainstStored } from "@financedistrict/saleor-agentic-commerce-core"
 import {
   PrismClient,
   canonicalUcpHandlerEntry,
@@ -12,6 +15,7 @@ import {
   type PaymentHandlerConfig,
   type UcpCheckoutPrepareResponse,
   type UcpHandlersDiscoveryResponse,
+  type X402AcceptEntry,
 } from "./prism-client.js"
 
 
@@ -32,6 +36,10 @@ type PrismCheckoutData = {
   preparedResourceUrl: string
 }
 
+
+type CredentialCheck =
+  | { ok: true; signed: SignedPaymentSummary; entry: X402AcceptEntry; settled: SettledAmount }
+  | { ok: false; error: string; code?: string }
 
 export type PrismPaymentHandlerOptions = {
   apiUrl?: string
@@ -129,7 +137,65 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   }
 
 
+  settlementKeys(input: PaymentSettleInput): SettlementDeclaration {
+    const checked = this.checkCredential(input)
+    if (!checked.ok) return checked
+    const { signed, settled } = checked
+    const expiresAt = authorizationExpiry(signed)
+    return {
+      ok: true,
+      keys: [signedAuthorizationReplayKey(signed)],
+      settled,
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      details: {
+        network: signed.network,
+        asset: signed.asset,
+        payer: signed.from,
+        nonce: signed.nonce,
+        ...(signed.validBefore === undefined ? {} : { validBefore: signed.validBefore }),
+      },
+    }
+  }
+
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
+    const checked = this.checkCredential(input)
+    if (!checked.ok) return { success: false, outcome: "declined", error: checked.error, ...(checked.code ? { code: checked.code } : {}) }
+    const { signed, entry, settled } = checked
+
+    try {
+      const result = await this.client.settle({
+        paymentPayload: signed.payload,
+        paymentRequirements: entry,
+      })
+
+      if (!result.success) {
+        return { success: false, outcome: result.outcome, error: result.error }
+      }
+      const { network } = signed
+      const settledReference = result.transactionHash
+      if (result.network !== undefined && result.network !== network) {
+        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} on ${result.network}, not on the signed network ${network}` }
+      }
+      if (result.payer !== undefined && canonicalOnNetwork(network, result.payer) !== canonicalOnNetwork(network, signed.from)) {
+        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} from another payer than the signed authorization` }
+      }
+
+      return {
+        success: true,
+        transactionReference: result.transactionHash,
+        settled,
+        replayKeys: [
+          signedAuthorizationReplayKey(signed),
+          JSON.stringify(["x402-transaction", network, canonicalOnNetwork(network, result.transactionHash)]),
+        ],
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown error"
+      return { success: false, outcome: "unknown", error: `Prism settlement failed: ${message}` }
+    }
+  }
+
+  private checkCredential(input: PaymentSettleInput): CredentialCheck {
     const { credential, checkoutMetadata } = input
 
     if (
@@ -137,29 +203,29 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       (!ORIGINAL_INSTRUMENT_TYPES.includes(input.instrumentType || undefined) ||
         !ORIGINAL_CREDENTIAL_TYPES.includes(readString(credential, "type")))
     ) {
-      return { success: false, error: `Prism instrument and credential type must be "${PRISM_INSTRUMENT_TYPE}"` }
+      return { ok: false, error: `Prism instrument and credential type must be "${PRISM_INSTRUMENT_TYPE}"` }
     }
 
     const config = this.extractPaymentConfig(checkoutMetadata)
     if (!config) {
-      return { success: false, error: "No Prism payment config found on checkout" }
+      return { ok: false, error: "No Prism payment config found on checkout" }
     }
 
     const prepared = checkoutMetadata?.[PRISM_HANDLER_ID] as Partial<PrismCheckoutData>
     if (!Number.isSafeInteger(prepared.preparedAmount) || typeof prepared.preparedCurrency !== "string") {
-      return { success: false, error: "Prism payment config has no prepared amount" }
+      return { ok: false, error: "Prism payment config has no prepared amount" }
     }
     const settled = { amount: prepared.preparedAmount as number, currency: prepared.preparedCurrency }
 
     const accepts = config.accepts ?? []
     if (accepts.length === 0) {
-      return { success: false, error: "Prism payment config has no accepts entries" }
+      return { ok: false, error: "Prism payment config has no accepts entries" }
     }
 
     const signed = extractSignedSummary(credential)
     if (!signed) {
       return {
-        success: false,
+        ok: false,
         code: "unreadable_payment_credential",
         error: "The credential is not a signed x402 exact payment with an accepted network and asset and an EIP-3009 authorization",
       }
@@ -167,31 +233,15 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
 
     const checked = validateSignedAgainstStored(signed, accepts)
     if (!checked.ok) {
-      return { success: false, code: checked.code, error: checked.message }
+      return { ok: false, code: checked.code, error: checked.message }
     }
 
-    try {
-      const result = await this.client.settle({
-        paymentPayload: signed.payload,
-        paymentRequirements: checked.entry,
-      })
-
-      if (!result.success) {
-        return { success: false, error: result.error ?? "Prism settlement failed" }
-      }
-      if (!result.transactionHash) {
-        return { success: false, error: "Prism settlement returned no transaction reference" }
-      }
-
-      return {
-        success: true,
-        transactionReference: result.transactionHash,
-        settled,
-      }
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Unknown error"
-      return { success: false, error: `Prism settlement failed: ${message}` }
+    const expiresAt = authorizationExpiry(signed)
+    if (expiresAt !== undefined && expiresAt <= Date.now()) {
+      return { ok: false, code: "payment_expired", error: "The signed authorization has expired. Sign a new payment and complete again." }
     }
+
+    return { ok: true, signed, entry: checked.entry, settled }
   }
 
 
@@ -281,6 +331,11 @@ function firstCanonicalEntry(data: unknown) {
 
 export function isContractEntry(data: unknown): data is UcpHandlersDiscoveryResponse {
   return firstCanonicalEntry(data) !== null
+}
+
+function authorizationExpiry(signed: SignedPaymentSummary): number | undefined {
+  if (signed.validBefore === undefined || !/^\d+$/.test(signed.validBefore)) return undefined
+  return Number(signed.validBefore) * 1000
 }
 
 function readString(value: unknown, key: string): string | undefined {

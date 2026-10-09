@@ -7,6 +7,9 @@ export type SignedPaymentSummary = {
   scheme?: string
   value: string
   to: string
+  from: string
+  nonce: string
+  validBefore?: string
   payload: Record<string, unknown>
 }
 
@@ -48,9 +51,12 @@ export function extractSignedSummary(input: unknown): SignedPaymentSummary | nul
   const asset = nonEmptyString(accepted?.asset)
   const value = nonEmptyString(authz?.value)
   const to = nonEmptyString(authz?.to)
+  const from = nonEmptyString(authz?.from)
+  const nonce = nonEmptyString(authz?.nonce)
+  const validBefore = nonEmptyString(authz?.validBefore)
 
-  if (!network || !asset || !value || !to) return null
-  return { network, asset, scheme: nonEmptyString(accepted?.scheme), value, to, payload: pp }
+  if (!network || !asset || !value || !to || !from || !nonce) return null
+  return { network, asset, scheme: nonEmptyString(accepted?.scheme), value, to, from, nonce, ...(validBefore ? { validBefore } : {}), payload: pp }
 }
 
 function extractFromBase64(b64: string): SignedPaymentSummary | null {
@@ -152,7 +158,17 @@ export function validateSignedAgainstStored<T extends StoredAcceptEntry>(
 }
 
 function sameAddress(network: string, a: string, b: string): boolean {
-  return network.startsWith("eip155:") ? a.toLowerCase() === b.toLowerCase() : a === b
+  return canonicalOnNetwork(network, a) === canonicalOnNetwork(network, b)
+}
+
+export function canonicalOnNetwork(network: string, value: string): string {
+  return network.startsWith("eip155:") || /^0x[0-9a-fA-F]+$/.test(value) ? value.toLowerCase() : value
+}
+
+export function signedAuthorizationReplayKey(summary: SignedPaymentSummary): string {
+  const { network } = summary
+  const parts = [summary.asset, summary.from, summary.nonce].map((part) => canonicalOnNetwork(network, part))
+  return JSON.stringify(["x402-authorization", network, ...parts])
 }
 
 function sameAtomicValue(quoted: string, signed: string): boolean {
