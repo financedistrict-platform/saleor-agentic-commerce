@@ -6,6 +6,7 @@ import { GeneralSettings } from "@/components/GeneralSettings"
 import { ChannelSettings } from "@/components/ChannelSettings"
 import { PaymentHandlerSettings } from "@/components/PaymentHandlerSettings"
 import { ActivityDashboard } from "@/components/ActivityDashboard"
+import { useDashboardFetch } from "@/lib/dashboard-fetch"
 import type {
   GlobalConfig,
   ChannelConfig,
@@ -45,16 +46,16 @@ export default function ConfigurationPage() {
   const [error, setError] = useState<string | null>(null)
 
   const saleorApiUrl = appBridgeState?.saleorApiUrl ?? null
+  const dashboardToken = appBridgeState?.token ?? null
+  const dashboardFetch = useDashboardFetch()
 
   // Fetch configuration
   useEffect(() => {
-    if (!saleorApiUrl) return
+    if (!saleorApiUrl || !dashboardToken) return
 
     const loadConfig = async () => {
       try {
-        const response = await fetch(
-          `/api/config?saleorApiUrl=${encodeURIComponent(saleorApiUrl)}`
-        )
+        const response = await dashboardFetch("/api/config")
 
         if (!response.ok) {
           throw new Error(`Failed to load config: ${response.status}`)
@@ -72,7 +73,7 @@ export default function ConfigurationPage() {
     }
 
     loadConfig()
-  }, [saleorApiUrl])
+  }, [saleorApiUrl, dashboardToken, dashboardFetch])
 
   // Save configuration
   const saveConfig = async (body: {
@@ -84,8 +85,8 @@ export default function ConfigurationPage() {
 
     setSaving(true)
     try {
-      const response = await fetch(
-        `/api/config?saleorApiUrl=${encodeURIComponent(saleorApiUrl)}`,
+      const response = await dashboardFetch(
+        "/api/config",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -98,9 +99,7 @@ export default function ConfigurationPage() {
       }
 
       // Refresh data
-      const refreshResponse = await fetch(
-        `/api/config?saleorApiUrl=${encodeURIComponent(saleorApiUrl)}`
-      )
+      const refreshResponse = await dashboardFetch("/api/config")
       if (refreshResponse.ok) {
         setData(await refreshResponse.json())
       }
@@ -200,7 +199,6 @@ export default function ConfigurationPage() {
             handlers={paymentHandlers}
             onSave={(h) => saveConfig({ paymentHandlers: h })}
             saving={saving}
-            saleorApiUrl={saleorApiUrl}
           />
         )}
         {activeTab === "activity" && <ActivityDashboard />}

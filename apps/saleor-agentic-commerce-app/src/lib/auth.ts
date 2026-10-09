@@ -1,11 +1,9 @@
-/**
- * Authentication utilities for the Saleor App.
- *
- * Verifies that requests to the App's internal APIs come from
- * a valid Saleor Dashboard session.
- */
-
 import { NextRequest } from "next/server"
+import { verifyJWT } from "@saleor/app-sdk/auth"
+import {
+  SALEOR_API_URL_HEADER,
+  SALEOR_AUTHORIZATION_BEARER_HEADER,
+} from "@saleor/app-sdk/headers"
 import { saleorApp } from "./saleor-app"
 
 export type AuthContext = {
@@ -13,27 +11,32 @@ export type AuthContext = {
   token: string
 }
 
-/**
- * Extract Saleor auth context from a Dashboard request.
- *
- * The App's frontend (loaded in the Dashboard iframe) passes
- * the `saleorApiUrl` as a query parameter or header. We look up
- * the stored auth data for that instance.
- */
+const DASHBOARD_REQUIRED_PERMISSIONS = ["MANAGE_APPS" as const]
+
 export async function getAuthContext(
   request: NextRequest
 ): Promise<AuthContext | null> {
-  const saleorApiUrl =
-    request.headers.get("saleor-api-url") ??
-    request.nextUrl.searchParams.get("saleorApiUrl")
+  const saleorApiUrl = request.headers.get(SALEOR_API_URL_HEADER)
+  const dashboardToken = request.headers.get(SALEOR_AUTHORIZATION_BEARER_HEADER)
 
-  if (!saleorApiUrl) {
+  if (!saleorApiUrl || !dashboardToken) {
     return null
   }
 
   const authData = await saleorApp.apl.get(saleorApiUrl)
 
   if (!authData) {
+    return null
+  }
+
+  try {
+    await verifyJWT({
+      token: dashboardToken,
+      appId: authData.appId,
+      saleorApiUrl: authData.saleorApiUrl,
+      requiredPermissions: DASHBOARD_REQUIRED_PERMISSIONS,
+    })
+  } catch {
     return null
   }
 
