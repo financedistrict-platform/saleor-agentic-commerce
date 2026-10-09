@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { createMemoryPaymentReplayStore } from "@financedistrict/saleor-agentic-commerce-core"
 import type { CheckoutPrepareInput, PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
-import { buildRoutes, CHECKOUT_ID, checkoutTemplate, fakeSaleor, fixedFetcher, params, PROFILES, STOREFRONT, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
+import { ACP_AUTH, ACP_KEY, buildRoutes, CHECKOUT_ID, checkoutTemplate, fakeSaleor, fixedFetcher, freshQuote, orderTemplate, params, PROFILES, STOREFRONT, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 import { createAgenticCommerce } from "../config.js"
 import { createAcpRoutes } from "./acp-routes.js"
 import { createUcpRoutes } from "./ucp-routes.js"
@@ -52,7 +52,7 @@ function preparedFor(amount: number, currency = "USD"): { key: string; value: st
 
 function preparedCheckout(extra: { key: string; value: string }[] = []): SaleorCheckout {
   const checkout = checkoutTemplate()
-  checkout.privateMetadata = [{ key: QUOTE_KEY, value: JSON.stringify({ amount: 5497, currency: "USD" }) }, preparedFor(5497), ...extra]
+  checkout.privateMetadata = [{ key: QUOTE_KEY, value: freshQuote({ amount: 5497, currency: "USD" }) }, preparedFor(5497), ...extra]
   return checkout
 }
 
@@ -71,7 +71,7 @@ function setQuote(saleor: ReturnType<typeof buildRoutes>["saleor"], id: string, 
   const checkout = saleor.checkouts.get(id)!
   checkout.privateMetadata = [
     ...checkout.privateMetadata.filter((m) => m.key !== QUOTE_KEY),
-    { key: QUOTE_KEY, value: JSON.stringify({ amount, currency: "USD" }) },
+    { key: QUOTE_KEY, value: freshQuote({ amount, currency: "USD" }) },
   ]
 }
 
@@ -88,7 +88,7 @@ function acpComplete(acpRoutes: ReturnType<typeof buildRoutes>["acpRoutes"], id:
   return acpRoutes.checkoutSessionComplete.POST(
     new Request(`${ACP_SESSIONS}/${id}/complete`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...ACP_AUTH },
       body: JSON.stringify({ payment_data: { handler_id: "test.pay", instrument: { credential: { token: "signed-for-54.97" } } } }),
     }),
     params({ id }),
@@ -226,7 +226,7 @@ function inCurrency(checkout: SaleorCheckout, currency: string, scale = 1): Sale
 }
 
 function quotedIn(checkout: SaleorCheckout, quote: { amount: number; currency: string }): SaleorCheckout {
-  checkout.privateMetadata = [{ key: QUOTE_KEY, value: JSON.stringify(quote) }, preparedFor(quote.amount, quote.currency)]
+  checkout.privateMetadata = [{ key: QUOTE_KEY, value: freshQuote(quote) }, preparedFor(quote.amount, quote.currency)]
   return checkout
 }
 
@@ -263,7 +263,7 @@ describe("Checkout in a currency without two decimals", () => {
 
     expect(response.status).toBe(201)
     expect(requirementsBodies()).toEqual([expect.objectContaining({ amount: "54.970", currency: "KWD" })])
-    expect(storedQuote(saleor, CHECKOUT_ID)).toEqual({ amount: 54970, currency: "KWD" })
+    expect(storedQuote(saleor, CHECKOUT_ID)).toMatchObject({ amount: 54970, currency: "KWD" })
   })
 
   it("asks Prism for exactly the JPY total, not a hundred times more", async () => {
@@ -276,7 +276,7 @@ describe("Checkout in a currency without two decimals", () => {
     expect(response.status).toBe(201)
     expect(requirementsBodies()).toEqual([expect.objectContaining({ amount: "5497", currency: "JPY" })])
     expect(session.totals.find((t: { type: string }) => t.type === "total").amount).toBe(5497)
-    expect(storedQuote(saleor, CHECKOUT_ID)).toEqual({ amount: 5497, currency: "JPY" })
+    expect(storedQuote(saleor, CHECKOUT_ID)).toMatchObject({ amount: 5497, currency: "JPY" })
   })
 
   it("rejects a currency with no known minor unit before any quote is made", async () => {
@@ -296,7 +296,7 @@ describe("Checkout in a currency without two decimals", () => {
     const { routes, acpRoutes } = buildRoutes({ checkouts: [inCurrency(checkoutTemplate(), "ZZZ")] })
 
     const ucp = await routes.checkoutSession.GET(ucpRequest(`${UCP_SESSIONS}/${CHECKOUT_ID}`), params({ id: CHECKOUT_ID }))
-    const acp = await acpRoutes.checkoutSession.GET(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}`), params({ id: CHECKOUT_ID }))
+    const acp = await acpRoutes.checkoutSession.GET(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}`, { headers: ACP_AUTH }), params({ id: CHECKOUT_ID }))
 
     expect(ucp.status).toBe(422)
     expect((await ucp.json()).messages[0].code).toBe("unsupported_currency")
@@ -414,7 +414,7 @@ describe("Complete after a handler failed to prepare the new total", () => {
       params({ id }),
     )
     expect(saleor.checkouts.get(id)!.totalPrice.gross.amount).toBe(154.97)
-    expect(metadataValue(saleor, id, QUOTE_KEY)).toEqual({ amount: 15497, currency: "USD" })
+    expect(metadataValue(saleor, id, QUOTE_KEY)).toMatchObject({ amount: 15497, currency: "USD" })
     expect(metadataValue(saleor, id, "test.pay")).toBeNull()
 
     const response = await ucpComplete(routes, id)
@@ -632,7 +632,7 @@ describe("Complete with a Prism credential the signed-amount check cannot read",
     const response = await acpRoutes.checkoutSessionComplete.POST(
       new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}/complete`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...ACP_AUTH },
         body: JSON.stringify({ payment_data: { handler_id: PRISM, instrument: { credential } } }),
       }),
       params({ id: CHECKOUT_ID }),
@@ -754,7 +754,7 @@ function acpCompleteWith(acpRoutes: ReturnType<typeof buildRoutes>["acpRoutes"],
   return acpRoutes.checkoutSessionComplete.POST(
     new Request(`${ACP_SESSIONS}/${id}/complete`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...ACP_AUTH },
       body: JSON.stringify({ payment_data: { handler_id: handlerId, instrument: { credential: { token: "none" } } } }),
     }),
     params({ id }),
@@ -827,6 +827,7 @@ async function buildAppRoutes(token: string, channels: string[] | null, adapter:
     configFromApp: true,
     enabled: true,
     acpEnabled: true,
+    acpApiKey: ACP_KEY,
     paymentHandlerFactory: (ph) => (ph.handlerId === adapter.id ? adapter : null),
   })
   vi.unstubAllGlobals()
@@ -940,7 +941,7 @@ describe("The same signed payment on two checkouts", () => {
     return acpRoutes.checkoutSessionComplete.POST(
       new Request(`${ACP_SESSIONS}/${id}/complete`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...ACP_AUTH },
         body: JSON.stringify({ payment_data: { handler_id: PRISM, instrument: { credential } } }),
       }),
       params({ id }),
@@ -1133,5 +1134,266 @@ describe("Payment replay store in production", () => {
   it("starts in production with an explicit payment replay store", () => {
     vi.stubEnv("NODE_ENV", "production")
     expect(() => buildRoutes({ config: { paymentReplayStore: createMemoryPaymentReplayStore() } })).not.toThrow()
+  })
+})
+
+describe("ACP routes without a matching API key", () => {
+  type Acp = ReturnType<typeof buildRoutes>["acpRoutes"]
+  const ACP_ROUTES = [
+    ["create", (r: Acp, h: HeadersInit) => r.checkoutSessions.POST(new Request(ACP_SESSIONS, { method: "POST", headers: h, body: JSON.stringify({ line_items: [{ item: { id: "v1" }, quantity: 1 }] }) }))],
+    ["read", (r: Acp, h: HeadersInit) => r.checkoutSession.GET(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}`, { headers: h }), params({ id: CHECKOUT_ID }))],
+    ["update", (r: Acp, h: HeadersInit) => r.checkoutSession.POST(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}`, { method: "POST", headers: h, body: "{}" }), params({ id: CHECKOUT_ID }))],
+    ["complete", (r: Acp, h: HeadersInit) => r.checkoutSessionComplete.POST(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}/complete`, { method: "POST", headers: h, body: "{}" }), params({ id: CHECKOUT_ID }))],
+    ["cancel", (r: Acp, h: HeadersInit) => r.checkoutSessionCancel.POST(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}/cancel`, { method: "POST", headers: h, body: "{}" }), params({ id: CHECKOUT_ID }))],
+  ] as const
+
+  it.each(ACP_ROUTES)("%s is refused when the store has no ACP key configured", async (_name, call) => {
+    const { acpRoutes, saleor } = buildRoutes({ config: { acpApiKey: undefined }, checkouts: [preparedCheckout()] })
+
+    const response = await call(acpRoutes, { authorization: "Bearer anything", "content-type": "application/json" })
+
+    expect(response.status).toBe(401)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it.each(ACP_ROUTES)("%s is refused when the configured key is empty", async (_name, call) => {
+    const { acpRoutes } = buildRoutes({ config: { acpApiKey: "" }, checkouts: [preparedCheckout()] })
+
+    const response = await call(acpRoutes, { authorization: "Bearer ", "content-type": "application/json" })
+
+    expect(response.status).toBe(401)
+  })
+
+  it.each([
+    ["no header", {}],
+    ["a different key of the same length", { authorization: `Bearer ${"x".repeat(ACP_KEY.length)}` }],
+    ["a prefix of the key", { authorization: `Bearer ${ACP_KEY.slice(0, -1)}` }],
+    ["the key with extra characters", { authorization: `Bearer ${ACP_KEY}x` }],
+    ["the key without the Bearer scheme", { authorization: ACP_KEY }],
+    ["the key under another scheme", { authorization: `Basic ${ACP_KEY}` }],
+  ])("read is refused with %s", async (_label, headers) => {
+    const { acpRoutes } = buildRoutes({ checkouts: [preparedCheckout()] })
+
+    const response = await acpRoutes.checkoutSession.GET(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}`, { headers }), params({ id: CHECKOUT_ID }))
+
+    expect(response.status).toBe(401)
+  })
+
+  it("read is served with the exact key", async () => {
+    const { acpRoutes } = buildRoutes({ checkouts: [preparedCheckout()] })
+
+    const response = await acpRoutes.checkoutSession.GET(new Request(`${ACP_SESSIONS}/${CHECKOUT_ID}`, { headers: ACP_AUTH }), params({ id: CHECKOUT_ID }))
+
+    expect(response.status).toBe(200)
+  })
+})
+
+describe("UCP order reads", () => {
+  const ORDER_ID = "T3JkZXI6MQ=="
+  const SESSION_KEY = "agentic_commerce__session"
+
+  async function createAndPlace() {
+    const pay = recordingHandler()
+    const built = buildRoutes({ handlers: [pay.adapter] })
+    const created = await ucpCreate(built.routes)
+    const id = (await created.json()).id as string
+    const secret = created.headers.get("UCP-Session-Secret")
+    const completed = await ucpComplete(built.routes, id)
+    expect(completed.status).toBe(200)
+    return { ...built, id, secret }
+  }
+
+  function readOrder(routes: ReturnType<typeof buildRoutes>["routes"], options: { agent?: string; sessionSecret?: string } = {}) {
+    return routes.order.GET(ucpRequest(`https://store.test/api/ucp/orders/${ORDER_ID}`, options), params({ id: ORDER_ID }))
+  }
+
+  it("hands the session secret out once, on creation, and stores only its hash", async () => {
+    const { saleor, id, secret } = await createAndPlace()
+
+    expect(secret).toMatch(/^[A-Za-z0-9_-]{43,}$/)
+    expect(saleor.orders.get(ORDER_ID)!.privateMetadata.some((m) => m.key === SESSION_KEY)).toBe(true)
+    expect(saleor.orders.get(ORDER_ID)!.privateMetadata.map((m) => m.value).join("|")).not.toContain(secret!)
+    expect(saleor.checkouts.get(id)!.privateMetadata.map((m) => m.value).join("|")).not.toContain(secret!)
+  })
+
+  it("does not create the session when the secret hash cannot be stored", async () => {
+    const { routes, saleor } = buildRoutes()
+    saleor.client.updatePrivateMetadata = async () => ({ ok: false as const, error: "write refused" })
+
+    const response = await ucpCreate(routes)
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get("UCP-Session-Secret")).toBeNull()
+  })
+
+  it("issues a different secret for every checkout", async () => {
+    const { routes } = buildRoutes()
+    const first = await ucpCreate(routes)
+    const second = await ucpCreate(routes)
+
+    expect(first.headers.get("UCP-Session-Secret")).not.toBeNull()
+    expect(first.headers.get("UCP-Session-Secret")).not.toBe(second.headers.get("UCP-Session-Secret"))
+  })
+
+  it("does not return the order, or any buyer data, without the session secret", async () => {
+    const { routes } = await createAndPlace()
+
+    const response = await readOrder(routes)
+    const text = await response.text()
+
+    expect(response.status).toBe(401)
+    expect(text).not.toContain("Ada")
+    expect(text).not.toContain("Analytical Way")
+  })
+
+  it("does not accept the agent profile header as identity", async () => {
+    const { routes } = await createAndPlace()
+
+    const response = await readOrder(routes, { agent: "https://agent.example/0408" })
+
+    expect(response.status).toBe(401)
+  })
+
+  it("does not return the order for another checkout's session secret", async () => {
+    const { routes } = await createAndPlace()
+    const other = await ucpCreate(buildRoutes().routes)
+
+    const response = await readOrder(routes, { sessionSecret: other.headers.get("UCP-Session-Secret")! })
+    const text = await response.text()
+
+    expect(response.status).toBe(404)
+    expect(text).not.toContain("Ada")
+  })
+
+  it("does not return an order whose checkout never carried a session secret", async () => {
+    const { routes, saleor } = await createAndPlace()
+    saleor.orders.set(ORDER_ID, orderTemplate([]))
+
+    const response = await readOrder(routes, { sessionSecret: "any-secret-at-all" })
+
+    expect(response.status).toBe(404)
+  })
+
+  it("does not return an order whose stored secret record is unreadable", async () => {
+    const { routes, saleor } = await createAndPlace()
+    saleor.orders.set(ORDER_ID, orderTemplate([{ key: SESSION_KEY, value: "garbage" }]))
+
+    const response = await readOrder(routes, { sessionSecret: "garbage" })
+
+    expect(response.status).toBe(404)
+  })
+
+  it("returns the order to the holder of the session secret", async () => {
+    const { routes, secret } = await createAndPlace()
+
+    const response = await readOrder(routes, { sessionSecret: secret! })
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.id).toBe(ORDER_ID)
+  })
+})
+
+describe("Payment quote lifetime", () => {
+  const MINUTE = 60_000
+  const quotedMinutesAgo = (minutes: number) => freshQuote({ amount: 5497, currency: "USD" }, new Date(Date.now() - minutes * MINUTE).toISOString())
+
+  function checkoutWithQuote(quoteValue: string, extra: { key: string; value: string }[] = []): SaleorCheckout {
+    const checkout = checkoutTemplate()
+    checkout.privateMetadata = [{ key: QUOTE_KEY, value: quoteValue }, preparedFor(5497), ...extra]
+    return checkout
+  }
+
+  it("UCP refuses to settle a quote older than its lifetime", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [checkoutWithQuote(quotedMinutesAgo(16))] })
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.messages[0].code).toBe("payment_quote_expired")
+    expect(pay.settled).toHaveLength(0)
+    expect(saleor.transactions).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("ACP refuses to settle a quote older than its lifetime", async () => {
+    const pay = recordingHandler()
+    const { acpRoutes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [checkoutWithQuote(quotedMinutesAgo(16))] })
+
+    const response = await acpComplete(acpRoutes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.code).toBe("payment_quote_expired")
+    expect(pay.settled).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("settles a quote that is still inside its lifetime", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [checkoutWithQuote(quotedMinutesAgo(14))] })
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(200)
+    expect(pay.settled).toHaveLength(1)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it.each([
+    ["has no timestamp", JSON.stringify({ amount: 5497, currency: "USD" })],
+    ["has an unreadable timestamp", JSON.stringify({ amount: 5497, currency: "USD", quotedAt: "yesterday" })],
+    ["has a non-string timestamp", JSON.stringify({ amount: 5497, currency: "USD", quotedAt: 1760000000000 })],
+  ])("UCP rejects a quote that %s instead of treating it as fresh", async (_label, value) => {
+    const pay = recordingHandler()
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [checkoutWithQuote(value)] })
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.messages[0].code).toBe("payment_quote_missing")
+    expect(pay.settled).toHaveLength(0)
+    expect(saleor.completed).toHaveLength(0)
+  })
+
+  it("accepts the completion again after an update re-quotes the checkout", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [checkoutWithQuote(quotedMinutesAgo(16))] })
+    const refused = await ucpComplete(routes, CHECKOUT_ID)
+    expect(refused.status).toBe(409)
+
+    const updated = await routes.checkoutSession.PUT(ucpRequest(`${UCP_SESSIONS}/${CHECKOUT_ID}`, { method: "PUT", body: {} }), params({ id: CHECKOUT_ID }))
+    expect(updated.status).toBe(200)
+    expect(storedQuote(saleor, CHECKOUT_ID).quotedAt).not.toBe(JSON.parse(quotedMinutesAgo(16)).quotedAt)
+
+    const retried = await ucpComplete(routes, CHECKOUT_ID)
+    expect(retried.status).toBe(200)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("still completes an order whose payment was taken before the quote expired", async () => {
+    const pay = recordingHandler()
+    const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [checkoutWithQuote(quotedMinutesAgo(120), [settledEarlier()])] })
+
+    const response = await ucpComplete(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(200)
+    expect(pay.settled).toHaveLength(0)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("stamps every new quote with the time it was made", async () => {
+    const { routes, saleor } = buildRoutes()
+    const before = Date.now()
+
+    const created = await ucpCreate(routes)
+    const id = (await created.json()).id as string
+
+    const quotedAt = Date.parse(storedQuote(saleor, id).quotedAt)
+    expect(quotedAt).toBeGreaterThanOrEqual(before)
+    expect(quotedAt).toBeLessThanOrEqual(Date.now())
   })
 })

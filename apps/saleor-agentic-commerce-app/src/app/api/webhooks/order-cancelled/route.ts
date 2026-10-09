@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { verifyWebhook, isAgentOrder, webhookError } from "@/lib/webhook-utils"
+import { verifyWebhook, isAgentOrder } from "@/lib/webhook-utils"
 
 type OrderCancelledPayload = {
   order?: {
@@ -17,11 +17,13 @@ type OrderCancelledPayload = {
  * Updates status for agent-created orders.
  */
 export async function POST(request: NextRequest) {
-  const context = await verifyWebhook(request)
+  const verified = await verifyWebhook(request)
 
-  if (!context) {
-    return webhookError("Webhook verification failed")
+  if (!verified.ok) {
+    return verified.response
   }
+
+  const context = verified.context
 
   const payload = context.payload as OrderCancelledPayload
   const order = payload.order

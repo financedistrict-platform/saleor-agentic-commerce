@@ -3,10 +3,15 @@ import type { SaleorMoney } from "../types/saleor.js"
 
 export const PAYMENT_QUOTE_METADATA_KEY = "agentic_commerce__quote"
 export const SETTLEMENT_METADATA_KEY = "agentic_commerce__settlement"
+export const PAYMENT_QUOTE_TTL_MS = 15 * 60 * 1000
 
 export type MinorMoney = {
   amount: number
   currency: string
+}
+
+export type PaymentQuote = MinorMoney & {
+  quotedAt: string
 }
 
 export type SettlementRecord = MinorMoney & {
@@ -53,22 +58,23 @@ export type SettlementRead =
 export type MoneyErrorCode = "unsupported_currency" | "amount_precision_invalid"
 
 export type QuoteResult =
-  | { ok: true; quote: MinorMoney }
+  | { ok: true; quote: PaymentQuote }
   | { ok: false; code: MoneyErrorCode; message: string }
 
 export type ReconciliationErrorCode =
   | MoneyErrorCode
   | "payment_quote_missing"
   | "payment_quote_stale"
+  | "payment_quote_expired"
   | "order_total_changed_after_settlement"
 
 export type ReconciliationResult =
   | { ok: true; payable: MinorMoney }
   | { ok: false; code: ReconciliationErrorCode; message: string }
 
-export function quoteForTotal(total: SaleorMoney): QuoteResult {
+export function quoteForTotal(total: SaleorMoney, now: Date = new Date()): QuoteResult {
   try {
-    return { ok: true, quote: { amount: toMinor(total), currency: total.currency } }
+    return { ok: true, quote: { amount: toMinor(total), currency: total.currency, quotedAt: now.toISOString() } }
   } catch (error) {
     if (error instanceof UnsupportedCurrencyError || error instanceof AmountPrecisionError) {
       return { ok: false, code: error.code, message: error.message }
@@ -81,8 +87,13 @@ export function minorToSaleorMoney(money: MinorMoney): SaleorMoney {
   return fromMinor(money.amount, money.currency)
 }
 
-export function readPaymentQuote(metadata: Record<string, unknown>): MinorMoney | null {
-  return readMinorMoney(metadata[PAYMENT_QUOTE_METADATA_KEY])
+export function readPaymentQuote(metadata: Record<string, unknown>): PaymentQuote | null {
+  const raw = metadata[PAYMENT_QUOTE_METADATA_KEY]
+  const money = readMinorMoney(raw)
+  if (!money) return null
+  const { quotedAt } = raw as Record<string, unknown>
+  if (typeof quotedAt !== "string" || Number.isNaN(Date.parse(quotedAt))) return null
+  return { ...money, quotedAt }
 }
 
 export function readSettlementRecord(metadata: Record<string, unknown>): SettlementRead {
@@ -174,16 +185,17 @@ export function canTransition(current: SettlementRead, next: SettlementState, at
 }
 
 export function reconcilePayment(input: {
-  quote: MinorMoney | null
+  quote: PaymentQuote | null
   total: SaleorMoney
   settled?: MinorMoney
+  now?: Date
 }): ReconciliationResult {
   const { quote, settled } = input
   if (!quote) {
     return {
       ok: false,
       code: "payment_quote_missing",
-      message: "No payment quote is stored on the checkout. Update the checkout to get a quote before completing.",
+      message: "No readable payment quote is stored on the checkout. Update the checkout to get a quote before completing.",
     }
   }
 
@@ -204,6 +216,17 @@ export function reconcilePayment(input: {
       ok: false,
       code: "payment_quote_stale",
       message: `The payment quote (${describe(quote)}) does not match the checkout total (${describe(total)}). Update the checkout to get a fresh quote and sign again.`,
+    }
+  }
+
+  if (!settled) {
+    const ageMs = (input.now ?? new Date()).getTime() - Date.parse(quote.quotedAt)
+    if (ageMs > PAYMENT_QUOTE_TTL_MS) {
+      return {
+        ok: false,
+        code: "payment_quote_expired",
+        message: `The payment quote was made at ${quote.quotedAt}, more than ${PAYMENT_QUOTE_TTL_MS / 60_000} minutes ago. Update the checkout to get a fresh quote and sign again.`,
+      }
     }
   }
 

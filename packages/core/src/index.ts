@@ -240,6 +240,7 @@ export type { Money } from "./lib/money.js"
 
 export {
   PAYMENT_QUOTE_METADATA_KEY,
+  PAYMENT_QUOTE_TTL_MS,
   SETTLEMENT_METADATA_KEY,
   quoteForTotal,
   minorToSaleorMoney,
@@ -256,6 +257,7 @@ export {
 } from "./lib/payment-reconciliation.js"
 export type {
   MinorMoney,
+  PaymentQuote,
   MoneyErrorCode,
   QuoteResult,
   SettlementRecord,
@@ -268,6 +270,15 @@ export type {
   ReconciliationErrorCode,
   ReconciliationResult,
 } from "./lib/payment-reconciliation.js"
+
+export {
+  SESSION_SECRET_HEADER,
+  SESSION_SECRET_METADATA_KEY,
+  issueSessionSecret,
+  secretsMatch,
+  sessionSecretMatches,
+} from "./lib/session-secret.js"
+export type { SessionSecretRecord } from "./lib/session-secret.js"
 
 export { createMemoryPaymentReplayStore, resolvePaymentReplayStore, settledReferenceFromKeys, settlementReplayKey } from "./lib/payment-replay.js"
 export type { PaymentReplayClaim, PaymentReplayStore } from "./lib/payment-replay.js"

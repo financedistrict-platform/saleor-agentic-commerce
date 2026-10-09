@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { PaymentHandlerAdapter, SaleorCheckout, SaleorMetadataItem } from "@financedistrict/saleor-agentic-commerce-core"
+import type { PaymentHandlerAdapter, SaleorCheckout, SaleorMetadataItem, SaleorOrder } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgentProfileFetcher, AgentProfileResult } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import { PrismPaymentHandler } from "../../../../prism-payment/src/handler.js"
 import { createAgenticCommerce, type AgenticCommerceConfig } from "../../config.js"
@@ -17,8 +17,55 @@ export function readFixture(path: string): string {
   return readFileSync(join(FIXTURES, path), "utf8")
 }
 
+export const ACP_KEY = "acp_test_key"
+
+export const ACP_AUTH = { authorization: `Bearer ${ACP_KEY}` }
+
+export function freshQuote(quote: { amount: number; currency: string }, quotedAt = new Date().toISOString()) {
+  return JSON.stringify({ ...quote, quotedAt })
+}
+
 export function checkoutTemplate(): SaleorCheckout {
-  return JSON.parse(readFixture("ucp/inputs/checkout.json")) as SaleorCheckout
+  const checkout = JSON.parse(readFixture("ucp/inputs/checkout.json")) as SaleorCheckout
+  checkout.privateMetadata = checkout.privateMetadata.map((item) =>
+    item.key === "agentic_commerce__quote" ? { ...item, value: freshQuote(JSON.parse(item.value)) } : item,
+  )
+  return checkout
+}
+
+export function orderTemplate(privateMetadata: SaleorMetadataItem[] = []): SaleorOrder {
+  const money = { amount: 54.97, currency: "USD" }
+  const taxed = { gross: money, net: money, tax: { amount: 0, currency: "USD" } }
+  return {
+    id: "T3JkZXI6MQ==",
+    number: "1001",
+    status: "UNFULFILLED",
+    created: "2026-10-09T00:00:00.000Z",
+    updated: "2026-10-09T00:00:00.000Z",
+    userEmail: "ada@example.test",
+    checkoutId: CHECKOUT_ID,
+    channel: { slug: "default-channel" },
+    total: taxed,
+    subtotal: taxed,
+    shippingPrice: { gross: { amount: 0, currency: "USD" }, net: { amount: 0, currency: "USD" }, tax: { amount: 0, currency: "USD" } },
+    discount: null,
+    lines: [],
+    shippingAddress: {
+      firstName: "Ada",
+      lastName: "Lovelace",
+      streetAddress1: "12 Analytical Way",
+      streetAddress2: "",
+      city: "London",
+      countryArea: "",
+      postalCode: "N1 9GU",
+      country: { code: "GB", country: "United Kingdom" },
+      phone: "+441234567890",
+    },
+    billingAddress: null,
+    fulfillments: [],
+    metadata: [],
+    privateMetadata,
+  }
 }
 
 export type PrismRequest = { url: string; method: string; headers: Record<string, string>; body?: unknown }
@@ -44,6 +91,7 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
   const transactions: { checkoutId: string; name: string; pspReference: string; amountCharged: { amount: number; currency: string } }[] = []
   const charged = new Map<string, number>()
   const completed: string[] = []
+  const orders = new Map<string, SaleorOrder>()
   const channel: { allowUnpaidOrders: boolean | null } = { allowUnpaidOrders: false }
   const notFound = { ok: false as const, error: "Checkout not found" }
 
@@ -96,7 +144,12 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
         return { ok: false as const, error: "Not paid", errors: [{ code: "CHECKOUT_NOT_FULLY_PAID", message: "Not paid", field: null }] }
       }
       completed.push(id)
+      orders.set("T3JkZXI6MQ==", orderTemplate(structuredClone(found.privateMetadata)))
       return { ok: true as const, data: { id: "T3JkZXI6MQ==", number: "1001" } }
+    },
+    async getOrder(id: string) {
+      const found = orders.get(id)
+      return found ? { ok: true as const, data: structuredClone(found) } : { ok: false as const, error: `Order ${id} not found` }
     },
     async updateCheckoutBillingAddress(id: string) {
       const found = checkouts.get(id)
@@ -109,7 +162,7 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
       return { ok: true as const, data: { allowUnpaidOrders: channel.allowUnpaidOrders } }
     },
   }
-  return { client, checkouts, transactions, completed, channel }
+  return { client, checkouts, transactions, completed, channel, orders }
 }
 
 export const BILLING_TAX = 5
@@ -164,6 +217,7 @@ export function buildRoutes(options: {
     saleorAuthToken: "token",
     storefrontUrl: STOREFRONT,
     storeName: "Demo Store",
+    acpApiKey: ACP_KEY,
     paymentHandlers: options.handlers ?? (options.prism ? [new PrismPaymentHandler({ apiUrl: "https://gw.example", apiKey: "test-key" })] : []),
     ...options.config,
   })
@@ -172,9 +226,10 @@ export function buildRoutes(options: {
   return { routes: createUcpRoutes(instance), acpRoutes: createAcpRoutes(instance), saleor, fetcher, instance }
 }
 
-export function ucpRequest(url: string, options: { agent?: string; method?: string; body?: unknown } = {}): Request {
+export function ucpRequest(url: string, options: { agent?: string; method?: string; body?: unknown; sessionSecret?: string } = {}): Request {
   const headers: Record<string, string> = { "content-type": "application/json" }
   if (options.agent) headers["UCP-Agent"] = `profile="${options.agent}"`
+  if (options.sessionSecret) headers["UCP-Session-Secret"] = options.sessionSecret
   return new Request(url, {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
     headers,

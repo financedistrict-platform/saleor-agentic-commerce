@@ -612,6 +612,7 @@ const ORDER_QUERY = `
         lines { quantity orderLine { id } }
       }
       metadata { key value }
+      privateMetadata { key value }
     }
   }
 `

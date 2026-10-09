@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { settlementReplayKey } from "@financedistrict/saleor-agentic-commerce-core"
 import type { PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
-import { buildRoutes, checkoutTemplate, CHECKOUT_ID, params, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
+import { ACP_AUTH, buildRoutes, checkoutTemplate, CHECKOUT_ID, freshQuote, params, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 import { resolvePendingSettlement } from "./resolve-pending-settlement.js"
 
 const UCP_SESSIONS = "https://store.test/api/ucp/checkout-sessions"
@@ -109,7 +109,7 @@ function acpPay(acpRoutes: Built["acpRoutes"], id: string, credential: object = 
   return acpRoutes.checkoutSessionComplete.POST(
     new Request(`https://store.test/api/acp/checkout_sessions/${id}/complete`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...ACP_AUTH },
       body: JSON.stringify({ payment_data: { handler_id: PRISM, instrument: { credential } } }),
     }),
     params({ id }),
@@ -387,7 +387,7 @@ function handlerWith(settle: () => unknown, keys?: () => readonly string[], decl
 function handlerCheckout(extra: { key: string; value: string }[] = []): SaleorCheckout {
   const checkout = checkoutTemplate()
   checkout.privateMetadata = [
-    { key: QUOTE_KEY, value: JSON.stringify({ amount: 5497, currency: "USD" }) },
+    { key: QUOTE_KEY, value: freshQuote({ amount: 5497, currency: "USD" }) },
     { key: "test.handler", value: JSON.stringify({ prepared: true }) },
     ...extra,
   ]
@@ -621,7 +621,7 @@ describe("Complete when another request already settled the payment", () => {
     if (options.total !== undefined) checkout.totalPrice.gross.amount = options.total
     if (options.quoted !== undefined) {
       checkout.privateMetadata = checkout.privateMetadata.map((m) =>
-        m.key === QUOTE_KEY ? { key: m.key, value: JSON.stringify({ amount: options.quoted!, currency: "USD" }) } : m,
+        m.key === QUOTE_KEY ? { key: m.key, value: freshQuote({ amount: options.quoted!, currency: "USD" }) } : m,
       )
     }
     const built = buildRoutes({ prism: true, checkouts: [checkout] })

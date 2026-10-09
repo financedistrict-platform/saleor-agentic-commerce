@@ -40,10 +40,14 @@ import {
   isWellFormedInstrument,
   PAYMENT_QUOTE_METADATA_KEY,
   quoteForTotal,
+  SESSION_SECRET_HEADER,
+  SESSION_SECRET_METADATA_KEY,
+  issueSessionSecret,
+  sessionSecretMatches,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
-import type { FormatterContext, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
+import type { FormatterContext, SessionSecretRecord, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   UCP_VERSION_METADATA_KEY,
@@ -199,7 +203,14 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
    * Shared helper: prepare payment handlers and store metadata on checkout.
    * Returns the final checkout with updated metadata.
    */
-  async function preparePaymentAndRefetch(checkoutId: string, checkout: any, baseUrl: string, ucpVersion: string, pin?: string) {
+  async function preparePaymentAndRefetch(
+    checkoutId: string,
+    checkout: any,
+    baseUrl: string,
+    ucpVersion: string,
+    pin?: string,
+    sessionRecord?: SessionSecretRecord,
+  ) {
     const quoted = quoteForTotal(checkout.totalPrice.gross)
     if (!quoted.ok) return quoted
     const { quote } = quoted
@@ -220,6 +231,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       ...prepareResults,
       [PAYMENT_QUOTE_METADATA_KEY]: quote,
       ...(pin ? { [UCP_VERSION_METADATA_KEY]: pin } : {}),
+      ...(sessionRecord ? { [SESSION_SECRET_METADATA_KEY]: sessionRecord } : {}),
     })
     if (metadataUpdates.length > 0) {
       // Best-effort persist of the prepared payment config. If this write
@@ -234,6 +246,14 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         console.error(
           `[ucp-routes] Failed to persist prepared payment config on checkout ${checkoutId}: ${persistResult.error}`,
         )
+        if (sessionRecord) {
+          return {
+            ok: false as const,
+            status: 503,
+            code: "session_not_persisted",
+            message: "The checkout session could not be saved. Create the checkout again.",
+          }
+        }
       }
     }
 
@@ -357,15 +377,21 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         }
 
         const baseUrl = endpointBaseUrl(request)
+        const issued = issueSessionSecret()
         const prepared = await preparePaymentAndRefetch(
-          checkoutResult.data.id, checkoutResult.data, baseUrl, scope.version, sessionPinFor(scope.resolution),
+          checkoutResult.data.id, checkoutResult.data, baseUrl, scope.version, sessionPinFor(scope.resolution), issued.record,
         )
-        if (!prepared.ok) return ucpError(scope.wire, prepared.code, prepared.message, 422, "unrecoverable")
+        if (!prepared.ok) {
+          const transient = "status" in prepared
+          return ucpError(
+            scope.wire, prepared.code, prepared.message, transient ? prepared.status : 422, transient ? "recoverable" : "unrecoverable",
+          )
+        }
         const finalCheckout = prepared.checkout
 
         const readiness = await evaluateReadiness(saleorClient, finalCheckout)
         const session = formatUcpCheckoutSession(scope.ctx, finalCheckout, readiness)
-        return Response.json(session, { status: 201 })
+        return Response.json(session, { status: 201, headers: { [SESSION_SECRET_HEADER]: issued.secret } })
       },
     },
 
@@ -677,9 +703,16 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (resolved instanceof Response) return resolved
         const scope = resolved
 
+        const suppliedSecret = request.headers.get(SESSION_SECRET_HEADER)
+        if (!suppliedSecret) {
+          return ucpError(scope.wire, "session_secret_required", `The ${SESSION_SECRET_HEADER} header returned when the checkout was created is required`, 401)
+        }
+
         const { id } = await context.params
         const result = await saleorClient.getOrder(id)
-        if (!result.ok) return ucpError(scope.wire, "order_not_found", result.error, 404)
+        if (!result.ok || !sessionSecretMatches(metadataToRecord(result.data.privateMetadata), suppliedSecret)) {
+          return ucpError(scope.wire, "order_not_found", "Order not found", 404)
+        }
 
         const order = formatUcpOrder(scope.ctx, result.data)
         return Response.json(order)

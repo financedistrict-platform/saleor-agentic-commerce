@@ -40,6 +40,12 @@ export function redactPaymentHandlers(
   )
 }
 
+export function publicHandlerConfig(entry: PaymentHandlerEntry): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(entry.config ?? {}).filter(([field]) => !isSecretField(entry, field)),
+  )
+}
+
 export function resolveSecret(submitted: unknown, stored: unknown): unknown {
   return submitted === REDACTED_SECRET ? stored : submitted
 }

@@ -260,6 +260,11 @@ function buildInstance(
     paymentHandlers,
   }
 
+  const acpEnabled = config.acpEnabled ?? true
+  if ((config.enabled ?? true) && acpEnabled && !config.acpApiKey) {
+    console.warn("[agentic-commerce] acpApiKey is not set, so every ACP request is refused. Set acpApiKey or disable ACP with acpEnabled: false.")
+  }
+
   return {
     saleorClient,
     paymentHandlers,
@@ -279,7 +284,7 @@ function buildInstance(
       // also pass `enabled: true`.
       enabled: config.enabled ?? true,
       ucpEnabled: config.ucpEnabled ?? true,
-      acpEnabled: config.acpEnabled ?? true,
+      acpEnabled,
     },
   }
 }

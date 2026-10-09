@@ -34,6 +34,7 @@ import {
   readCallerCredentials,
   validateCallerToken,
 } from "@/lib/caller-auth"
+import { publicHandlerConfig } from "@/lib/config-secrets"
 import type { HandlerManifest, PaymentHandlerEntry } from "@/lib/metadata-keys"
 
 // =====================================================
@@ -46,7 +47,6 @@ type AppConfigResponse = {
   storeDescription: string
   ucpEnabled: boolean
   acpEnabled: boolean
-  acpApiKey: string
   channels: Record<
     string,
     {
@@ -137,7 +137,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           handlerId,
           enabled: e.enabled,
           channels: e.channels ?? null,
-          config: e.config,
+          config: publicHandlerConfig(e),
           ...(e.manifest ? { manifest: e.manifest } : {}),
         }
       })
@@ -148,14 +148,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       storeDescription: globalConfig.storeDescription,
       ucpEnabled: globalConfig.ucpEnabled,
       acpEnabled: globalConfig.acpEnabled,
-      acpApiKey: globalConfig.acpApiKey,
       channels,
       paymentHandlers,
     }
 
     return NextResponse.json(body, {
-      // No CDN caching — this contains API keys and changes whenever a
-      // merchant edits config in the dashboard. Storefront SDK has its
+      // No CDN caching — this changes whenever a merchant edits config in
+      // the dashboard. Secret fields are never included. Storefront SDK has its
       // own short TTL on `loadConfigFromAppCached`.
       headers: { "Cache-Control": "no-store" },
     })

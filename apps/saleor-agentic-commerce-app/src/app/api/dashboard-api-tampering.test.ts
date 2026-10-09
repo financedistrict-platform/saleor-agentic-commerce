@@ -57,6 +57,7 @@ vi.mock("@/lib/config-manager", () => ({
 
 const { GET: getConfig, POST: postConfig } = await import("./config/route")
 const { POST: testConnection } = await import("./payment-handlers/test-connection/route")
+const { GET: getPublicConfig } = await import("./config-public/route")
 
 const PRISM_ENTRY: PaymentHandlerEntry = {
   enabled: true,
@@ -310,5 +311,91 @@ describe("dashboard API tampering — every dashboard route requires a verified 
     expect(handlers.length).toBeGreaterThan(0)
     expect(guards.length).toBe(handlers.length)
     expect(source).not.toMatch(/export const (GET|POST|PUT|PATCH|DELETE)\b/)
+  })
+})
+
+function publicConfigRequest(token: string | null = "storefront-service-token"): NextRequest {
+  const headers: Record<string, string> = { "saleor-api-url": SALEOR_API_URL }
+  if (token) headers.authorization = `Bearer ${token}`
+  return new NextRequest("https://app.example/api/config-public", { headers })
+}
+
+function installedApp(): void {
+  fetchSpy.mockResolvedValue(
+    new Response(JSON.stringify({ data: { app: { id: "storefront-app", name: "Storefront" } } }), { status: 200 }),
+  )
+}
+
+describe("config-public tampering — another installed app's token never receives a secret", () => {
+  it("does not return the Prism API key", async () => {
+    installedApp()
+
+    const res = await getPublicConfig(publicConfigRequest())
+    const text = await res.text()
+
+    expect(res.status).toBe(200)
+    expect(text).not.toContain(STORED_PRISM_KEY)
+  })
+
+  it("does not return the ACP API key", async () => {
+    installedApp()
+
+    const res = await getPublicConfig(publicConfigRequest())
+    const text = await res.text()
+
+    expect(res.status).toBe(200)
+    expect(text).not.toContain(STORED_ACP_KEY)
+  })
+
+  it("still returns the non-secret handler settings the storefront needs", async () => {
+    installedApp()
+
+    const body = await (await getPublicConfig(publicConfigRequest())).json()
+
+    expect(body.paymentHandlers).toHaveLength(1)
+    expect(body.paymentHandlers[0].handlerId).toBe("xyz.fd.prism_payment")
+    expect(body.paymentHandlers[0].config.apiUrl).toBe("https://prism-gw.fd.xyz")
+    expect(body.paymentHandlers[0].config).not.toHaveProperty("apiKey")
+    expect(body).not.toHaveProperty("acpApiKey")
+  })
+
+  it("drops every secret-looking handler field, whether named so or marked in the manifest", async () => {
+    const entry = state.handlers["xyz.fd.prism_payment"] as PaymentHandlerEntry
+    entry.config = { ...entry.config, webhookSecret: "whsec_value", accessToken: "tok_value", merchantPassword: "pw_value", signer: "manifest-marked", note: "plain" }
+    entry.manifest = {
+      ...entry.manifest!,
+      configSchema: {
+        type: "object",
+        properties: {
+          apiUrl: { type: "string", format: "uri" },
+          apiKey: { type: "string", format: "password" },
+          signer: { type: "string", writeOnly: true },
+        },
+      },
+    }
+    installedApp()
+
+    const res = await getPublicConfig(publicConfigRequest())
+    const text = await res.text()
+
+    expect(text).not.toContain("whsec_value")
+    expect(text).not.toContain("tok_value")
+    expect(text).not.toContain("pw_value")
+    expect(text).not.toContain("manifest-marked")
+    expect(JSON.parse(text).paymentHandlers[0].config.note).toBe("plain")
+  })
+
+  it("rejects a request without credentials", async () => {
+    const res = await getPublicConfig(publicConfigRequest(null))
+
+    expect(res.status).toBe(401)
+  })
+
+  it("rejects a token that does not resolve to an installed app", async () => {
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify({ data: { app: null } }), { status: 200 }))
+
+    const res = await getPublicConfig(publicConfigRequest("stolen-user-token"))
+
+    expect(res.status).toBe(401)
   })
 })
