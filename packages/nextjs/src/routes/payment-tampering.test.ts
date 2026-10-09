@@ -25,10 +25,13 @@ function recordingHandler(options: { failPrepare?: () => boolean; settles?: (pre
       if (options.failPrepare?.()) throw new Error("gateway unavailable")
       return { preparedAmount: input.total, preparedCurrency: input.currencyCode }
     },
+    settlementKeys(input: PaymentSettleInput) {
+      return { ok: true as const, keys: [JSON.stringify(["test.pay", input.checkoutId])] }
+    },
     async settlePayment(input: PaymentSettleInput) {
       settled.push(input)
       const prepared = input.checkoutMetadata?.["test.pay"] as Prepared | null | undefined
-      if (!prepared) return { success: false, error: "No prepared payment for this checkout" }
+      if (!prepared) return { success: false, outcome: "declined" as const, error: "No prepared payment for this checkout" }
       const charged = options.settles ? options.settles(prepared) : prepared
       return {
         success: true,
@@ -725,6 +728,9 @@ function alwaysPaysQuote(id: string) {
     async getUcpDiscoveryHandlers() { return {} },
     async getAcpDiscoveryHandlers() { return [] },
     async prepareCheckoutPayment() { return null },
+    settlementKeys(input: PaymentSettleInput) {
+      return { ok: true as const, keys: [JSON.stringify([id, input.checkoutId])] }
+    },
     async settlePayment(input: PaymentSettleInput) {
       settled.push(input)
       return { success: true, transactionReference: `0xfree${settled.length}`, settled: { amount: 5497, currency: "USD" }, replayKeys: [] }
@@ -1025,13 +1031,14 @@ describe("The same signed payment on two checkouts", () => {
     ["has no success flag", { transaction: "0xtx" }],
     ["has a success flag that is not true", { success: "true", transaction: "0xtx" }],
     ["has a transaction that is not a string", { success: true, transaction: 12345 }],
-  ])("refuses to mark paid when the settle reply %s", async (_case, reply) => {
+  ])("refuses to mark paid and holds the checkout as pending when the settle reply %s", async (_case, reply) => {
     gateway = stubPrismGateway({ settle: () => reply })
     const { routes, saleor } = twoCheckouts()
 
     const response = await ucpPay(routes, CHECKOUT_ID, signed())
 
-    expect(response.status).toBe(422)
+    expect(response.status).toBe(409)
+    expect((await response.json()).messages[0].code).toBe("settlement_pending")
     expect(saleor.transactions).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
   })

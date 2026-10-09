@@ -9,6 +9,7 @@ export type SignedPaymentSummary = {
   to: string
   from: string
   nonce: string
+  validBefore?: string
   payload: Record<string, unknown>
 }
 
@@ -52,9 +53,10 @@ export function extractSignedSummary(input: unknown): SignedPaymentSummary | nul
   const to = nonEmptyString(authz?.to)
   const from = nonEmptyString(authz?.from)
   const nonce = nonEmptyString(authz?.nonce)
+  const validBefore = nonEmptyString(authz?.validBefore)
 
   if (!network || !asset || !value || !to || !from || !nonce) return null
-  return { network, asset, scheme: nonEmptyString(accepted?.scheme), value, to, from, nonce, payload: pp }
+  return { network, asset, scheme: nonEmptyString(accepted?.scheme), value, to, from, nonce, ...(validBefore ? { validBefore } : {}), payload: pp }
 }
 
 function extractFromBase64(b64: string): SignedPaymentSummary | null {

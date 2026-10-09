@@ -1,4 +1,5 @@
 import { minorToDecimalString } from "@financedistrict/saleor-agentic-commerce-core"
+import type { SettleOutcome } from "@financedistrict/saleor-agentic-commerce-core"
 
 const PRISM_UCP_HANDLER_ID = "xyz.fd.prism_payment"
 const PRISM_UCP_HANDLER_IDS: readonly unknown[] = [PRISM_UCP_HANDLER_ID, "x402"]
@@ -89,7 +90,7 @@ export type SettleInput = {
 
 export type SettleResult =
   | { success: true; transactionHash: string; network?: string; payer?: string }
-  | { success: false; error: string }
+  | { success: false; error: string; outcome: SettleOutcome }
 
 
 export type PrismClientOptions = {
@@ -133,7 +134,7 @@ export class PrismClient {
 
   async settle(input: SettleInput): Promise<SettleResult> {
     if (!this.apiKey) {
-      return { success: false, error: "No PRISM_API_KEY configured" }
+      return { success: false, outcome: "declined", error: "No PRISM_API_KEY configured" }
     }
 
     const response = await fetch(`${this.apiUrl}/api/v2/payment/settle`, {
@@ -147,26 +148,31 @@ export class PrismClient {
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error")
-      return { success: false, error: `Settlement failed: ${response.status} ${errorText}` }
+      const outcome = response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 409 ? "declined" : "unknown"
+      return { success: false, outcome, error: `Settlement failed: ${response.status} ${errorText}` }
     }
 
     const data: unknown = await response.json().catch(() => null)
     if (typeof data !== "object" || data === null) {
-      return { success: false, error: "Prism settlement returned an unreadable reply" }
+      return { success: false, outcome: "unknown", error: "Prism settlement returned an unreadable reply" }
     }
     const reply = data as Record<string, unknown>
     if (reply.success !== true) {
-      return { success: false, error: nonEmptyString(reply.errorReason) ? reply.errorReason : "Prism settlement did not report success" }
+      return {
+        success: false,
+        outcome: reply.success === false ? "declined" : "unknown",
+        error: nonEmptyString(reply.errorReason) ? reply.errorReason : "Prism settlement did not report success",
+      }
     }
     const transactionHash = reply.transaction ?? reply.transactionHash
     if (!nonEmptyString(transactionHash)) {
-      return { success: false, error: "Prism settlement returned no transaction reference" }
+      return { success: false, outcome: "unknown", error: "Prism settlement returned no transaction reference" }
     }
     if (reply.network !== undefined && !nonEmptyString(reply.network)) {
-      return { success: false, error: "Prism settlement returned an unreadable network" }
+      return { success: false, outcome: "unknown", error: "Prism settlement returned an unreadable network" }
     }
     if (reply.payer !== undefined && !nonEmptyString(reply.payer)) {
-      return { success: false, error: "Prism settlement returned an unreadable payer" }
+      return { success: false, outcome: "unknown", error: "Prism settlement returned an unreadable payer" }
     }
     return { success: true, transactionHash, network: reply.network, payer: reply.payer }
   }

@@ -74,6 +74,8 @@ export interface PaymentHandlerAdapter {
    */
   settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult>
 
+  settlementKeys(input: PaymentSettleInput): SettlementDeclaration
+
   /**
    * Return UCP payment_handlers block for a checkout session response.
    * Reads stored data from checkout metadata.
@@ -127,10 +129,16 @@ export type PaymentSettleInput =
   | (PaymentSettleInputBase & { protocol?: "ucp"; instrumentType?: string })
   | (PaymentSettleInputBase & { protocol: "acp" })
 
+export type SettlementDeclaration =
+  | { ok: true; keys: readonly string[]; settled?: SettledAmount; expiresAt?: number; details?: Readonly<Record<string, string>> }
+  | { ok: false; error: string; code?: string }
+
 export type SettledAmount = {
   amount: number
   currency: string
 }
+
+export type SettleOutcome = "declined" | "unknown"
 
 export type PaymentSettleResult =
   | {
@@ -146,4 +154,5 @@ export type PaymentSettleResult =
       error: string
       code?: string
       settledReference?: string
+      outcome?: SettleOutcome
     }

@@ -107,3 +107,51 @@ describe("DummyPaymentHandler on a production configuration", () => {
     expect(result.success).toBe(true)
   })
 })
+
+describe("DummyPaymentHandler settlement declaration", () => {
+  const settleInput = (prepared: unknown, checkoutId = PREPARE.checkoutId) => ({
+    checkoutId,
+    channel: "default-channel",
+    handlerId: DUMMY_HANDLER_ID,
+    ucpVersion: "2026-04-08",
+    credential: {},
+    checkoutMetadata: { [DUMMY_HANDLER_ID]: prepared },
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it("declares one key per checkout and prepared intent", async () => {
+    const h = new DummyPaymentHandler()
+    const prepared = await h.prepareCheckoutPayment(PREPARE)
+    const intent = (prepared as { config: { intent_id: string } }).config.intent_id
+
+    expect(h.settlementKeys(settleInput(prepared))).toEqual({
+      ok: true,
+      keys: [JSON.stringify(["dummy", PREPARE.checkoutId, intent])],
+      settled: { amount: PREPARE.total, currency: PREPARE.currencyCode },
+    })
+  })
+
+  it("refuses to declare keys without a prepared payment", () => {
+    expect(new DummyPaymentHandler().settlementKeys(settleInput(undefined))).toMatchObject({ ok: false })
+  })
+
+  it("refuses to declare keys when the handler is disabled", async () => {
+    const prepared = await new DummyPaymentHandler().prepareCheckoutPayment(PREPARE)
+    vi.spyOn(console, "warn").mockImplementation(() => {})
+    vi.stubEnv("NODE_ENV", "production")
+
+    expect(new DummyPaymentHandler().settlementKeys(settleInput(prepared))).toMatchObject({ ok: false, code: "payment_handler_unavailable" })
+  })
+
+  it("reports a simulated failure and a refusal as declined", async () => {
+    const failing = new DummyPaymentHandler({ mode: "always_fail" })
+    const prepared = await failing.prepareCheckoutPayment(PREPARE)
+
+    expect(await failing.settlePayment(settleInput(prepared))).toMatchObject({ success: false, outcome: "declined" })
+    expect(await failing.settlePayment(settleInput(undefined))).toMatchObject({ success: false, outcome: "declined" })
+  })
+})
