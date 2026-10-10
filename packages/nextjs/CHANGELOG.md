@@ -1,5 +1,11 @@
 # @financedistrict/saleor-agentic-commerce-nextjs
 
+## 2.1.4
+
+### Patch Changes
+
+- [#114](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/114) [`beb6e3d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/beb6e3d769230bb72bd2c5b6ba094662a9482ca6) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - UCP routes now check an `X-API-Key` header when one is sent: a key that is not the store's API key answers 401 `key_not_found`. Requests without the header are served as before.
+
 ## 2.1.3
 
 ### Patch Changes
