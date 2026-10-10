@@ -226,10 +226,11 @@ export function buildRoutes(options: {
   return { routes: createUcpRoutes(instance), acpRoutes: createAcpRoutes(instance), saleor, fetcher, instance }
 }
 
-export function ucpRequest(url: string, options: { agent?: string; method?: string; body?: unknown; sessionSecret?: string } = {}): Request {
+export function ucpRequest(url: string, options: { agent?: string; method?: string; body?: unknown; sessionSecret?: string; apiKey?: string } = {}): Request {
   const headers: Record<string, string> = { "content-type": "application/json" }
   if (options.agent) headers["UCP-Agent"] = `profile="${options.agent}"`
   if (options.sessionSecret) headers["UCP-Session-Secret"] = options.sessionSecret
+  if (options.apiKey !== undefined) headers["X-API-Key"] = options.apiKey
   return new Request(url, {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),
     headers,

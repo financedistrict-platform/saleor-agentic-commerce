@@ -44,6 +44,7 @@ import {
   SESSION_SECRET_METADATA_KEY,
   issueSessionSecret,
   sessionSecretMatches,
+  secretsMatch,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
@@ -140,7 +141,19 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
   async function resolveScope(request: Request): Promise<UcpRequestScope | Response> {
     const resolution = await resolveUcpVersion(ucpRegistry, request, agentProfileFetcher)
     logUcpResolution(resolution)
-    return rejectionResponse(resolution) ?? scopeOf(resolution)
+    const rejection = rejectionResponse(resolution)
+    if (rejection) return rejection
+    const presentedKey = request.headers.get("X-API-Key")?.trim()
+    if (presentedKey && !secretsMatch(presentedKey, config.acpApiKey ?? "")) {
+      return ucpError(
+        resolution.wire,
+        "key_not_found",
+        "The X-API-Key is not the key configured for this store. Remove the header or ask the store owner for the current key.",
+        401,
+        "recoverable",
+      )
+    }
+    return scopeOf(resolution)
   }
 
   function pinScope(scope: UcpRequestScope, metadata: Record<string, unknown>): UcpRequestScope | Response {
