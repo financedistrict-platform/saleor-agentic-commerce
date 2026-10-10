@@ -152,6 +152,14 @@ constant time. With no `acpApiKey` (or an empty one) every ACP route answers
 401. The App's `/api/config-public` does not return the key set in the App
 dashboard; pass the same value as `acpApiKey` here, or set `acpEnabled: false`.
 
+### UCP platform key
+
+UCP routes stay open. If a request sends `X-API-Key`, it must equal the store's
+API key (`acpApiKey`), compared in constant time; otherwise the answer is 401
+`key_not_found`. This includes any key sent while no `acpApiKey` is set. A
+missing or blank header is served as before. `GET /.well-known/ucp` ignores the
+header. Ownership of sessions and orders still rests on `UCP-Session-Secret`.
+
 ### Order reads
 
 `POST /api/ucp/checkout-sessions` returns a `UCP-Session-Secret` header once.
