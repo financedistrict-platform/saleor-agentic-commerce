@@ -1,5 +1,17 @@
 # @financedistrict/saleor-prism-payment
 
+## 2.1.4
+
+### Patch Changes
+
+- [#114](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/114) [`beb6e3d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/beb6e3d769230bb72bd2c5b6ba094662a9482ca6) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - The ACP checkout entry is composed from `/api/v2/merchant/acp/handlers` and `/api/v2/merchant/payment-requirements`. One Prism call serves UCP and ACP. `PrismClient.prepareAcpPayment` is removed. Needs Prism with the shared payment-requirements endpoint.
+
+- [#114](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/114) [`beb6e3d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/beb6e3d769230bb72bd2c5b6ba094662a9482ca6) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - Get payment requirements from Prism's protocol-free `/api/v2/merchant/payment-requirements`. The UCP checkout entry takes its `id` and `version` from Prism discovery for the same UCP version, so discovery and checkout always agree. If discovery has no declaration, the UCP entry is left out. ACP is unchanged. Needs Prism with the protocol-free payment-requirements route.
+
+- [#114](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/114) [`beb6e3d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/beb6e3d769230bb72bd2c5b6ba094662a9482ca6) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - Call the public `GET /ucp/<ucp-version>/handlers` for handler discovery instead of `/api/v2/merchant/ucp/<ucp-version>/handlers`. Needs Prism with that route.
+
+- [#114](https://github.com/financedistrict-platform/saleor-agentic-commerce/pull/114) [`beb6e3d`](https://github.com/financedistrict-platform/saleor-agentic-commerce/commit/beb6e3d769230bb72bd2c5b6ba094662a9482ca6) Thanks [@vu-remote-dev-fdt](https://github.com/vu-remote-dev-fdt)! - Call Prism with the UCP version in the path (`/api/v2/merchant/ucp/<ucp-version>/handlers`). Settle and ACP no longer send a UCP version. Needs Prism with versioned routes.
+
 ## 2.1.3
 
 ### Patch Changes
