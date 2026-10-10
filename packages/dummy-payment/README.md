@@ -16,7 +16,10 @@ locally with no remote API calls. It exists to:
 3. **Exercise error paths.** Configurable settlement mode lets tests
    provoke deterministic failures.
 
-Don't use it in production.
+Don't use it in production. The handler is on only when `NODE_ENV` is
+`development` or `test`. Anywhere else, including an unset `NODE_ENV`, it
+is off: it is not advertised, not prepared, and refuses to settle. Only
+code can turn it back on, with `allowInProduction: true`. No env var can.
 
 ## Install
 
@@ -67,10 +70,12 @@ await registerHandler({
 ## Behavior
 
 ### `mode = "always_succeed"` (default)
-Settlement returns `{ success: true, transactionReference: "dummy_tx_<timestamp>_<rand>" }`.
+Settlement returns `{ success: true, transactionReference: "dummy_tx_<timestamp>_<rand>", settled: { amount, currency }, replayKeys: [] }`, where `settled` is the prepared amount stored on the checkout. Without a prepared amount it fails and nothing is settled.
 
 ### `mode = "always_fail"`
-Settlement returns `{ success: false, error: "Dummy handler simulated failure (mode=always_fail)" }`.
+Settlement returns `{ success: false, outcome: "declined", error: "Dummy handler simulated failure (mode=always_fail)" }`.
+
+The handler declares one settlement key per checkout and prepared intent.
 
 ### `mode = "random"`
 Coin flip per settlement call. Useful for confirming the gateway handles both paths gracefully in retry/log/UX code.

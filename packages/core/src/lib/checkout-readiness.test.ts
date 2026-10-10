@@ -9,6 +9,7 @@ import {
 function checkout(over: Partial<any> = {}): any {
   return {
     id: "Q2hlY2tvdXQ6MQ==",
+    channel: { slug: "default-channel" },
     lines: [{ id: "l1" }],
     totalPrice: { gross: { amount: 600, currency: "USD" } },
     transactions: [],
@@ -60,7 +61,25 @@ describe("classifyCompleteErrors — Saleor is the authority, we only translate"
   })
 })
 
+const paidOnlyChannel = {
+  getChannelOrderSettings: vi.fn().mockResolvedValue({ ok: true, data: { allowUnpaidOrders: false } }),
+}
+
 describe("evaluateReadiness — probes Saleor, guarded", () => {
+  it.each([
+    ["allows unpaid orders", { ok: true, data: { allowUnpaidOrders: true } }, "channel_allows_unpaid_orders"],
+    ["order settings cannot be read", { ok: false, error: "permission denied" }, "channel_order_settings_unreadable"],
+  ])("channel %s => incomplete, no probe", async (_label, settings, code) => {
+    const complete = vi.fn()
+    const saleor = { completeCheckout: complete, getChannelOrderSettings: vi.fn().mockResolvedValue(settings) } as any
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const r = await evaluateReadiness(saleor, checkout())
+    expect(r.ready).toBe(false)
+    expect(r.status).toBe("incomplete")
+    expect(r.messages[0]).toMatchObject({ code, severity: "unrecoverable" })
+    expect(complete).not.toHaveBeenCalled()
+  })
+
   it("checkout with a transaction is past readiness => complete_in_progress, no probe", async () => {
     const complete = vi.fn()
     const saleor = { completeCheckout: complete } as any
@@ -80,6 +99,7 @@ describe("evaluateReadiness — probes Saleor, guarded", () => {
 
   it("unpaid non-zero: Saleor says only-payment-missing => ready", async () => {
     const saleor = {
+      ...paidOnlyChannel,
       completeCheckout: vi.fn().mockResolvedValue({ ok: false, error: "not paid", errors: [{ code: PAYMENT_PENDING_CODE }] }),
     } as any
     const r = await evaluateReadiness(saleor, checkout())
@@ -89,6 +109,7 @@ describe("evaluateReadiness — probes Saleor, guarded", () => {
 
   it("unpaid non-zero: Saleor rejects with a real reason => incomplete + verbatim message", async () => {
     const saleor = {
+      ...paidOnlyChannel,
       completeCheckout: vi.fn().mockResolvedValue({
         ok: false,
         error: "Shipping method is not set",

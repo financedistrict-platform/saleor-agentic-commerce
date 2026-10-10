@@ -17,6 +17,8 @@ import {
   type SaleorClientOptions,
   type AppConfig,
   type AppPaymentHandlerConfig,
+  resolvePaymentReplayStore,
+  type PaymentReplayStore,
 } from "@financedistrict/saleor-agentic-commerce-core"
 import {
   createAgentProfileFetcher,
@@ -85,6 +87,7 @@ export type AgenticCommerceConfig = {
   acpApiKey?: string
   /** Payment handler adapters to register (added alongside App-managed handlers) */
   paymentHandlers?: PaymentHandlerAdapter[]
+  paymentReplayStore?: PaymentReplayStore
   /**
    * Master enable for the agentic commerce stack. When `false`, all routes
    * (UCP discovery, ACP discovery, protocol endpoints) return 404 — the
@@ -114,6 +117,7 @@ export type AgenticCommerceConfig = {
 export type AgenticCommerceInstance = {
   saleorClient: SaleorClient
   paymentHandlers: PaymentHandlerRegistry
+  paymentReplayStore: PaymentReplayStore
   formatterContext: FormatterContext
   ucpRegistry?: UcpVersionRegistry
   agentProfileFetcher?: AgentProfileFetcher
@@ -190,11 +194,11 @@ async function createFromApp(
   }
 
   // Build payment handlers from App config
-  const appHandlers: PaymentHandlerAdapter[] = []
+  const appHandlers: AppRegisteredHandler[] = []
   if (config.paymentHandlerFactory) {
     for (const ph of appConfig.paymentHandlers) {
-      const handler = config.paymentHandlerFactory(ph)
-      if (handler) appHandlers.push(handler)
+      const adapter = config.paymentHandlerFactory(ph)
+      if (adapter) appHandlers.push({ adapter, channels: ph.channels ?? null })
     }
   }
 
@@ -205,21 +209,23 @@ async function createFromApp(
     storeName,
     storeDescription: config.storeDescription || appConfig.storeDescription,
     acpApiKey: config.acpApiKey || appConfig.acpApiKey,
-    paymentHandlers: [...appHandlers, ...(config.paymentHandlers || [])],
     enabled: config.enabled ?? appConfig.enabled,
     ucpEnabled: config.ucpEnabled ?? appConfig.ucpEnabled,
     acpEnabled: config.acpEnabled ?? appConfig.acpEnabled,
   }
 
-  return buildInstance(mergedConfig, storeName)
+  return buildInstance(mergedConfig, storeName, appHandlers)
 }
 
 /**
  * Build the final instance from resolved config.
  */
+type AppRegisteredHandler = { adapter: PaymentHandlerAdapter; channels: readonly string[] | null }
+
 function buildInstance(
   config: AgenticCommerceConfig,
-  storeName: string
+  storeName: string,
+  appHandlers: AppRegisteredHandler[] = []
 ): AgenticCommerceInstance {
   const ucpRegistry = createUcpVersionRegistry({
     ucpVersion: config.ucpVersion,
@@ -238,6 +244,9 @@ function buildInstance(
 
   // Create and populate payment handler registry
   const paymentHandlers = new PaymentHandlerRegistry()
+  for (const { adapter, channels } of appHandlers) {
+    paymentHandlers.registerAdapter(adapter, channels)
+  }
   for (const handler of config.paymentHandlers || []) {
     paymentHandlers.registerAdapter(handler)
   }
@@ -251,9 +260,15 @@ function buildInstance(
     paymentHandlers,
   }
 
+  const acpEnabled = config.acpEnabled ?? true
+  if ((config.enabled ?? true) && acpEnabled && !config.acpApiKey) {
+    console.warn("[agentic-commerce] acpApiKey is not set, so every ACP request is refused. Set acpApiKey or disable ACP with acpEnabled: false.")
+  }
+
   return {
     saleorClient,
     paymentHandlers,
+    paymentReplayStore: resolvePaymentReplayStore(config.paymentReplayStore),
     formatterContext,
     ucpRegistry,
     agentProfileFetcher: createAgentProfileFetcher(),
@@ -269,7 +284,7 @@ function buildInstance(
       // also pass `enabled: true`.
       enabled: config.enabled ?? true,
       ucpEnabled: config.ucpEnabled ?? true,
-      acpEnabled: config.acpEnabled ?? true,
+      acpEnabled,
     },
   }
 }

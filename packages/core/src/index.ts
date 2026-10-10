@@ -12,6 +12,9 @@ export type {
   CheckoutPrepareInput,
   PaymentSettleInput,
   PaymentSettleResult,
+  SettledAmount,
+  SettleOutcome,
+  SettlementDeclaration,
 } from "./types/payment-handler-adapter.js"
 
 // Types — UCP Protocol
@@ -104,14 +107,15 @@ export type {
 
 // Payment Handler Registry
 export { PaymentHandlerRegistry } from "./lib/payment-handler-registry.js"
+export type { ResolvedSettlement } from "./lib/payment-handler-registry.js"
 
 // Saleor GraphQL Client
 export { SaleorClient } from "./lib/saleor-client.js"
 export type { SaleorClientOptions, SaleorResult, SaleorAddressInput } from "./lib/saleor-client.js"
 
 // Checkout readiness — Saleor-authoritative validation probe → UCP status/messages
-export { evaluateReadiness, classifyCompleteErrors, PAYMENT_PENDING_CODE } from "./lib/checkout-readiness.js"
-export type { CheckoutReadiness } from "./lib/checkout-readiness.js"
+export { evaluateReadiness, classifyCompleteErrors, checkPaidOrdersOnly, PAYMENT_PENDING_CODE } from "./lib/checkout-readiness.js"
+export type { CheckoutReadiness, PaidOrdersOnlyResult } from "./lib/checkout-readiness.js"
 
 export { UCP_VERSION } from "./lib/ucp-version.js"
 export { isWellFormedInstrument } from "./lib/ucp-instrument.js"
@@ -146,7 +150,6 @@ export { formatAcpCheckoutSession, formatAcpCompleteResponse } from "./lib/forma
 
 // Formatter Types
 export type { FormatterContext } from "./lib/formatters/types.js"
-export { toMinor } from "./lib/formatters/types.js"
 
 // Address Translation
 export {
@@ -211,8 +214,10 @@ export type {
 
 // Signed-amount validation (Prism x402)
 export {
+  canonicalOnNetwork,
   extractSignedSummary,
   readStoredPrismAccepts,
+  signedAuthorizationReplayKey,
   validateSignedAgainstStored,
 } from "./lib/validate-signed-amount.js"
 export type {
@@ -221,3 +226,59 @@ export type {
   ValidationResult,
   ValidationErrorCode,
 } from "./lib/validate-signed-amount.js"
+
+export {
+  toMinor,
+  fromMinor,
+  minorToDecimalString,
+  currencyExponent,
+  isSupportedCurrency,
+  UnsupportedCurrencyError,
+  AmountPrecisionError,
+} from "./lib/money.js"
+export type { Money } from "./lib/money.js"
+
+export {
+  PAYMENT_QUOTE_METADATA_KEY,
+  PAYMENT_QUOTE_TTL_MS,
+  SETTLEMENT_METADATA_KEY,
+  quoteForTotal,
+  minorToSaleorMoney,
+  readPaymentQuote,
+  readSettlementRecord,
+  parseSettlementRecord,
+  pendingSettlementRecord,
+  heldSettlementRecord,
+  failedSettlementRecord,
+  settledSettlementRecord,
+  canTransition,
+  reconcilePayment,
+  sameMinorMoney,
+} from "./lib/payment-reconciliation.js"
+export type {
+  MinorMoney,
+  PaymentQuote,
+  MoneyErrorCode,
+  QuoteResult,
+  SettlementRecord,
+  SettlementRead,
+  SettlementState,
+  SettlementAttempt,
+  PendingSettlement,
+  HeldSettlement,
+  FailedSettlement,
+  ReconciliationErrorCode,
+  ReconciliationResult,
+} from "./lib/payment-reconciliation.js"
+
+export {
+  SESSION_SECRET_HEADER,
+  SESSION_SECRET_METADATA_KEY,
+  issueSessionSecret,
+  secretsMatch,
+  sessionSecretMatches,
+} from "./lib/session-secret.js"
+export type { SessionSecretRecord } from "./lib/session-secret.js"
+
+export { createMemoryPaymentReplayStore, resolvePaymentReplayStore, settledReferenceFromKeys, settlementReplayKey } from "./lib/payment-replay.js"
+export type { PaymentReplayClaim, PaymentReplayStore } from "./lib/payment-replay.js"

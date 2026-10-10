@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getAuthContext } from "@/lib/auth"
+import { ConfigManager } from "@/lib/config-manager"
+import { PRISM_HANDLER_ID } from "@/lib/metadata-keys"
+import { REDACTED_SECRET, resolveSecret } from "@/lib/config-secrets"
 
 /**
  * POST /api/payment-handlers/test-connection
@@ -33,7 +36,18 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const { handlerId, apiUrl, apiKey } = body
+  const { handlerId, apiUrl } = body
+  const storedConfig =
+    body.apiKey === REDACTED_SECRET
+      ? (
+          await new ConfigManager(auth.saleorApiUrl, auth.token).getPaymentHandler(
+            PRISM_HANDLER_ID
+          )
+        )?.config
+      : undefined
+  const apiKey = resolveSecret(body.apiKey, storedConfig?.apiKey) as
+    | string
+    | undefined
   if (!apiUrl || !apiKey) {
     return NextResponse.json(
       { error: "apiUrl and apiKey are required" },
@@ -44,7 +58,7 @@ export async function POST(request: NextRequest) {
   // For v1 we only know how to test the Prism handler. When the registry
   // lands, this dispatches by handlerId to per-handler probe logic (which
   // can come from the handler's manifest).
-  if (handlerId && handlerId !== "xyz.fd.prism_payment") {
+  if (handlerId && handlerId !== PRISM_HANDLER_ID) {
     return NextResponse.json(
       { ok: false, message: `No probe defined for handler "${handlerId}"` },
       { status: 200 },

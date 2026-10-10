@@ -54,7 +54,7 @@ const acpHandlers = await prism.getAcpDiscoveryHandlers("2026-08-25")
 // Prepare — create a payment session for a checkout
 const prepared = await prism.prepareCheckoutPayment({
   checkoutId: "checkout_123",
-  amount: 5000,      // $50.00 in minor units
+  amount: 5000,      // $50.00 in minor units (JPY 5000 = ¥5000, KWD 5000 = 5.000 KWD)
   currency: "usd",
   metadata: {},
 })
@@ -85,9 +85,9 @@ new PrismPaymentHandler({
 
 1. **Discovery** — The handler registers itself in UCP/ACP profiles with `id: "xyz.fd.prism_payment"`, advertising x402 stablecoin payment support
 2. **Prepare** — When an agent selects Prism as their payment method, the handler calls the Prism Gateway to create a payment session and stores the session config in Saleor's checkout metadata
-3. **Settle** — When the agent submits a signed EIP-3009 authorization, the handler forwards it to the Prism Gateway for on-chain settlement
+3. **Settle** — When the agent submits a signed EIP-3009 authorization, the handler declares the authorization (network, asset, payer, nonce) as the key of the payment and refuses it when its `validBefore` has passed. The storefront claims that key, then the handler forwards the authorization to the Prism Gateway for on-chain settlement. A reply that clearly declines the payment (an HTTP 4xx other than 408 and 409, or `success: false`) is reported as declined. A timeout, an HTTP 5xx, 408 or 409, or a reply that cannot be read is reported as unknown, and the checkout stays pending until it is resolved.
 
-Discovery caches UCP responses per UCP version. Every call to Prism sends `User-Agent: fd-saleor-prism/<ucp-version>`. The handler also accepts the older Prism entry shape (`id: "x402"`, `config_schema`) and the instruments of earlier agents (`handler_id: "x402"`, `type` `tokenized`, `default` or missing, credential without `type`).
+Discovery caches UCP responses per UCP version. Handler discovery puts the UCP version in the Prism path. Payment requirements come from the protocol-free `/api/v2/merchant/payment-requirements`; the handler places that x402 config under the `id` and `version` from discovery for the same UCP version. The handler also accepts the older Prism entry shape (`id: "x402"`, `config_schema`) and the instruments of earlier agents (`handler_id: "x402"`, `type` `tokenized`, `default` or missing, credential without `type`).
 
 ## Environment Variables
 

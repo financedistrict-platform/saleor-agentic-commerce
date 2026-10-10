@@ -124,7 +124,8 @@ export function GeneralSettings({ config, onSave, saving }: Props) {
           <h3 style={styles.cardTitle}>ACP Authentication</h3>
           <p style={styles.description}>
             API key for ACP Bearer token authentication. Share this with
-            authorized agent platforms.
+            authorized agent platforms, and set the same value as acpApiKey
+            in your storefront. It is not sent to the storefront automatically.
           </p>
           <div style={styles.field}>
             <label style={styles.label}>API Key</label>

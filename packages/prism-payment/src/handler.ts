@@ -1,21 +1,13 @@
-/**
- * Prism Payment Handler Adapter
- *
- * Implements the PaymentHandlerAdapter interface from
- * @financedistrict/saleor-agentic-commerce-core.
- *
- * Wires Prism's protocol-specific endpoints (UCP and ACP variants of
- * `/handlers` and `/payment-requirements`) into the agentic commerce
- * SDK. Discovery and checkout-prepare responses are passed through
- * verbatim — Prism is the authority on its own handler shape.
- */
-
 import type {
   PaymentHandlerAdapter,
   CheckoutPrepareInput,
   PaymentSettleInput,
   PaymentSettleResult,
+  SettledAmount,
+  SettlementDeclaration,
+  SignedPaymentSummary,
 } from "@financedistrict/saleor-agentic-commerce-core"
+import { canonicalOnNetwork, extractSignedSummary, signedAuthorizationReplayKey, validateSignedAgainstStored } from "@financedistrict/saleor-agentic-commerce-core"
 import {
   PrismClient,
   canonicalUcpHandlerEntry,
@@ -26,9 +18,6 @@ import {
   type X402AcceptEntry,
 } from "./prism-client.js"
 
-// =====================================================
-// Constants
-// =====================================================
 
 export const PRISM_HANDLER_ID = "xyz.fd.prism_payment"
 export const PRISM_INSTRUMENT_TYPE = "x402"
@@ -36,40 +25,27 @@ const PRISM_HANDLER_ALIASES: readonly string[] = ["x402"]
 const ORIGINAL_INSTRUMENT_TYPES: readonly (string | undefined)[] = [PRISM_INSTRUMENT_TYPE, "tokenized", "default", undefined]
 const ORIGINAL_CREDENTIAL_TYPES: readonly (string | undefined)[] = [PRISM_INSTRUMENT_TYPE, undefined]
 
-/**
- * Re-exported for back-compat readers of older Saleor checkout metadata.
- * The legacy generic `payment-profile` flow used this key; the new flow
- * stores the UCP+ACP blob under `PRISM_HANDLER_ID` directly (the registry
- * keys prepare-results by the adapter's id automatically).
- */
 export const PRISM_CHECKOUT_CONFIG_KEY = "prism_checkout_config"
 
-// =====================================================
-// Stored shape (per-checkout metadata blob)
-// =====================================================
 
 type PrismCheckoutData = {
   ucp: UcpCheckoutPrepareResponse | null
   acp: AcpHandler | null
-  /** Used for idempotency — set once per (resource, amount) pair */
   preparedAmount: number
+  preparedCurrency: string
   preparedResourceUrl: string
 }
 
-// =====================================================
-// Options
-// =====================================================
+
+type CredentialCheck =
+  | { ok: true; signed: SignedPaymentSummary; entry: X402AcceptEntry; settled: SettledAmount }
+  | { ok: false; error: string; code?: string }
 
 export type PrismPaymentHandlerOptions = {
-  /** Prism Gateway API base URL (default: https://prism-gw.fd.xyz) */
   apiUrl?: string
-  /** Prism Gateway API key for merchant authentication */
   apiKey?: string
 }
 
-// =====================================================
-// Handler
-// =====================================================
 
 export class PrismPaymentHandler implements PaymentHandlerAdapter {
   readonly id = PRISM_HANDLER_ID
@@ -94,146 +70,180 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     })
   }
 
-  // -------------------------------------------------
-  // Discovery
-  // -------------------------------------------------
 
   async getUcpDiscoveryHandlers(ucpVersion: string): Promise<UcpHandlersDiscoveryResponse> {
     return this.fetchUcpDiscovery(ucpVersion)
   }
 
   async getAcpDiscoveryHandlers(ucpVersion: string): Promise<AcpHandler[]> {
-    return this.fetchAcpDiscovery(ucpVersion)
+    return this.fetchAcpDiscovery()
   }
 
-  // -------------------------------------------------
-  // Checkout preparation
-  // -------------------------------------------------
 
   async prepareCheckoutPayment(input: CheckoutPrepareInput): Promise<PrismCheckoutData | null> {
     const { checkoutId, total, currencyCode, checkoutBaseUrl, storeName, checkoutMetadata, ucpVersion } = input
     const resourceUrl = `${checkoutBaseUrl}/${checkoutId}`
 
-    // Idempotency — return existing blob if we already prepared for this
-    // exact (resource, amount) pair.
     const existing = checkoutMetadata?.[PRISM_HANDLER_ID] as PrismCheckoutData | undefined
     if (
       existing &&
       existing.preparedResourceUrl === resourceUrl &&
       existing.preparedAmount === total &&
+      existing.preparedCurrency === currencyCode &&
       (existing.ucp || existing.acp)
     ) {
       return existing
     }
 
     const prepareInput = {
-      ucpVersion,
       amount: total,
       currency: currencyCode,
       resourceUrl,
       resourceDescription: `Purchase from ${storeName}`,
     }
 
-    // Call UCP and ACP prepare in parallel — fail-soft per protocol so a
-    // transient error on one side doesn't kill the other.
-    const [ucpResult, acpResult] = await Promise.allSettled([
-      this.client.prepareUcpPayment(prepareInput),
-      this.client.prepareAcpPayment(prepareInput),
+    const [ucpDiscovery, acpDiscovery] = await Promise.all([
+      this.fetchUcpDiscovery(ucpVersion),
+      this.fetchAcpDiscovery(),
     ])
+    const ucpDeclaration = ucpDiscovery[PRISM_HANDLER_ID]?.[0]
+    const acpDeclaration = acpDiscovery[0]
 
-    const ucp = ucpResult.status === "fulfilled" ? ucpResult.value : null
-    const acp = acpResult.status === "fulfilled" ? acpResult.value : null
-
-    if (ucpResult.status === "rejected") {
-      console.error(
-        `[prism-handler] UCP prepare failed for ${checkoutId}: ${ucpResult.reason}`,
-      )
-    }
-    if (acpResult.status === "rejected") {
-      console.error(
-        `[prism-handler] ACP prepare failed for ${checkoutId}: ${acpResult.reason}`,
-      )
-    }
-
-    if (!ucp && !acp) {
+    if (!ucpDeclaration && !acpDeclaration) {
+      console.error(`[prism-handler] no UCP or ACP declaration for ${checkoutId}`)
       return null
     }
+
+    let config: PaymentHandlerConfig
+    try {
+      config = await this.client.preparePayment(prepareInput)
+    } catch (error: unknown) {
+      console.error(`[prism-handler] prepare failed for ${checkoutId}: ${error}`)
+      return null
+    }
+
+    const ucp: UcpCheckoutPrepareResponse | null = ucpDeclaration
+      ? { [PRISM_HANDLER_ID]: [{ id: ucpDeclaration.id, version: ucpDeclaration.version, config }] }
+      : null
+    const acp: AcpHandler | null = acpDeclaration ? { ...acpDeclaration, config } : null
 
     return {
       ucp,
       acp,
       preparedAmount: total,
+      preparedCurrency: currencyCode,
       preparedResourceUrl: resourceUrl,
     }
   }
 
-  // -------------------------------------------------
-  // Settlement
-  // -------------------------------------------------
+
+  settlementKeys(input: PaymentSettleInput): SettlementDeclaration {
+    const checked = this.checkCredential(input)
+    if (!checked.ok) return checked
+    const { signed, settled } = checked
+    const expiresAt = authorizationExpiry(signed)
+    return {
+      ok: true,
+      keys: [signedAuthorizationReplayKey(signed)],
+      settled,
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+      details: {
+        network: signed.network,
+        asset: signed.asset,
+        payer: signed.from,
+        nonce: signed.nonce,
+        ...(signed.validBefore === undefined ? {} : { validBefore: signed.validBefore }),
+      },
+    }
+  }
 
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
-    const { credential, checkoutMetadata, ucpVersion } = input
+    const checked = this.checkCredential(input)
+    if (!checked.ok) return { success: false, outcome: "declined", error: checked.error, ...(checked.code ? { code: checked.code } : {}) }
+    const { signed, entry, settled } = checked
+
+    try {
+      const result = await this.client.settle({
+        paymentPayload: signed.payload,
+        paymentRequirements: entry,
+      })
+
+      if (!result.success) {
+        return { success: false, outcome: result.outcome, error: result.error }
+      }
+      const { network } = signed
+      const settledReference = result.transactionHash
+      if (result.network !== undefined && result.network !== network) {
+        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} on ${result.network}, not on the signed network ${network}` }
+      }
+      if (result.payer !== undefined && canonicalOnNetwork(network, result.payer) !== canonicalOnNetwork(network, signed.from)) {
+        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} from another payer than the signed authorization` }
+      }
+
+      return {
+        success: true,
+        transactionReference: result.transactionHash,
+        settled,
+        replayKeys: [
+          signedAuthorizationReplayKey(signed),
+          JSON.stringify(["x402-transaction", network, canonicalOnNetwork(network, result.transactionHash)]),
+        ],
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Unknown error"
+      return { success: false, outcome: "unknown", error: `Prism settlement failed: ${message}` }
+    }
+  }
+
+  private checkCredential(input: PaymentSettleInput): CredentialCheck {
+    const { credential, checkoutMetadata } = input
 
     if (
       input.protocol !== "acp" &&
       (!ORIGINAL_INSTRUMENT_TYPES.includes(input.instrumentType || undefined) ||
         !ORIGINAL_CREDENTIAL_TYPES.includes(readString(credential, "type")))
     ) {
-      return { success: false, error: `Prism instrument and credential type must be "${PRISM_INSTRUMENT_TYPE}"` }
+      return { ok: false, error: `Prism instrument and credential type must be "${PRISM_INSTRUMENT_TYPE}"` }
     }
 
     const config = this.extractPaymentConfig(checkoutMetadata)
     if (!config) {
-      return { success: false, error: "No Prism payment config found on checkout" }
+      return { ok: false, error: "No Prism payment config found on checkout" }
     }
+
+    const prepared = checkoutMetadata?.[PRISM_HANDLER_ID] as Partial<PrismCheckoutData>
+    if (!Number.isSafeInteger(prepared.preparedAmount) || typeof prepared.preparedCurrency !== "string") {
+      return { ok: false, error: "Prism payment config has no prepared amount" }
+    }
+    const settled = { amount: prepared.preparedAmount as number, currency: prepared.preparedCurrency }
 
     const accepts = config.accepts ?? []
     if (accepts.length === 0) {
-      return { success: false, error: "Prism payment config has no accepts entries" }
+      return { ok: false, error: "Prism payment config has no accepts entries" }
     }
 
-    // Prism's /payment/settle wants a single accepts entry as
-    // `paymentRequirements` (with network/asset/amount/scheme/payTo at top
-    // level), not the wrapper config. Pick the entry matching the network
-    // the wallet signed for.
-    const requirements = pickAcceptsEntryForCredential(accepts, credential)
-    if (!requirements) {
+    const signed = extractSignedSummary(credential)
+    if (!signed) {
       return {
-        success: false,
-        error: "Could not match a payment-requirements entry to the submitted credential",
+        ok: false,
+        code: "unreadable_payment_credential",
+        error: "The credential is not a signed x402 exact payment with an accepted network and asset and an EIP-3009 authorization",
       }
     }
 
-    try {
-      const result = await this.client.settle({
-        ucpVersion,
-        // SAC-3: agents submit the wallet's whole x402 wrapper
-        // ({ x402Version, paymentPayload, paymentRequirements }); Prism's
-        // /settle wants the INNER paymentPayload (carrying accepted/payload).
-        // Unwrap it — matching pickAcceptsEntryForCredential and
-        // validate-signed-amount, which already accept both shapes. A flat
-        // payload passes through unchanged.
-        paymentPayload: unwrapCredentialForSettle(credential),
-        paymentRequirements: requirements,
-      })
-
-      if (!result.success) {
-        return { success: false, error: result.error }
-      }
-
-      return {
-        success: true,
-        transactionReference: result.transactionHash,
-      }
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Unknown error"
-      return { success: false, error: `Prism settlement failed: ${message}` }
+    const checked = validateSignedAgainstStored(signed, accepts)
+    if (!checked.ok) {
+      return { ok: false, code: checked.code, error: checked.message }
     }
+
+    const expiresAt = authorizationExpiry(signed)
+    if (expiresAt !== undefined && expiresAt <= Date.now()) {
+      return { ok: false, code: "payment_expired", error: "The signed authorization has expired. Sign a new payment and complete again." }
+    }
+
+    return { ok: true, signed, entry: checked.entry, settled }
   }
 
-  // -------------------------------------------------
-  // Response formatting
-  // -------------------------------------------------
 
   getUcpCheckoutHandlers(checkoutMetadata?: Record<string, unknown>): Record<string, unknown[]> {
     const data = checkoutMetadata?.[PRISM_HANDLER_ID] as PrismCheckoutData | undefined
@@ -245,9 +255,6 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     return data?.acp ? [data.acp] : []
   }
 
-  // -------------------------------------------------
-  // Internal
-  // -------------------------------------------------
 
   private async fetchUcpDiscovery(ucpVersion: string): Promise<UcpHandlersDiscoveryResponse> {
     const now = Date.now()
@@ -270,15 +277,15 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
   }
 
-  private async fetchAcpDiscovery(ucpVersion: string): Promise<AcpHandler[]> {
+  private async fetchAcpDiscovery(): Promise<AcpHandler[]> {
     const now = Date.now()
-    const cache = this.acpDiscoveryCache.get(ucpVersion)
+    const cache = this.acpDiscoveryCache.get(this.apiUrl)
     if (cache && now < cache.expiry) {
       return cache.data
     }
     try {
-      const data = await this.client.fetchAcpHandlers(ucpVersion)
-      this.acpDiscoveryCache.set(ucpVersion, { data, expiry: now + this.DISCOVERY_TTL })
+      const data = await this.client.fetchAcpHandlers()
+      this.acpDiscoveryCache.set(this.apiUrl, { data, expiry: now + this.DISCOVERY_TTL })
       return data
     } catch (error: unknown) {
       console.error(`[prism-handler] ACP discovery failed: ${error}`)
@@ -286,11 +293,6 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
   }
 
-  /**
-   * Pull the x402 PaymentHandlerConfig from stored checkout metadata.
-   * Prefers UCP storage; falls back to ACP. Both wrap the same x402
-   * payload so settlement works against either.
-   */
   private extractPaymentConfig(
     checkoutMetadata?: Record<string, unknown>,
   ): PaymentHandlerConfig | null {
@@ -331,87 +333,13 @@ export function isContractEntry(data: unknown): data is UcpHandlersDiscoveryResp
   return firstCanonicalEntry(data) !== null
 }
 
-/**
- * Unwrap the settle credential (SAC-3). Agents submit the wallet's whole x402
- * authorization wrapper `{ x402Version, paymentPayload, paymentRequirements }`,
- * but Prism's `/settle` expects the inner `paymentPayload` (with accepted /
- * payload). Return that inner object when present; pass a flat payload — or a
- * non-object — through unchanged.
- */
-export function unwrapCredentialForSettle(credential: unknown): unknown {
-  if (credential && typeof credential === "object" && "paymentPayload" in credential) {
-    return (credential as { paymentPayload: unknown }).paymentPayload
-  }
-  return credential
-}
-
-/**
- * Pick the `accepts[]` entry that the wallet signed against. Match on
- * (network, asset) — the only pair that uniquely identifies an entry when
- * a cart advertises multiple assets per network. Falls back to legacy
- * (network, scheme) or single-entry resolution when the credential
- * doesn't carry a readable `accepted` block.
- */
-export function pickAcceptsEntryForCredential(
-  accepts: X402AcceptEntry[],
-  credential: unknown,
-): X402AcceptEntry | null {
-  const { network: signedNetwork, asset: signedAsset } =
-    readAcceptedFromCredential(credential)
-
-  if (signedNetwork && signedAsset) {
-    const match = accepts.find(
-      (a) =>
-        a.network === signedNetwork &&
-        a.asset.toLowerCase() === signedAsset.toLowerCase(),
-    )
-    // When the credential carries asset info, treat it as authoritative.
-    // Don't silently substitute a different asset just because the network
-    // matches — that's what produced the picker-mismatch class of bugs.
-    return match ?? null
-  }
-
-  // Legacy fallbacks for credential shapes that don't carry an `accepted`
-  // block at all (only a hoisted top-level network/scheme).
-  const network = readString(credential, "network")
-  const scheme = readString(credential, "scheme")
-  if (network) {
-    const byNetworkAndScheme = scheme
-      ? accepts.find((a) => a.network === network && a.scheme === scheme)
-      : undefined
-    if (byNetworkAndScheme) return byNetworkAndScheme
-
-    const byNetwork = accepts.filter((a) => a.network === network)
-    if (byNetwork.length === 1) return byNetwork[0]
-    if (byNetwork.length > 1) return null
-  }
-
-  return accepts.length === 1 ? accepts[0] : null
+function authorizationExpiry(signed: SignedPaymentSummary): number | undefined {
+  if (signed.validBefore === undefined || !/^\d+$/.test(signed.validBefore)) return undefined
+  return Number(signed.validBefore) * 1000
 }
 
 function readString(value: unknown, key: string): string | undefined {
   if (typeof value !== "object" || value === null) return undefined
   const v = (value as Record<string, unknown>)[key]
   return typeof v === "string" && v.length > 0 ? v : undefined
-}
-
-function readAcceptedFromCredential(
-  credential: unknown,
-): { network?: string; asset?: string } {
-  if (typeof credential !== "object" || credential === null) return {}
-  const obj = credential as Record<string, unknown>
-  // Handles flat paymentPayload shape (the obj IS the payload) AND wrapper
-  // shape ({paymentPayload, paymentRequirements}).
-  const pp =
-    obj.paymentPayload && typeof obj.paymentPayload === "object"
-      ? (obj.paymentPayload as Record<string, unknown>)
-      : obj
-  const accepted = pp.accepted
-  if (typeof accepted !== "object" || accepted === null) return {}
-  const ar = accepted as Record<string, unknown>
-  const network =
-    typeof ar.network === "string" && ar.network.length > 0 ? ar.network : undefined
-  const asset =
-    typeof ar.asset === "string" && ar.asset.length > 0 ? ar.asset : undefined
-  return { network, asset }
 }

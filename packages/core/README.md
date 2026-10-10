@@ -72,6 +72,7 @@ class MyPaymentHandler implements PaymentHandlerAdapter {
   getAcpCheckoutHandlers(metadata?) { /* ... */ }
   prepareCheckoutPayment(input) { /* ... */ }
   settlePayment(input) { /* ... */ }
+  settlementKeys(input) { /* required: keys that identify this payment and the amount it will settle, declared before it is submitted */ }
 }
 ```
 
@@ -97,7 +98,7 @@ class MyPaymentHandler implements PaymentHandlerAdapter {
 | `formatUcpError` / `formatAcpError` | function | Format protocol-compliant error responses |
 | `saleorToUcpAddress` / `saleorToAcpAddress` | function | Translate Saleor addresses to protocol format |
 | `resolveUcpCheckoutStatus` / `resolveAcpCheckoutStatus` | function | Map Saleor checkout state to protocol status |
-| `toMinor` | function | Convert decimal amounts to minor units (cents) |
+| `toMinor` / `fromMinor` / `minorToDecimalString` | function | Convert money by each currency's own minor unit (USD 2, JPY 0, KWD 3); unknown currencies throw `UnsupportedCurrencyError` |
 
 ## License
 

@@ -19,23 +19,38 @@ import type {
   CheckoutPrepareInput,
   PaymentSettleInput,
   PaymentSettleResult,
+  SettledAmount,
 } from "../types/payment-handler-adapter.js"
+
+type RefusedSettlement = Extract<PaymentSettleResult, { success: false }>
+
+export type ResolvedSettlement =
+  | { kind: "declared"; handlerId: string; keys: readonly string[]; settled?: SettledAmount; expiresAt?: number; details?: Readonly<Record<string, string>> }
+  | { kind: "unchecked"; handlerId: string }
+  | { kind: "refused"; code?: string; error: string }
 
 export class PaymentHandlerRegistry {
   private adapters: PaymentHandlerAdapter[] = []
+  private channelAllowList = new Map<string, readonly string[] | null>()
 
   /**
    * Register a payment handler adapter.
    * Prevents duplicate registration by adapter ID.
    */
-  registerAdapter(adapter: PaymentHandlerAdapter): void {
+  registerAdapter(adapter: PaymentHandlerAdapter, channels: readonly string[] | null = null): void {
     if (this.adapters.some((a) => a.id === adapter.id)) {
       console.warn(`[payment-handler-registry] Adapter "${adapter.id}" already registered, skipping`)
       return
     }
 
     this.adapters.push(adapter)
+    this.channelAllowList.set(adapter.id, channels)
     console.log(`[payment-handler-registry] Registered: ${adapter.name} (${adapter.id})`)
+  }
+
+  private servesChannel(adapter: PaymentHandlerAdapter, channel: string): boolean {
+    const allowed = this.channelAllowList.get(adapter.id)
+    return allowed === null || (allowed !== undefined && allowed.includes(channel))
   }
 
   getAdapters(): readonly PaymentHandlerAdapter[] {
@@ -105,20 +120,19 @@ export class PaymentHandlerRegistry {
     if (this.adapters.length === 0) return {}
 
     const results = await Promise.allSettled(
-      this.adapters.map(async (a) => ({
-        id: a.id,
-        result: await a.prepareCheckoutPayment(input),
-      })),
+      this.adapters.map((a) => (this.servesChannel(a, input.channel) ? a.prepareCheckoutPayment(input) : null)),
     )
 
     const output: Record<string, unknown | null> = {}
-    for (const result of results) {
+    results.forEach((result, index) => {
+      const id = this.adapters[index].id
       if (result.status === "fulfilled") {
-        output[result.value.id] = result.value.result
+        output[id] = result.value
       } else {
-        console.error(`[payment-handler-registry] Checkout-prepare failed:`, result.reason)
+        console.error(`[payment-handler-registry] Checkout-prepare failed for ${id}:`, result.reason)
+        output[id] = null
       }
-    }
+    })
 
     return output
   }
@@ -128,15 +142,60 @@ export class PaymentHandlerRegistry {
   // -------------------------------------------------
 
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
+    const resolved = this.resolveSettlementAdapter(input)
+    if ("refusal" in resolved) return resolved.refusal
+    return resolved.adapter.settlePayment({ ...input, handlerId: resolved.adapter.id })
+  }
+
+  resolveSettlement(input: PaymentSettleInput): ResolvedSettlement {
+    const resolved = this.resolveSettlementAdapter(input)
+    if ("refusal" in resolved) return { kind: "refused", code: resolved.refusal.code, error: resolved.refusal.error }
+    const { adapter } = resolved
+    const declared = adapter.settlementKeys?.({ ...input, handlerId: adapter.id })
+    if (declared && !declared.ok) return { kind: "refused", code: declared.code, error: declared.error }
+    if (!declared || declared.keys.length === 0 || !declared.keys.every((key) => typeof key === "string" && key.length > 0)) {
+      return { kind: "unchecked", handlerId: adapter.id }
+    }
+    return {
+      kind: "declared",
+      handlerId: adapter.id,
+      keys: declared.keys,
+      ...(declared.settled === undefined ? {} : { settled: declared.settled }),
+      ...(declared.expiresAt === undefined ? {} : { expiresAt: declared.expiresAt }),
+      ...(declared.details === undefined ? {} : { details: declared.details }),
+    }
+  }
+
+  private resolveSettlementAdapter(input: PaymentSettleInput): { adapter: PaymentHandlerAdapter } | { refusal: RefusedSettlement } {
     const adapter = this.getAdapter(input.handlerId)
     if (!adapter) {
+      return { refusal: { success: false, outcome: "declined", error: `Unknown payment handler: ${input.handlerId}` } }
+    }
+
+    if (!this.servesChannel(adapter, input.channel)) {
       return {
-        success: false,
-        error: `Unknown payment handler: ${input.handlerId}`,
+        refusal: {
+          success: false,
+          outcome: "declined",
+          code: "payment_handler_unavailable",
+          error: `Payment handler ${adapter.id} is not enabled for channel ${input.channel}`,
+        },
       }
     }
 
-    return adapter.settlePayment({ ...input, handlerId: adapter.id })
+    const prepared = input.checkoutMetadata?.[adapter.id]
+    if (typeof prepared !== "object" || prepared === null || Array.isArray(prepared)) {
+      return {
+        refusal: {
+          success: false,
+          outcome: "declined",
+          code: "payment_handler_not_prepared",
+          error: `Payment handler ${adapter.id} was not prepared for this checkout`,
+        },
+      }
+    }
+
+    return { adapter }
   }
 
   // -------------------------------------------------

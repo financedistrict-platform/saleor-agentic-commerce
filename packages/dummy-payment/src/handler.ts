@@ -16,6 +16,7 @@ import type {
   CheckoutPrepareInput,
   PaymentSettleInput,
   PaymentSettleResult,
+  SettlementDeclaration,
 } from "@financedistrict/saleor-agentic-commerce-core"
 
 // =====================================================
@@ -62,6 +63,7 @@ export type DummyPaymentHandlerOptions = {
   mode?: DummyMode
   /** Artificial latency before settlement responds, in ms (default: 0). */
   delayMs?: number
+  allowInProduction?: boolean
 }
 
 // =====================================================
@@ -74,6 +76,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
 
   private mode: DummyMode
   private delayMs: number
+  private allowInProduction: boolean
 
   constructor(opts: DummyPaymentHandlerOptions = {}) {
     // Env wins over passed config (Path A/B/C convention).
@@ -88,6 +91,14 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
     this.delayMs = Number.isFinite(envDelay) && envDelay >= 0
       ? envDelay
       : (opts.delayMs ?? 0)
+    this.allowInProduction = opts.allowInProduction === true
+    if (!this.isActive()) {
+      console.warn(`[dummy-payment] ${DUMMY_HANDLER_ID} is disabled outside development and test; pass allowInProduction: true to enable it`)
+    }
+  }
+
+  private isActive(): boolean {
+    return this.allowInProduction || process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test"
   }
 
   // -------------------------------------------------
@@ -95,6 +106,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   // -------------------------------------------------
 
   async getUcpDiscoveryHandlers(_ucpVersion?: string): Promise<Record<string, unknown[]>> {
+    if (!this.isActive()) return {}
     return {
       [DUMMY_HANDLER_ID]: [
         {
@@ -109,6 +121,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   }
 
   async getAcpDiscoveryHandlers(): Promise<unknown[]> {
+    if (!this.isActive()) return []
     return [
       {
         id: "v1",
@@ -132,15 +145,16 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   async prepareCheckoutPayment(
     input: CheckoutPrepareInput,
   ): Promise<unknown> {
+    if (!this.isActive()) return null
     if (this.delayMs > 0) await sleep(this.delayMs)
 
     const { checkoutId, total, currencyCode, checkoutMetadata } = input
 
     // Idempotency — return prior config if amount unchanged.
     const existing = checkoutMetadata?.[DUMMY_HANDLER_ID] as
-      | { _prepared_amount?: number }
+      | { _prepared_amount?: number; _prepared_currency?: string }
       | undefined
-    if (existing && existing._prepared_amount === total) {
+    if (existing && existing._prepared_amount === total && existing._prepared_currency === currencyCode) {
       return existing
     }
 
@@ -154,6 +168,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
         mode: this.mode,
       },
       _prepared_amount: total,
+      _prepared_currency: currencyCode,
     }
   }
 
@@ -161,10 +176,25 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
   // Settlement
   // -------------------------------------------------
 
+  settlementKeys(input: PaymentSettleInput): SettlementDeclaration {
+    const refused = this.refuseSettlement(input)
+    if (refused) return { ok: false, ...refused }
+    const prepared = input.checkoutMetadata?.[DUMMY_HANDLER_ID] as { _prepared_amount: number; _prepared_currency: string }
+    return {
+      ok: true,
+      keys: [JSON.stringify(["dummy", input.checkoutId, intentIdOf(input)])],
+      settled: { amount: prepared._prepared_amount, currency: prepared._prepared_currency },
+    }
+  }
+
   async settlePayment(
     input: PaymentSettleInput,
   ): Promise<PaymentSettleResult> {
+    const refused = this.refuseSettlement(input)
+    if (refused) return { success: false, outcome: "declined", ...refused }
     if (this.delayMs > 0) await sleep(this.delayMs)
+
+    const prepared = input.checkoutMetadata?.[DUMMY_HANDLER_ID] as { _prepared_amount: number; _prepared_currency: string }
 
     const succeed =
       this.mode === "always_succeed"
@@ -176,6 +206,7 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
     if (!succeed) {
       return {
         success: false,
+        outcome: "declined",
         error: `Dummy handler simulated failure (mode=${this.mode})`,
       }
     }
@@ -187,7 +218,23 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
     return {
       success: true,
       transactionReference: txRef,
+      settled: { amount: prepared._prepared_amount, currency: prepared._prepared_currency },
+      replayKeys: [],
     }
+  }
+
+  private refuseSettlement(input: PaymentSettleInput): { error: string; code?: string } | null {
+    if (!this.isActive()) {
+      return { code: "payment_handler_unavailable", error: `${DUMMY_HANDLER_ID} is disabled outside development and test` }
+    }
+    const prepared = input.checkoutMetadata?.[DUMMY_HANDLER_ID] as
+      | { _prepared_amount?: number; _prepared_currency?: string }
+      | null
+      | undefined
+    if (!Number.isSafeInteger(prepared?._prepared_amount) || typeof prepared?._prepared_currency !== "string" || intentIdOf(input) === undefined) {
+      return { error: "No prepared dummy payment found on checkout" }
+    }
+    return null
   }
 
   // -------------------------------------------------
@@ -241,6 +288,12 @@ export class DummyPaymentHandler implements PaymentHandlerAdapter {
 // =====================================================
 // Internal
 // =====================================================
+
+function intentIdOf(input: PaymentSettleInput): string | undefined {
+  const prepared = input.checkoutMetadata?.[DUMMY_HANDLER_ID] as { config?: { intent_id?: unknown } } | null | undefined
+  const intent = prepared?.config?.intent_id
+  return typeof intent === "string" && intent.length > 0 ? intent : undefined
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

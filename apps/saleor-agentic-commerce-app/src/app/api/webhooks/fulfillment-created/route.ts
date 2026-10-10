@@ -3,7 +3,6 @@ import {
   verifyWebhook,
   isAgentOrder,
   appendOrderEvent,
-  webhookError,
 } from "@/lib/webhook-utils"
 import type { OrderEvent } from "@/lib/metadata-keys"
 
@@ -32,11 +31,13 @@ type FulfillmentCreatedPayload = {
  * metadata so the SDK can include it in UCP order responses.
  */
 export async function POST(request: NextRequest) {
-  const context = await verifyWebhook(request)
+  const verified = await verifyWebhook(request)
 
-  if (!context) {
-    return webhookError("Webhook verification failed")
+  if (!verified.ok) {
+    return verified.response
   }
+
+  const context = verified.context
 
   const payload = context.payload as FulfillmentCreatedPayload
   const fulfillment = payload.fulfillment

@@ -139,10 +139,149 @@ createAgenticCommerce({
   ucpSupportedVersions?: string[],  // Extra UCP versions (default: every other known version)
   ucpVersionNegotiation?: "lenient" | "strict",  // default: "lenient"
   acpVersion?: string,         // ACP version (default: "2026-01-30")
-  acpApiKey?: string,          // API key for ACP Bearer token auth
+  acpApiKey?: string,          // Bearer key every ACP request must present; with none set, ACP refuses all requests
   paymentHandlers?: PaymentHandlerAdapter[],  // Payment handler adapters
+  paymentReplayStore?: PaymentReplayStore,     // Required outside development and test
 })
 ```
+
+### ACP access
+
+ACP routes accept only `Authorization: Bearer <acpApiKey>`, compared in
+constant time. With no `acpApiKey` (or an empty one) every ACP route answers
+401. The App's `/api/config-public` does not return the key set in the App
+dashboard; pass the same value as `acpApiKey` here, or set `acpEnabled: false`.
+
+### UCP platform key
+
+UCP routes stay open. If a request sends `X-API-Key`, it must equal the store's
+API key (`acpApiKey`), compared in constant time; otherwise the answer is 401
+`key_not_found`. This includes any key sent while no `acpApiKey` is set. A
+missing or blank header is served as before. `GET /.well-known/ucp` ignores the
+header. Ownership of sessions and orders still rests on `UCP-Session-Secret`.
+
+### Order reads
+
+`POST /api/ucp/checkout-sessions` returns a `UCP-Session-Secret` header once.
+Only its SHA-256 hash is stored, in checkout metadata, and Saleor carries it to
+the order. `GET /api/ucp/orders/{id}` needs that header: without it the answer
+is 401, and with a wrong secret, or for an order whose checkout never had one,
+it is 404. The `UCP-Agent` profile header identifies no one. If the hash cannot
+be stored, creation answers 503 and no secret is handed out.
+
+### Quote lifetime
+
+Every quote is stamped with the time it was made and is good for 15 minutes.
+Completing with an older quote answers 409 `payment_quote_expired`; an update to
+the checkout makes a fresh one. A quote with no readable timestamp is treated as
+missing. A payment already taken is never held back because its quote aged out.
+
+### Payment replay store
+
+Before a payment is submitted to its gateway, the settle path asks the payment
+handler for the keys that identify the payment (for Prism: the signed
+authorization's network, asset, payer and nonce) and claims them for the
+checkout. A key held by another checkout stops the request with
+`payment_already_used` and nothing is submitted. A handler that declares no keys
+is refused with `settled_payment_unchecked` before anything is submitted. `settlementKeys` is a
+required method of `PaymentHandlerAdapter`: handlers written against earlier releases need it,
+and TypeScript fails to compile without it. After
+the gateway settles, the settlement reference and the keys the handler reports
+(for Prism: the transaction hash) are claimed as well.
+
+`claim(keys, checkoutId)` must be atomic: claim every key or none, and succeed
+again when the same checkout claims its own keys. `claimedBy(checkoutId)` returns
+every key the checkout has claimed. Back both with a durable table shared by
+every storefront instance, for example Postgres with a primary key on `key` and
+an index on the checkout id, or Redis `SET NX` plus a set per checkout. A store
+that loses claims also loses the ability to finish a settlement whose record
+could not be saved.
+
+`createAgenticCommerce()` throws when no store is passed and `NODE_ENV` is not
+`development` or `test`. In development and test it falls back to
+`createMemoryPaymentReplayStore()`, which only protects one process.
+
+```ts
+import type { PaymentReplayStore } from "@financedistrict/saleor-agentic-commerce-core"
+
+const paymentReplayStore: PaymentReplayStore = {
+  async claim(keys, checkoutId) {
+    return db.claimPaymentKeys(keys, checkoutId)
+  },
+  async claimedBy(checkoutId) {
+    return db.paymentKeysClaimedBy(checkoutId)
+  },
+}
+```
+
+### Settlement states
+
+The settle path records its progress on the checkout, in the private metadata key
+`agentic_commerce__settlement`, before it submits a payment:
+
+| State | Meaning | Next `complete` |
+|---|---|---|
+| `pending` | The payment is about to be, or was, submitted and no result is recorded. | If the store holds the settlement reference for the checkout, finishes the order from it without calling the gateway. Otherwise 409 `settlement_pending`; the payment is not submitted again. |
+| `settled` | The gateway settled the payment. A record without a state counts as settled. | Creates the transaction and completes the order. |
+| `held` | The payment settled but cannot be accepted (`settled_payment_mismatch`, `settled_payment_unchecked` or `payment_already_used`). | The same 409; nothing is submitted. |
+| `failed` | The gateway clearly declined the payment. The record keeps the amount that was about to be submitted. | Submits again, unless the store already holds a settlement reference for the checkout; then finishes the order from it at the recorded amount. A `failed` record without an amount gets 409 `settlement_pending` in that case. |
+
+A failure whose outcome is unknown (timeout, network error, an unreadable reply or
+a handler that does not say) leaves the checkout `pending`. Only a clear decline
+makes it `failed`. Handlers report this with `outcome: "declined" | "unknown"` on a
+failed settle result; a missing outcome counts as unknown.
+
+`failed` is written only when the gateway answers clearly. How the Prism handler sorts
+HTTP replies into declined and unknown is an assumption that has not been tried against a
+real gateway. For a scheme whose authorization has no one-time nonce on chain, two
+parallel completes of the same checkout are not safe, because reading the record back
+only narrows the window.
+
+| Code | Status | Meaning |
+|---|---|---|
+| `settlement_pending` | 409 | A submitted payment has no recorded result, the pending record could not be read back after three tries, or the store holds a settlement that no record accounts for. Nothing is submitted again. |
+| `settlement_in_progress` | 409 | Another request is settling the same checkout, or already settled it while this request was declined. Retry shortly. The check reads the record back after writing it, which narrows the window but is not a lock. |
+| `settlement_not_started` | 422 | The pending record could not be saved, so the payment was not submitted. Retry. |
+| `payment_amount_mismatch` | 422 | The handler declared an amount other than the quote, so nothing was submitted. |
+| `settlement_not_recorded` | 422 | The payment settled but the record could not be saved after three tries. Retry; the order is finished from the claimed reference. |
+| `payment_expired` | 422 | The signed authorization has expired. Sign a new payment. |
+
+Before a payment is submitted, the amount the handler declares it will settle must equal the
+quote that was checked against the checkout total. A recovered or staff-resolved settlement is
+recorded at that amount.
+
+#### Resolving a pending or held settlement
+
+The plugin does not look anything up on a chain or at a gateway. A person does, with
+the facts the plugin recorded. `pending` and `held` records in the checkout's private
+metadata carry `attemptId`, `startedAt`, `expiresAt` (the authorization's `validBefore`),
+`handlerId`, `reference` (held only) and the handler's `details`. For Prism the details are
+`network`, `asset`, `payer`, `nonce` and `validBefore`. No signature is stored. The same
+facts are logged once, as one `console.error` line containing `settlement pending needs review`
+or `settlement held needs review` and the `checkoutId`, when a checkout enters either state.
+
+A `pending` checkout is finished automatically when the store holds the settlement
+reference for it. Otherwise look the payment up by hand:
+
+1. Open the block explorer of the `network` and the token contract at `asset`.
+2. Look for an `AuthorizationUsed` event on that token with `authorizer` = `payer` and `nonce` = the recorded nonce.
+3. Decide:
+   - The event exists: the payment settled. Take the transaction hash and run `resolvePendingSettlement(agenticCommerce, checkoutId, { settled: true, reference: transactionHash })`. The next `complete` creates the transaction and the order.
+   - No event, and the time is after `validBefore`: the authorization can no longer settle. Run `resolvePendingSettlement(agenticCommerce, checkoutId, { settled: false })`. The next `complete` submits again (the agent has to sign a new payment, since the old one has expired).
+   - No event, and the time is before `validBefore`: wait. The payment may still settle.
+   - Never resolve as not settled when the nonce has been used, or while the payment may still settle: the buyer would pay twice.
+
+A `held` checkout means the gateway settled the payment (`reference`) but the settlement cannot be accepted (see `code` and `reason`). It is never submitted again and the order is not placed. Check the reference at the explorer, then refund the buyer or place the order by hand in Saleor.
+
+```ts
+import { resolvePendingSettlement } from "@financedistrict/saleor-agentic-commerce-nextjs"
+import { agenticCommerce } from "./lib/agentic-commerce"
+
+const result = await resolvePendingSettlement(agenticCommerce, checkoutId, { settled: true, reference: transactionHash })
+if (!result.ok) throw new Error(`${result.code}: ${result.error}`)
+```
+
+Export the instance from the config file as `agenticCommerce` and run this from a script with the same configuration as the storefront. It is not exposed over HTTP.
 
 ## UCP versions
 

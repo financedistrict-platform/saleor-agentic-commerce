@@ -10,3 +10,6 @@ export type { AgenticCommerceConfig, AgenticCommerceInstance } from "./config.js
 
 export { createUcpRoutes } from "./routes/ucp-routes.js"
 export { createAcpRoutes } from "./routes/acp-routes.js"
+
+export { resolvePendingSettlement } from "./routes/resolve-pending-settlement.js"
+export type { PendingSettlementOutcome, ResolvePendingSettlementResult } from "./routes/resolve-pending-settlement.js"

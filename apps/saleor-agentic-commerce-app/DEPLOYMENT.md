@@ -195,7 +195,8 @@ token persists itself — there is no token-capture-and-redeploy dance.
 
 ## Steady-state operations
 
-- **Webhooks** flow Saleor → App on the four events listed in the manifest. Failures are visible in the App's logs and in Saleor's dashboard under each app's webhook delivery history.
+- **Webhooks** flow Saleor → App on the four events listed in the manifest. Failures are visible in the App's logs and in Saleor's dashboard under each app's webhook delivery history. Every webhook is checked against the `saleor-signature` header using the key set at `<saleor origin>/.well-known/jwks.json`; an unsigned, wrongly signed or modified payload is answered with 401. When that key set cannot be fetched the answer is 503, so Saleor retries the delivery.
+- **Storefront secrets**: `/api/config-public` never returns secret fields. The storefront supplies its own Prism key (`PRISM_API_KEY`) and ACP key (`acpApiKey` passed to `createAgenticCommerce`); the App dashboard values are not shared with it.
 - **Token rotation**: if the token is ever invalidated (e.g. App is uninstalled and reinstalled), repeat the install dance. Old token in Secrets Manager won't work.
 - **Updating the manifest**: changing the manifest (e.g. adding new webhooks, changing permissions) requires the merchant to either reinstall the App or trigger a manifest sync. There is no "auto-upgrade in place" today.
 - **Multi-environment**: tokens do NOT transfer between environments. Test and prod each get their own install + own token.

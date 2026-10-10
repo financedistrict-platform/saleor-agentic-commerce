@@ -164,6 +164,8 @@ NEXT_PUBLIC_STOREFRONT_URL=       # Public URL of this storefront
 - **`MANAGE_ORDERS`** — complete checkouts into orders
 - **`HANDLE_PAYMENTS`** — **required**: `transactionCreate` (called when a payment settles) is gated on it. Without it, a payment settles and then the order creation fails, leaving the buyer charged with no order. Do not omit it.
 
+`MANAGE_ORDERS` also lets the storefront read the channel's order settings. The channel must have **"Allow unpaid orders" turned off**. If it is on, or the setting cannot be read, complete returns `channel_allows_unpaid_orders` / `channel_order_settings_unreadable` (409) and never settles, and sessions report the same code instead of probing readiness.
+
 ## Step 5: Verify Setup
 
 Show the developer the route tree:

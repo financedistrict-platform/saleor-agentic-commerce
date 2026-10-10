@@ -74,6 +74,8 @@ export interface PaymentHandlerAdapter {
    */
   settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult>
 
+  settlementKeys(input: PaymentSettleInput): SettlementDeclaration
+
   /**
    * Return UCP payment_handlers block for a checkout session response.
    * Reads stored data from checkout metadata.
@@ -96,6 +98,7 @@ export interface PaymentHandlerAdapter {
 export type CheckoutPrepareInput = {
   /** Saleor checkout ID */
   checkoutId: string
+  channel: string
   /** Total amount in minor units (cents) */
   total: number
   /** ISO 4217 currency code (e.g., "USD", "EUR") */
@@ -112,6 +115,7 @@ export type CheckoutPrepareInput = {
 type PaymentSettleInputBase = {
   /** Saleor checkout ID */
   checkoutId: string
+  channel: string
   /** The handler ID that the agent selected */
   handlerId: string
   ucpVersion: string
@@ -125,10 +129,30 @@ export type PaymentSettleInput =
   | (PaymentSettleInputBase & { protocol?: "ucp"; instrumentType?: string })
   | (PaymentSettleInputBase & { protocol: "acp" })
 
-export type PaymentSettleResult = {
-  success: boolean
-  /** Transaction reference (e.g., blockchain tx hash) */
-  transactionReference?: string
-  /** Error message on failure */
-  error?: string
+export type SettlementDeclaration =
+  | { ok: true; keys: readonly string[]; settled?: SettledAmount; expiresAt?: number; details?: Readonly<Record<string, string>> }
+  | { ok: false; error: string; code?: string }
+
+export type SettledAmount = {
+  amount: number
+  currency: string
 }
+
+export type SettleOutcome = "declined" | "unknown"
+
+export type PaymentSettleResult =
+  | {
+      success: true
+      /** Transaction reference (e.g., blockchain tx hash) */
+      transactionReference: string
+      settled: SettledAmount
+      replayKeys: readonly string[]
+    }
+  | {
+      success: false
+      /** Error message on failure */
+      error: string
+      code?: string
+      settledReference?: string
+      outcome?: SettleOutcome
+    }
