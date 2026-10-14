@@ -134,15 +134,23 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
   function rejectionResponse(resolution: UcpResolution): Response | null {
     if (!resolution.rejection) return null
-    const { status, code, content } = resolution.rejection
-    return ucpError(resolution.wire, code, content, status)
+    const { status, code, content, retryAfterSeconds } = resolution.rejection
+    return Response.json(resolution.wire.error({ code, content }), {
+      status,
+      ...(retryAfterSeconds !== undefined ? { headers: { "Retry-After": String(retryAfterSeconds) } } : {}),
+    })
   }
 
-  async function resolveScope(request: Request): Promise<UcpRequestScope | Response> {
+  async function resolveScope(
+    request: Request,
+    options: { deferToSessionPin?: boolean } = {},
+  ): Promise<UcpRequestScope | Response> {
     const resolution = await resolveUcpVersion(ucpRegistry, request, agentProfileFetcher)
     logUcpResolution(resolution)
-    const rejection = rejectionResponse(resolution)
-    if (rejection) return rejection
+    if (!(options.deferToSessionPin && resolution.rejection?.pinRecoverable)) {
+      const rejection = rejectionResponse(resolution)
+      if (rejection) return rejection
+    }
     const presentedKey = request.headers.get("X-API-Key")?.trim()
     if (presentedKey && !secretsMatch(presentedKey, config.acpApiKey ?? "")) {
       return ucpError(
@@ -158,7 +166,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
   function pinScope(scope: UcpRequestScope, metadata: Record<string, unknown>): UcpRequestScope | Response {
     const pinned = applyUcpSessionPin(ucpRegistry, scope.resolution, metadata[UCP_VERSION_METADATA_KEY])
-    if (pinned === scope.resolution) return scope
+    if (pinned === scope.resolution) return rejectionResponse(pinned) ?? scope
     if (pinned.version !== scope.version) logUcpResolution(pinned)
     return rejectionResponse(pinned) ?? scopeOf(pinned)
   }
@@ -415,7 +423,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async GET(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 
@@ -443,7 +451,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async PUT(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 
@@ -565,7 +573,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 
@@ -664,7 +672,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 

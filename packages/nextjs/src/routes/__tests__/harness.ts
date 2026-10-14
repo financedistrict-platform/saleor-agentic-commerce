@@ -186,6 +186,7 @@ export const AGENT_0123 = "https://agent.example/0123"
 export const AGENT_UNKNOWN = "https://agent.example/unknown"
 export const AGENT_UNDECLARED = "https://agent.example/undeclared"
 export const AGENT_DOWN = "https://agent.example/down"
+export const AGENT_BUSY = "https://agent.example/busy"
 export const AGENT_REDIRECTED = "https://agent.example/redirected"
 export const AGENT_REDIRECTED_NO_LOCATION = "https://agent.example/redirected-no-location"
 
@@ -195,6 +196,7 @@ export const PROFILES: Record<string, AgentProfileResult> = {
   [AGENT_0123]: { status: "ok", version: "2026-01-23" },
   [AGENT_UNKNOWN]: { status: "ok", version: "2027-01-01" },
   [AGENT_UNDECLARED]: { status: "ok", version: null },
+  [AGENT_BUSY]: { status: "busy" },
   [AGENT_REDIRECTED]: { status: "redirected", location: "https://elsewhere.example/profile" },
   [AGENT_REDIRECTED_NO_LOCATION]: { status: "redirected", location: null },
 }

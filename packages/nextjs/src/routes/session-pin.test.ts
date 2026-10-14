@@ -3,6 +3,7 @@ import type { SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-co
 import {
   AGENT_0408,
   AGENT_0825,
+  AGENT_BUSY,
   AGENT_DOWN,
   buildRoutes,
   CHECKOUT_ID,
@@ -113,5 +114,50 @@ describe("checkout session version pin", () => {
     expect(update.status).toBe(422)
     expect(cancel.status).toBe(200)
     expect(await cancel.json()).toMatchObject({ ucp: { version: "2026-08-25" }, status: "canceled" })
+  })
+
+  describe("when the agent profile fetcher is busy under strict negotiation", () => {
+    const STRICT = { ucpVersionNegotiation: "strict" as const }
+
+    it.each([
+      ["GET", (routes: ReturnType<typeof buildRoutes>["routes"]) => routes.checkoutSession.GET(ucpRequest(`${SESSIONS}/${CHECKOUT_ID}`, { agent: AGENT_BUSY }), params({ id: CHECKOUT_ID }))],
+      ["PUT", (routes: ReturnType<typeof buildRoutes>["routes"]) => routes.checkoutSession.PUT(ucpRequest(`${SESSIONS}/${CHECKOUT_ID}`, { agent: AGENT_BUSY, method: "PUT", body: {} }), params({ id: CHECKOUT_ID }))],
+      ["cancel", (routes: ReturnType<typeof buildRoutes>["routes"]) => routes.checkoutSessionCancel.POST(ucpRequest(`${SESSIONS}/${CHECKOUT_ID}/cancel`, { agent: AGENT_BUSY, body: {} }), params({ id: CHECKOUT_ID }))],
+    ])("keeps a pinned session working on %s in its pinned version", async (_label, call) => {
+      const { routes } = buildRoutes({ config: STRICT, checkouts: [pinnedCheckout("2026-01-23")] })
+      const response = await call(routes)
+
+      expect(response.status).toBe(200)
+      expect((await response.json()).ucp.version).toBe("2026-01-23")
+    })
+
+    it("keeps a pinned session working on complete in its pinned version", async () => {
+      const { routes } = buildRoutes({ config: STRICT, checkouts: [pinnedCheckout("2026-01-23")] })
+      const response = await routes.checkoutSessionComplete.POST(
+        ucpRequest(`${SESSIONS}/${CHECKOUT_ID}/complete`, { agent: AGENT_BUSY, body: { payment: { instruments: [{ id: "i1" }] } } }),
+        params({ id: CHECKOUT_ID }),
+      )
+
+      expect(response.status).toBe(400)
+      expect(await response.json()).toMatchObject({ ucp: { version: "2026-01-23" }, status: "requires_escalation" })
+    })
+
+    it("answers 503 with Retry-After for a session without a pin", async () => {
+      const { routes } = buildRoutes({ config: STRICT, checkouts: [pinnedCheckout()] })
+      const response = await routes.checkoutSession.GET(ucpRequest(`${SESSIONS}/${CHECKOUT_ID}`, { agent: AGENT_BUSY }), params({ id: CHECKOUT_ID }))
+
+      expect(response.status).toBe(503)
+      expect(response.headers.get("Retry-After")).toBe("3")
+      expect(await response.json()).toMatchObject({ messages: [{ code: "profile_fetch_busy" }] })
+    })
+
+    it("answers 503 with Retry-After when creating a session", async () => {
+      const { routes, saleor } = buildRoutes({ config: STRICT })
+      const response = await routes.checkoutSessions.POST(ucpRequest(SESSIONS, { agent: AGENT_BUSY, body: { line_items: [{ item: { id: "v1" }, quantity: 1 }] } }))
+
+      expect(response.status).toBe(503)
+      expect(response.headers.get("Retry-After")).toBe("3")
+      expect(saleor.checkouts.size).toBe(0)
+    })
   })
 })
