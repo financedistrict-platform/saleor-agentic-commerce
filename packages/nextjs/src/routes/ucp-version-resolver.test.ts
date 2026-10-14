@@ -6,6 +6,7 @@ import type { AgentProfileResult } from "@financedistrict/saleor-agentic-commerc
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   applyUcpSessionPin,
+  isFallbackOutcome,
   logUcpResolution,
   resolveUcpVersion,
   sessionPinFor,
@@ -14,6 +15,7 @@ import {
   AGENT_0123,
   AGENT_0408,
   AGENT_0825,
+  AGENT_BUSY,
   AGENT_DOWN,
   AGENT_REDIRECTED,
   AGENT_REDIRECTED_NO_LOCATION,
@@ -79,6 +81,35 @@ describe("resolveUcpVersion", () => {
     const resolution = await resolve(strict, agent)
     expect(resolution.rejection).toMatchObject({ status, code })
     expect(resolution.wire.version).toBe("2026-04-08")
+  })
+
+  it("serves the current version for a busy fetcher under lenient negotiation and reports it as busy", async () => {
+    const resolution = await resolve(lenient, AGENT_BUSY)
+    expect(resolution).toMatchObject({ version: "2026-04-08", outcome: "busy" })
+    expect(resolution.rejection).toBeUndefined()
+    expect(isFallbackOutcome("busy")).toBe(true)
+  })
+
+  it("answers 503 with a retry hint for a busy fetcher under strict negotiation", async () => {
+    const resolution = await resolve(strict, AGENT_BUSY)
+    expect(resolution.outcome).toBe("busy")
+    expect(resolution.rejection).toEqual({
+      status: 503,
+      code: "profile_fetch_busy",
+      content: "Agent profile could not be retrieved right now; retry shortly.",
+      retryAfterSeconds: 3,
+      pinRecoverable: true,
+    })
+  })
+
+  it("hands the request origin to the fetcher as the client", async () => {
+    const clients: (string | undefined)[] = []
+    const fetcher = { async lookup(_url: string, client?: string) { clients.push(client); return { status: "failed" } as const } }
+    const headers = (extra: Record<string, string>) => new Request(URL_, { headers: { "UCP-Agent": `profile="${AGENT_0408}"`, ...extra } })
+    await resolveUcpVersion(lenient, headers({ "x-forwarded-for": "198.51.100.1, 203.0.113.7" }), fetcher)
+    await resolveUcpVersion(lenient, headers({ "x-real-ip": "203.0.113.9" }), fetcher)
+    await resolveUcpVersion(lenient, headers({}), fetcher)
+    expect(clients).toEqual(["203.0.113.7", "203.0.113.9", undefined])
   })
 
   it("treats a status unknown to this build as unreachable", async () => {
@@ -196,6 +227,19 @@ describe("applyUcpSessionPin", () => {
       expect(pinned.rejection).toBeUndefined()
     },
   )
+
+  it("serves the pinned version when a strict busy rejection meets a session pin", async () => {
+    const pinned = applyUcpSessionPin(strict, await resolve(strict, AGENT_BUSY), "2026-08-25")
+    expect(pinned).toMatchObject({ version: "2026-08-25", outcome: "busy" })
+    expect(pinned.wire.version).toBe("2026-08-25")
+    expect(pinned.rejection).toBeUndefined()
+  })
+
+  it("keeps the busy rejection when the session has no usable pin", async () => {
+    const resolution = await resolve(strict, AGENT_BUSY)
+    expect(applyUcpSessionPin(strict, resolution, undefined)).toBe(resolution)
+    expect(applyUcpSessionPin(strict, resolution, "2020-01-01")).toBe(resolution)
+  })
 
   it("keeps the rejection for an unknown declared version on a pinned session", async () => {
     const resolution = await resolve(lenient, AGENT_UNKNOWN)

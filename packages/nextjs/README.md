@@ -287,13 +287,14 @@ Export the instance from the config file as `agenticCommerce` and run this from 
 
 The store serves `ucpVersion` (default: the latest, `2026-08-25`) and every version in `ucpSupportedVersions`. `/.well-known/ucp` lists the extra versions under `ucp.supported_versions`, each linking to `/.well-known/ucp/<version>` (wire the `discoveryVersion` route shown above).
 
-Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 128 KiB cap and a 10 minute cache.
+Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 128 KiB cap and a 10 minute cache. At most 16 profiles are fetched at once per fetcher, 4 per host and 8 per client (the last hop of `X-Forwarded-For`, else `X-Real-IP`); concurrent lookups of one URL share a single fetch, and a busy answer falls back to the last known profile of that URL. Rate-limit `/api/ucp` at your edge as well.
 
 | Agent profile | `lenient` (default) | `strict` |
 |---|---|---|
 | no `UCP-Agent` header | current version | current version |
 | `UCP-Agent` without `profile=` | current version | current version |
 | unreachable | current version + warning | 424 `profile_unreachable` |
+| profile fetcher busy | current version + warning, or the session version | 503 `profile_fetch_busy` with `Retry-After: 3`, or the session version |
 | no or malformed `ucp.version` | current version + warning | 422 `profile_malformed` |
 | unknown version | 422 `version_unsupported` | 422 `version_unsupported` |
 | known version that is not enabled | 422 `version_unsupported` | 422 `version_unsupported` |
