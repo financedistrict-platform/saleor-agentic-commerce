@@ -170,11 +170,13 @@ describe("GET /api/order-settlement", () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it("rejects a staff token that lacks MANAGE_ORDERS without calling Saleor or Prism", async () => {
+  it("rejects in one verification a staff token that lacks MANAGE_ORDERS without calling Saleor or Prism", async () => {
     const res = await GET(request(APPS_ONLY_JWT))
-    expect(res.status).toBe(403)
-    expect(await res.json()).toEqual({ error: "Forbidden" })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: "Unauthorized" })
     expect(fetchSpy).not.toHaveBeenCalled()
+    expect(aplGet).toHaveBeenCalledTimes(1)
+    expect(verifyJWT).toHaveBeenCalledTimes(1)
   })
 
   it("never puts the Prism key in a response body", async () => {

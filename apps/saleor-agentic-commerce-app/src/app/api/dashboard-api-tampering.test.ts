@@ -307,7 +307,7 @@ describe("dashboard API tampering — every dashboard route requires a verified 
   it.each(DASHBOARD_ROUTES)("/api/%s guards every handler with getAuthContext", (route) => {
     const source = readFileSync(join(API_DIR, route, "route.ts"), "utf8")
     const handlers = source.match(/export (async )?function (GET|POST|PUT|PATCH|DELETE)\b/g) ?? []
-    const guards = source.match(/await getAuthContext\(request\)/g) ?? []
+    const guards = source.match(/await getAuthContext\(request(, \["[A-Z_]+"\])?\)/g) ?? []
     expect(handlers.length).toBeGreaterThan(0)
     expect(guards.length).toBe(handlers.length)
     expect(source).not.toMatch(/export const (GET|POST|PUT|PATCH|DELETE)\b/)
