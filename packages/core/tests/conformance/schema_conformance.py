@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import urllib.request
+from email.message import Message
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
@@ -112,22 +113,23 @@ def run_fixtures(runner: Runner, mapping: dict, fixtures: Path) -> None:
         runner.check(path.name, entry, document, mapping.get("known_deviations", {}).get(path.name))
 
 
-def http_json(method: str, url: str, body: dict | None = None) -> tuple[int, dict]:
+def http_json(method: str, url: str, body: dict | None = None, headers: dict | None = None) -> tuple[int, dict, Message]:
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
     try:
         with urllib.request.urlopen(req) as resp:
-            return resp.status, json.loads(resp.read().decode())
+            return resp.status, json.loads(resp.read().decode()), resp.headers
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode())
+        return e.code, json.loads(e.read().decode()), e.headers
 
 
 def run_live(runner: Runner, mapping: dict, base_url: str, ucp_api: str) -> None:
-    _, disc = http_json("GET", f"{base_url}/.well-known/ucp")
+    _, disc, _ = http_json("GET", f"{base_url}/.well-known/ucp")
     runner.check("/.well-known/ucp", mapping["profile"], disc, None)
-    _, created = http_json("POST", f"{ucp_api}/checkout-sessions", {"line_items": [{"item": {"id": "1"}, "quantity": 1}]})
+    _, created, created_headers = http_json("POST", f"{ucp_api}/checkout-sessions", {"line_items": [{"item": {"id": "1"}, "quantity": 1}]})
     if created.get("id"):
-        _, session = http_json("GET", f"{ucp_api}/checkout-sessions/{created['id']}")
+        secret = {"UCP-Session-Secret": created_headers.get("UCP-Session-Secret", "")}
+        _, session, _ = http_json("GET", f"{ucp_api}/checkout-sessions/{created['id']}", headers=secret)
         runner.check("checkout session", mapping["checkout"], session, None)
     else:
         runner.check("checkout create error", mapping["error"], created, None)

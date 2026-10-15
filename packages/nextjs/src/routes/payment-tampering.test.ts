@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { createMemoryPaymentReplayStore } from "@financedistrict/saleor-agentic-commerce-core"
 import type { CheckoutPrepareInput, PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
-import { ACP_AUTH, ACP_KEY, buildRoutes, CHECKOUT_ID, checkoutTemplate, fakeSaleor, fixedFetcher, freshQuote, orderTemplate, params, PROFILES, STOREFRONT, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
+import { ACP_AUTH, ACP_KEY, buildRoutes, CHECKOUT_ID, checkoutTemplate, fakeSaleor, fixedFetcher, freshQuote, orderTemplate, params, PROFILES, sessionSecretItem, STOREFRONT, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 import { createAgenticCommerce } from "../config.js"
 import { createAcpRoutes } from "./acp-routes.js"
 import { createUcpRoutes } from "./ucp-routes.js"
@@ -52,7 +52,7 @@ function preparedFor(amount: number, currency = "USD"): { key: string; value: st
 
 function preparedCheckout(extra: { key: string; value: string }[] = []): SaleorCheckout {
   const checkout = checkoutTemplate()
-  checkout.privateMetadata = [{ key: QUOTE_KEY, value: freshQuote({ amount: 5497, currency: "USD" }) }, preparedFor(5497), ...extra]
+  checkout.privateMetadata = [sessionSecretItem(), { key: QUOTE_KEY, value: freshQuote({ amount: 5497, currency: "USD" }) }, preparedFor(5497), ...extra]
   return checkout
 }
 
@@ -75,10 +75,11 @@ function setQuote(saleor: ReturnType<typeof buildRoutes>["saleor"], id: string, 
   ]
 }
 
-function ucpComplete(routes: ReturnType<typeof buildRoutes>["routes"], id: string) {
+function ucpComplete(routes: ReturnType<typeof buildRoutes>["routes"], id: string, sessionSecret?: string) {
   return routes.checkoutSessionComplete.POST(
     ucpRequest(`${UCP_SESSIONS}/${id}/complete`, {
       body: { payment: { instruments: [{ id: "inst_1", handler_id: "test.pay", type: "test", credential: { token: "signed-for-54.97" } }] } },
+      sessionSecret,
     }),
     params({ id }),
   )
@@ -109,7 +110,9 @@ describe("UCP complete with a cart changed after the quote", () => {
   it("refuses to settle an old quote after an update added items and then failed before re-quoting", async () => {
     const pay = recordingHandler()
     const { routes, saleor } = buildRoutes({ handlers: [pay.adapter] })
-    const created = await (await routes.checkoutSessions.POST(ucpRequest(UCP_SESSIONS, { body: { line_items: [{ item: { id: "v1" }, quantity: 1 }] } }))).json()
+    const createdResponse = await routes.checkoutSessions.POST(ucpRequest(UCP_SESSIONS, { body: { line_items: [{ item: { id: "v1" }, quantity: 1 }] } }))
+    const sessionSecret = createdResponse.headers.get("UCP-Session-Secret")!
+    const created = await createdResponse.json()
     const id = created.id as string
     const current = checkoutTemplate().lines.map((l) => ({ item: { id: l.variant.id }, quantity: l.quantity }))
 
@@ -117,13 +120,14 @@ describe("UCP complete with a cart changed after the quote", () => {
       ucpRequest(`${UCP_SESSIONS}/${id}`, {
         method: "PUT",
         body: { line_items: [{ ...current[0], quantity: current[0].quantity + 50 }, ...current.slice(1), { item: { id: EXPENSIVE_VARIANT }, quantity: 1 }] },
+        sessionSecret,
       }),
       params({ id }),
     )
     expect(update.status).toBe(422)
     expect(saleor.checkouts.get(id)!.totalPrice.gross.amount).toBe(154.97)
 
-    const response = await ucpComplete(routes, id)
+    const response = await ucpComplete(routes, id, sessionSecret)
     const body = await response.json()
 
     expect(response.status).toBe(409)
@@ -136,7 +140,7 @@ describe("UCP complete with a cart changed after the quote", () => {
   it("rejects completion when no quote is stored instead of skipping the check", async () => {
     const pay = recordingHandler()
     const checkout = checkoutTemplate()
-    checkout.privateMetadata = []
+    checkout.privateMetadata = [sessionSecretItem()]
     const { routes, saleor } = buildRoutes({ handlers: [pay.adapter], checkouts: [checkout] })
 
     const response = await ucpComplete(routes, CHECKOUT_ID)
@@ -226,7 +230,7 @@ function inCurrency(checkout: SaleorCheckout, currency: string, scale = 1): Sale
 }
 
 function quotedIn(checkout: SaleorCheckout, quote: { amount: number; currency: string }): SaleorCheckout {
-  checkout.privateMetadata = [{ key: QUOTE_KEY, value: freshQuote(quote) }, preparedFor(quote.amount, quote.currency)]
+  checkout.privateMetadata = [sessionSecretItem(), { key: QUOTE_KEY, value: freshQuote(quote) }, preparedFor(quote.amount, quote.currency)]
   return checkout
 }
 
@@ -403,21 +407,23 @@ describe("Complete after a handler failed to prepare the new total", () => {
     let failing = false
     const pay = recordingHandler({ failPrepare: () => failing })
     const { routes, saleor } = buildRoutes({ handlers: [pay.adapter] })
-    const created = await (await routes.checkoutSessions.POST(ucpRequest(UCP_SESSIONS, { body: { line_items: [{ item: { id: "v1" }, quantity: 1 }] } }))).json()
+    const createdResponse = await routes.checkoutSessions.POST(ucpRequest(UCP_SESSIONS, { body: { line_items: [{ item: { id: "v1" }, quantity: 1 }] } }))
+    const sessionSecret = createdResponse.headers.get("UCP-Session-Secret")!
+    const created = await createdResponse.json()
     const id = created.id as string
     expect(metadataValue(saleor, id, "test.pay")).toEqual({ preparedAmount: 5497, preparedCurrency: "USD" })
 
     failing = true
     const current = checkoutTemplate().lines.map((l) => ({ item: { id: l.variant.id }, quantity: l.quantity }))
     await routes.checkoutSession.PUT(
-      ucpRequest(`${UCP_SESSIONS}/${id}`, { method: "PUT", body: { line_items: [...current, { item: { id: EXPENSIVE_VARIANT }, quantity: 1 }] } }),
+      ucpRequest(`${UCP_SESSIONS}/${id}`, { method: "PUT", body: { line_items: [...current, { item: { id: EXPENSIVE_VARIANT }, quantity: 1 }] }, sessionSecret }),
       params({ id }),
     )
     expect(saleor.checkouts.get(id)!.totalPrice.gross.amount).toBe(154.97)
     expect(metadataValue(saleor, id, QUOTE_KEY)).toMatchObject({ amount: 15497, currency: "USD" })
     expect(metadataValue(saleor, id, "test.pay")).toBeNull()
 
-    const response = await ucpComplete(routes, id)
+    const response = await ucpComplete(routes, id, sessionSecret)
 
     expect(response.status).toBe(422)
     expect(saleor.transactions).toHaveLength(0)
@@ -1198,12 +1204,12 @@ describe("UCP order reads", () => {
     const created = await ucpCreate(built.routes)
     const id = (await created.json()).id as string
     const secret = created.headers.get("UCP-Session-Secret")
-    const completed = await ucpComplete(built.routes, id)
+    const completed = await ucpComplete(built.routes, id, secret!)
     expect(completed.status).toBe(200)
     return { ...built, id, secret }
   }
 
-  function readOrder(routes: ReturnType<typeof buildRoutes>["routes"], options: { agent?: string; sessionSecret?: string } = {}) {
+  function readOrder(routes: ReturnType<typeof buildRoutes>["routes"], options: { agent?: string; sessionSecret?: string | null } = {}) {
     return routes.order.GET(ucpRequest(`https://store.test/api/ucp/orders/${ORDER_ID}`, options), params({ id: ORDER_ID }))
   }
 
@@ -1238,7 +1244,7 @@ describe("UCP order reads", () => {
   it("does not return the order, or any buyer data, without the session secret", async () => {
     const { routes } = await createAndPlace()
 
-    const response = await readOrder(routes)
+    const response = await readOrder(routes, { sessionSecret: null })
     const text = await response.text()
 
     expect(response.status).toBe(401)
@@ -1249,7 +1255,7 @@ describe("UCP order reads", () => {
   it("does not accept the agent profile header as identity", async () => {
     const { routes } = await createAndPlace()
 
-    const response = await readOrder(routes, { agent: "https://agent.example/0408" })
+    const response = await readOrder(routes, { agent: "https://agent.example/0408", sessionSecret: null })
 
     expect(response.status).toBe(401)
   })
@@ -1300,7 +1306,7 @@ describe("Payment quote lifetime", () => {
 
   function checkoutWithQuote(quoteValue: string, extra: { key: string; value: string }[] = []): SaleorCheckout {
     const checkout = checkoutTemplate()
-    checkout.privateMetadata = [{ key: QUOTE_KEY, value: quoteValue }, preparedFor(5497), ...extra]
+    checkout.privateMetadata = [sessionSecretItem(), { key: QUOTE_KEY, value: quoteValue }, preparedFor(5497), ...extra]
     return checkout
   }
 

@@ -160,14 +160,19 @@ API key (`acpApiKey`), compared in constant time; otherwise the answer is 401
 missing or blank header is served as before. `GET /.well-known/ucp` ignores the
 header. Ownership of sessions and orders still rests on `UCP-Session-Secret`.
 
-### Order reads
+### Session ownership
 
 `POST /api/ucp/checkout-sessions` returns a `UCP-Session-Secret` header once.
 Only its SHA-256 hash is stored, in checkout metadata, and Saleor carries it to
-the order. `GET /api/ucp/orders/{id}` needs that header: without it the answer
-is 401, and with a wrong secret, or for an order whose checkout never had one,
-it is 404. The `UCP-Agent` profile header identifies no one. If the hash cannot
-be stored, creation answers 503 and no secret is handed out.
+the order. Every later call needs that header: `GET`, `PUT`,
+`POST .../complete` and `POST .../cancel` on the checkout session, and
+`GET /api/ucp/orders/{id}`. Without it the answer is 401
+`session_secret_required`. With a wrong secret, or for a checkout or order that
+never had one, it is 404 `checkout_not_found` or `order_not_found`, the same as
+an unknown id. The secret is checked before the version pin and before the
+body is read. The `UCP-Agent` profile header identifies no one. If the hash
+cannot be stored, creation answers 503 and no secret is handed out. URLs in
+responses carry ids only; `continue_url` is the storefront page for the buyer.
 
 ### Quote lifetime
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { settlementReplayKey } from "@financedistrict/saleor-agentic-commerce-core"
 import type { PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
-import { ACP_AUTH, buildRoutes, checkoutTemplate, CHECKOUT_ID, freshQuote, params, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
+import { ACP_AUTH, buildRoutes, checkoutTemplate, CHECKOUT_ID, freshQuote, params, sessionSecretItem, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 import { resolvePendingSettlement } from "./resolve-pending-settlement.js"
 
 const UCP_SESSIONS = "https://store.test/api/ucp/checkout-sessions"
@@ -387,6 +387,7 @@ function handlerWith(settle: () => unknown, keys?: () => readonly string[], decl
 function handlerCheckout(extra: { key: string; value: string }[] = []): SaleorCheckout {
   const checkout = checkoutTemplate()
   checkout.privateMetadata = [
+    sessionSecretItem(),
     { key: QUOTE_KEY, value: freshQuote({ amount: 5497, currency: "USD" }) },
     { key: "test.handler", value: JSON.stringify({ prepared: true }) },
     ...extra,
