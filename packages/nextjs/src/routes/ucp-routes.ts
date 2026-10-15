@@ -48,7 +48,7 @@ import {
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
-import type { FormatterContext, SessionSecretRecord, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
+import type { FormatterContext, SaleorCheckout, SessionSecretRecord, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   UCP_VERSION_METADATA_KEY,
@@ -169,6 +169,18 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     if (pinned === scope.resolution) return rejectionResponse(pinned) ?? scope
     if (pinned.version !== scope.version) logUcpResolution(pinned)
     return rejectionResponse(pinned) ?? scopeOf(pinned)
+  }
+
+  async function loadOwnedCheckout(request: Request, wire: UcpWire, id: string): Promise<SaleorCheckout | Response> {
+    const supplied = request.headers.get(SESSION_SECRET_HEADER)?.trim()
+    if (!supplied) {
+      return ucpError(wire, "session_secret_required", `The ${SESSION_SECRET_HEADER} header returned when the checkout was created is required`, 401)
+    }
+    const result = await saleorClient.getCheckout(id)
+    if (!result.ok || !sessionSecretMatches(metadataToRecord(result.data.privateMetadata), supplied)) {
+      return ucpError(wire, "checkout_not_found", "Checkout session not found", 404)
+    }
+    return result.data
   }
 
   function supportedVersionLinks(): Record<string, string> {
@@ -428,10 +440,10 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         let scope = resolved
 
         const { id } = await context.params
-        const result = await saleorClient.getCheckout(id)
-        if (!result.ok) return ucpError(scope.wire, "checkout_not_found", result.error, 404)
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
 
-        const sessionMetadata = metadataToRecord(result.data.privateMetadata)
+        const sessionMetadata = metadataToRecord(owned.privateMetadata)
         const pinned = pinScope(scope, sessionMetadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
@@ -440,11 +452,11 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // the cancel route comes back as boolean true (not the string "true").
         const canceled = sessionMetadata.ucp_canceled === true
         if (canceled) {
-          const session = formatUcpCheckoutSession(scope.ctx, result.data)
+          const session = formatUcpCheckoutSession(scope.ctx, owned)
           return Response.json({ ...session, status: "canceled" })
         }
-        const readiness = await evaluateReadiness(saleorClient, result.data)
-        const session = formatUcpCheckoutSession(scope.ctx, result.data, readiness)
+        const readiness = await evaluateReadiness(saleorClient, owned)
+        const session = formatUcpCheckoutSession(scope.ctx, owned, readiness)
         return Response.json(session)
       },
 
@@ -456,22 +468,22 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         let scope = resolved
 
         const { id } = await context.params
-        let body: any
-        try {
-          body = await request.json()
-        } catch {
-          return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
-        }
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
 
-        // Refuse updates on a session the agent has already cancelled.
-        const cancelGuard = await saleorClient.getCheckout(id)
-        if (!cancelGuard.ok) return ucpError(scope.wire, "checkout_not_found", cancelGuard.error, 404)
-        const sessionMetadata = metadataToRecord(cancelGuard.data.privateMetadata)
+        const sessionMetadata = metadataToRecord(owned.privateMetadata)
         const pinned = pinScope(scope, sessionMetadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
         if (sessionMetadata.ucp_canceled === true) {
           return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
+        }
+
+        let body: any
+        try {
+          body = await request.json()
+        } catch {
+          return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
         // Update buyer email
@@ -530,7 +542,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             variantId: item.item?.id || item.id,
             quantity: item.quantity ?? 1,
           }))
-          const current = cancelGuard.data.lines.map((l) => ({
+          const current = owned.lines.map((l) => ({
             id: l.id,
             variantId: l.variant.id,
             quantity: l.quantity,
@@ -578,6 +590,15 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         let scope = resolved
 
         const { id } = await context.params
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
+
+        let checkout = owned
+        const metadata = metadataToRecord(checkout.privateMetadata)
+        const pinned = pinScope(scope, metadata)
+        if (pinned instanceof Response) return pinned
+        scope = pinned
+
         let body: any
         try {
           body = await request.json()
@@ -585,7 +606,6 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
-        // Extract payment instrument
         const payment = body.payment
         if (!payment?.instruments || !Array.isArray(payment.instruments)) {
           return ucpError(scope.wire, "missing_payment", "payment.instruments array is required", 400, "recoverable")
@@ -596,15 +616,6 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           return ucpError(scope.wire, "no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
         }
 
-        // Fetch checkout for metadata
-        const checkoutResult = await saleorClient.getCheckout(id)
-        if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
-
-        let checkout = checkoutResult.data
-        const metadata = metadataToRecord(checkout.privateMetadata)
-        const pinned = pinScope(scope, metadata)
-        if (pinned instanceof Response) return pinned
-        scope = pinned
         if (!isWellFormedInstrument(selectedInstrument)) {
           return ucpError(scope.wire, "invalid_instrument", "Payment instrument requires handler_id", 400, "recoverable")
         }
@@ -678,10 +689,9 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const { id } = await context.params
 
-        // Verify checkout exists
-        const result = await saleorClient.getCheckout(id)
-        if (!result.ok) return ucpError(scope.wire, "checkout_not_found", result.error, 404)
-        const pinned = pinScope(scope, metadataToRecord(result.data.privateMetadata))
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
+        const pinned = pinScope(scope, metadataToRecord(owned.privateMetadata))
         if (pinned instanceof Response) return pinned
         scope = pinned
 
@@ -705,7 +715,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         }
 
         // Return full checkout session with canceled status
-        const session = formatUcpCheckoutSession(scope.ctx, result.data)
+        const session = formatUcpCheckoutSession(scope.ctx, owned)
         return Response.json({
           ...session,
           status: "canceled",
@@ -724,7 +734,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (resolved instanceof Response) return resolved
         const scope = resolved
 
-        const suppliedSecret = request.headers.get(SESSION_SECRET_HEADER)
+        const suppliedSecret = request.headers.get(SESSION_SECRET_HEADER)?.trim() ?? null
         if (!suppliedSecret) {
           return ucpError(scope.wire, "session_secret_required", `The ${SESSION_SECRET_HEADER} header returned when the checkout was created is required`, 401)
         }
