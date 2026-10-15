@@ -5,6 +5,11 @@ const SALEOR_API_URL = "https://shop.example/graphql/"
 const PRISM_URL = "https://prism.test/api/v2/merchant/payments/0xabc/settlement"
 const PRISM_KEY = "prism-key"
 const VALID_JWT = "valid.dashboard.jwt"
+const APPS_ONLY_JWT = "apps-only.dashboard.jwt"
+const GRANTED_PERMISSIONS: Record<string, string[] | undefined> = {
+  [VALID_JWT]: ["MANAGE_APPS", "MANAGE_ORDERS"],
+  [APPS_ONLY_JWT]: ["MANAGE_APPS"],
+}
 
 const state = vi.hoisted(() => ({
   handler: null as unknown,
@@ -72,9 +77,15 @@ beforeEach(() => {
   aplGet.mockReset()
   aplGet.mockResolvedValue({ appId: "app-123", saleorApiUrl: SALEOR_API_URL, token: "app-token" })
   verifyJWT.mockReset()
-  verifyJWT.mockImplementation(async ({ token }: { token: string }) => {
-    if (token !== VALID_JWT) throw new Error("JWT verification failed")
-  })
+  verifyJWT.mockImplementation(
+    async ({ token, requiredPermissions }: { token: string; requiredPermissions?: string[] }) => {
+      const granted = GRANTED_PERMISSIONS[token]
+      if (!granted) throw new Error("JWT verification failed")
+      if (!(requiredPermissions ?? []).every((p) => granted.includes(p))) {
+        throw new Error("JWT verification failed: permissions are not sufficient")
+      }
+    }
+  )
   fetchSpy.mockReset()
   fetchSpy.mockImplementation(async (url: string) => {
     if (String(url) === SALEOR_API_URL) {
@@ -156,6 +167,13 @@ describe("GET /api/order-settlement", () => {
   it("rejects a request without a dashboard token", async () => {
     const res = await GET(request(null))
     expect(res.status).toBe(401)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("rejects a staff token that lacks MANAGE_ORDERS without calling Saleor or Prism", async () => {
+    const res = await GET(request(APPS_ONLY_JWT))
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({ error: "Forbidden" })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getAuthContext } from "@/lib/auth"
+import { getAuthContext, hasDashboardPermission } from "@/lib/auth"
 import { ConfigManager } from "@/lib/config-manager"
 import { PRISM_HANDLER_ID } from "@/lib/metadata-keys"
 import { QUERIES, SaleorApiClient } from "@/lib/saleor-api"
@@ -19,6 +19,9 @@ export async function GET(request: NextRequest) {
   const auth = await getAuthContext(request)
   if (!auth) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+  if (!(await hasDashboardPermission(request, "MANAGE_ORDERS"))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 
   const orderId = request.nextUrl.searchParams.get("orderId")

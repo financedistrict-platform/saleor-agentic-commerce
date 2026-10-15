@@ -11,10 +11,26 @@ export type AuthContext = {
   token: string
 }
 
-const DASHBOARD_REQUIRED_PERMISSIONS = ["MANAGE_APPS" as const]
+type DashboardPermission = "MANAGE_APPS" | "MANAGE_ORDERS"
+
+const DASHBOARD_REQUIRED_PERMISSIONS: DashboardPermission[] = ["MANAGE_APPS"]
 
 export async function getAuthContext(
   request: NextRequest
+): Promise<AuthContext | null> {
+  return verifyDashboardRequest(request, DASHBOARD_REQUIRED_PERMISSIONS)
+}
+
+export async function hasDashboardPermission(
+  request: NextRequest,
+  permission: DashboardPermission
+): Promise<boolean> {
+  return (await verifyDashboardRequest(request, [permission])) !== null
+}
+
+async function verifyDashboardRequest(
+  request: NextRequest,
+  requiredPermissions: DashboardPermission[]
 ): Promise<AuthContext | null> {
   const saleorApiUrl = request.headers.get(SALEOR_API_URL_HEADER)
   const dashboardToken = request.headers.get(SALEOR_AUTHORIZATION_BEARER_HEADER)
@@ -34,7 +50,7 @@ export async function getAuthContext(
       token: dashboardToken,
       appId: authData.appId,
       saleorApiUrl: authData.saleorApiUrl,
-      requiredPermissions: DASHBOARD_REQUIRED_PERMISSIONS,
+      requiredPermissions,
     })
 
     return {
