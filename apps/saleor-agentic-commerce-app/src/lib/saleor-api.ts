@@ -88,6 +88,15 @@ export const QUERIES = {
       }
     }
   `,
+
+  GET_ORDER_SETTLEMENT: `
+    query GetOrderSettlement($id: ID!) {
+      order(id: $id) {
+        channel { slug }
+        transactions { name pspReference }
+      }
+    }
+  `,
 }
 
 export const MUTATIONS = {
