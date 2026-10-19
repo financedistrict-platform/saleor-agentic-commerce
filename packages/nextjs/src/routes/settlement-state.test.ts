@@ -2,10 +2,11 @@ import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { settlementReplayKey } from "@financedistrict/saleor-agentic-commerce-core"
+import { credentialSha256, settlementReplayKey } from "@financedistrict/saleor-agentic-commerce-core"
 import type { PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
 import { ACP_AUTH, buildRoutes, checkoutTemplate, CHECKOUT_ID, freshQuote, params, sessionSecretItem, stubPrismGateway, ucpRequest } from "./__tests__/harness.js"
 import { resolvePendingSettlement } from "./resolve-pending-settlement.js"
+import { PrismClient } from "../../../prism-payment/src/prism-client.js"
 
 const UCP_SESSIONS = "https://store.test/api/ucp/checkout-sessions"
 const PRISM = "xyz.fd.prism_payment"
@@ -103,6 +104,10 @@ async function code(response: Response): Promise<string> {
   return (await response.json()).messages[0].code
 }
 
+async function codes(response: Response): Promise<string[]> {
+  return (await response.json()).messages.map((message: { code: string }) => message.code)
+}
+
 function record(saleor: Built["saleor"], id: string) {
   const raw = saleor.checkouts.get(id)!.privateMetadata.find((m) => m.key === SETTLEMENT_KEY)?.value
   return raw === undefined ? undefined : JSON.parse(raw)
@@ -176,16 +181,16 @@ describe("Complete after the gateway settled but the settlement could not be sav
 })
 
 describe("Complete when the gateway gives no answer", () => {
-  it("holds the checkout as pending and does not call the gateway on the retry", async () => {
+  it("holds the checkout as pending and asks the gateway again on a same-credential retry", async () => {
     gateway = stubPrismGateway({ settle: () => { throw new Error("socket hang up") } })
     const { routes, saleor } = prismRoutes()
 
     const first = await pay(routes, CHECKOUT_ID)
     const retry = await pay(routes, CHECKOUT_ID)
 
-    expect(first.status).toBe(409)
+    expect(first.status).toBe(202)
     expect(await code(first)).toBe("settlement_pending")
-    expect(retry.status).toBe(409)
+    expect(retry.status).toBe(202)
     expect(await code(retry)).toBe("settlement_pending")
     expect(record(saleor, CHECKOUT_ID)).toMatchObject({
       state: "pending",
@@ -195,12 +200,12 @@ describe("Complete when the gateway gives no answer", () => {
       expiresAt: new Date(9999999999 * 1000).toISOString(),
       details: LOOKUP_DETAILS,
     })
-    expect(settleRequests()).toHaveLength(1)
+    expect(settleRequests()).toHaveLength(2)
     expect(saleor.transactions).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
   })
 
-  it("logs one line a person can search by checkout, without the signature", async () => {
+  it("logs one line per attempt a person can search by checkout, without the signature", async () => {
     gateway = stubPrismGateway({ settle: () => { throw new Error("socket hang up") } })
     const { routes, saleor } = prismRoutes()
 
@@ -208,9 +213,9 @@ describe("Complete when the gateway gives no answer", () => {
     await pay(routes, CHECKOUT_ID)
 
     const lines = reviewLines()
-    expect(lines).toHaveLength(1)
-    expect(lines[0]).toContain("[ucp-routes] settlement pending needs review")
-    expect(reviewFields(lines[0])).toMatchObject({
+    expect(lines).toHaveLength(2)
+    expect(lines[1]).toContain("[ucp-routes] settlement pending needs review")
+    expect(reviewFields(lines[1])).toMatchObject({
       checkoutId: CHECKOUT_ID,
       state: "pending",
       handlerId: PRISM,
@@ -219,7 +224,7 @@ describe("Complete when the gateway gives no answer", () => {
       expiresAt: new Date(9999999999 * 1000).toISOString(),
       ...LOOKUP_DETAILS,
     })
-    expect(lines[0]).not.toContain("0xsig")
+    expect(lines.join("\n")).not.toContain("0xsig")
     expect(JSON.stringify(record(saleor, CHECKOUT_ID))).not.toContain("0xsig")
   })
 
@@ -232,8 +237,9 @@ describe("Complete when the gateway gives no answer", () => {
 
     expect(first.status).toBe(409)
     expect((await first.json()).code).toBe("settlement_pending")
+    expect(retry.status).toBe(409)
     expect((await retry.json()).code).toBe("settlement_pending")
-    expect(settleRequests()).toHaveLength(1)
+    expect(settleRequests()).toHaveLength(2)
     expect(saleor.completed).toHaveLength(0)
   })
 
@@ -257,10 +263,10 @@ describe("Complete when the gateway gives no answer", () => {
     const first = await completeWith(routes)
     const retry = await completeWith(routes)
 
-    expect(first.status).toBe(409)
+    expect(first.status).toBe(202)
     expect(await code(first)).toBe("settlement_pending")
-    expect(retry.status).toBe(409)
-    expect(settled).toHaveLength(1)
+    expect(retry.status).toBe(202)
+    expect(settled).toHaveLength(2)
     expect(saleor.completed).toHaveLength(0)
   })
 
@@ -270,7 +276,7 @@ describe("Complete when the gateway gives no answer", () => {
 
     const response = await completeWith(routes)
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(202)
     expect(await code(response)).toBe("settlement_pending")
     expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending" })
   })
@@ -322,8 +328,8 @@ describe("Complete when the gateway settled something other than what was signed
     const first = await pay(routes, CHECKOUT_ID)
     const retry = await pay(routes, CHECKOUT_ID)
 
-    expect(first.status).toBe(409)
-    expect(await code(first)).toBe("settled_payment_mismatch")
+    expect(first.status).toBe(200)
+    expect(await codes(first)).toEqual(["payment_requires_review", "settled_payment_mismatch"])
     expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "held", reference: "0xmoved", handlerId: PRISM, details: LOOKUP_DETAILS })
     expect(record(saleor, CHECKOUT_ID)).toHaveProperty("attemptId")
     expect(record(saleor, CHECKOUT_ID)).toHaveProperty("startedAt")
@@ -333,8 +339,8 @@ describe("Complete when the gateway settled something other than what was signed
     expect(lines).toHaveLength(1)
     expect(reviewFields(lines[0])).toMatchObject({ checkoutId: CHECKOUT_ID, state: "held", reference: "0xmoved", code: "settled_payment_mismatch", ...LOOKUP_DETAILS })
     expect(lines[0]).not.toContain("0xsig")
-    expect(retry.status).toBe(409)
-    expect(await code(retry)).toBe("settled_payment_mismatch")
+    expect(retry.status).toBe(200)
+    expect(await codes(retry)).toEqual(["payment_requires_review", "settled_payment_mismatch"])
     expect(settleRequests()).toHaveLength(1)
     expect(saleor.transactions).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
@@ -477,11 +483,11 @@ describe("Complete when the settled payment cannot be accepted", () => {
     const first = await completeWith(routes)
     const retry = await completeWith(routes)
 
-    expect(first.status).toBe(409)
-    expect(await code(first)).toBe("settled_payment_unchecked")
+    expect(first.status).toBe(200)
+    expect(await codes(first)).toEqual(["payment_requires_review", "settled_payment_unchecked"])
     expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "held", reference: "0xhandler", code: "settled_payment_unchecked" })
-    expect(retry.status).toBe(409)
-    expect(await code(retry)).toBe("settled_payment_unchecked")
+    expect(retry.status).toBe(200)
+    expect(await codes(retry)).toEqual(["payment_requires_review", "settled_payment_unchecked"])
     expect(settled).toHaveLength(1)
     expect(saleor.completed).toHaveLength(0)
   })
@@ -496,11 +502,11 @@ describe("Complete when the settled payment cannot be accepted", () => {
     const retry = await pay(routes, OTHER_ID, signed("0x02"))
 
     expect(first.status).toBe(200)
-    expect(second.status).toBe(409)
-    expect(await code(second)).toBe("payment_already_used")
+    expect(second.status).toBe(200)
+    expect(await codes(second)).toEqual(["payment_requires_review", "payment_already_used"])
     expect(record(saleor, OTHER_ID)).toMatchObject({ state: "held", reference: "0xsame", code: "payment_already_used" })
-    expect(retry.status).toBe(409)
-    expect(await code(retry)).toBe("payment_already_used")
+    expect(retry.status).toBe(200)
+    expect(await codes(retry)).toEqual(["payment_requires_review", "payment_already_used"])
     expect(calls).toBe(2)
     expect(saleor.completed).toEqual([CHECKOUT_ID])
   })
@@ -513,11 +519,12 @@ describe("Complete when the settled payment cannot be accepted", () => {
     const first = await pay(routes, CHECKOUT_ID)
     const retry = await pay(routes, CHECKOUT_ID)
 
-    expect(first.status).toBe(409)
-    expect(await code(first)).toBe("settled_payment_mismatch")
-    expect(retry.status).toBe(409)
-    expect(await code(retry)).toBe("settlement_pending")
-    expect(settleRequests()).toHaveLength(1)
+    expect(first.status).toBe(200)
+    expect(await codes(first)).toEqual(["payment_requires_review", "settled_payment_mismatch"])
+    expect(retry.status).toBe(200)
+    expect(await codes(retry)).toEqual(["payment_requires_review", "settled_payment_mismatch"])
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending" })
+    expect(settleRequests()).toHaveLength(2)
     expect(saleor.completed).toHaveLength(0)
   })
 })
@@ -663,8 +670,8 @@ describe("Complete when another request already settled the payment", () => {
 
     const response = await pay(routes, CHECKOUT_ID)
 
-    expect(response.status).toBe(409)
-    expect(await code(response)).toBe("settlement_pending")
+    expect(response.status).toBe(200)
+    expect(await codes(response)).toEqual(["payment_requires_review", "settlement_unresolved"])
     expect(settleRequests()).toHaveLength(0)
     expect(saleor.transactions).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
@@ -675,10 +682,10 @@ describe("Complete when another request already settled the payment", () => {
 
     const response = await pay(routes, CHECKOUT_ID)
 
-    expect(response.status).toBe(409)
-    expect(await code(response)).toBe("settlement_pending")
+    expect(response.status).toBe(200)
+    expect(await codes(response)).toEqual(["payment_requires_review", "settlement_unresolved"])
     expect(settleRequests()).toHaveLength(0)
-    expect(record(saleor, CHECKOUT_ID)).toBeUndefined()
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "held", code: "settlement_unresolved" })
     expect(saleor.transactions).toHaveLength(0)
   })
 
@@ -743,7 +750,7 @@ describe("Complete with a handler that declares the amount it will settle", () =
 
     const response = await completeWith(routes)
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(202)
     expect(settled).toHaveLength(1)
     expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending", amount: 5497, currency: "USD" })
   })
@@ -773,23 +780,24 @@ describe("Complete when the pending record cannot be read back", () => {
     return state
   }
 
-  it("keeps the settlement pending, and never submits or records a failure, when it stays unreadable", async () => {
+  it("keeps the settlement pending without submitting or recording a failure while it stays unreadable, and resumes once it reads back", async () => {
     gateway = stubPrismGateway()
     const { routes, saleor } = prismRoutes()
     const reads = unreadableAfterPending(saleor, 3)
 
     const first = await pay(routes, CHECKOUT_ID)
     const kept = record(saleor, CHECKOUT_ID)
+    const submittedWhileUnreadable = settleRequests().length
     const retry = await pay(routes, CHECKOUT_ID)
 
     expect(reads.reads).toBe(3)
-    expect(first.status).toBe(409)
+    expect(first.status).toBe(202)
     expect(await code(first)).toBe("settlement_pending")
     expect(kept).toMatchObject({ state: "pending" })
-    expect(retry.status).toBe(409)
-    expect(await code(retry)).toBe("settlement_pending")
-    expect(settleRequests()).toHaveLength(0)
-    expect(saleor.completed).toHaveLength(0)
+    expect(submittedWhileUnreadable).toBe(0)
+    expect(retry.status).toBe(200)
+    expect(settleRequests()).toHaveLength(1)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
   })
 
   it("submits when a later read shows the pending record is its own", async () => {
@@ -820,10 +828,10 @@ describe("Complete when the gateway reply is classified by the settle contract",
 
     const response = await pay(routes, CHECKOUT_ID)
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(202)
     expect(await code(response)).toBe("settlement_pending")
-    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending" })
-    expect(states).toEqual(["pending"])
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending", transaction: row.body!.transaction })
+    expect(states).toEqual(["pending", "pending"])
     expect(saleor.transactions).toEqual([])
     expect(saleor.completed).toEqual([])
   })
@@ -838,5 +846,527 @@ describe("Complete when the gateway reply is classified by the settle contract",
     expect(response.status).toBe(422)
     expect(await code(response)).toBe("payment_failed")
     expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "failed" })
+  })
+})
+
+type GatewayReply = { http: number; body: unknown }
+
+function replyingGateway(replies: GatewayReply[], onSettle?: (call: number) => void | Promise<void>) {
+  gateway = stubPrismGateway()
+  const inner = globalThis.fetch
+  let call = 0
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (!String(input).endsWith("/api/v2/payment/settle")) return inner(input, init)
+    await inner(input, init)
+    const answer = replies[Math.min(call, replies.length - 1)]
+    call++
+    await onSettle?.(call)
+    return new Response(answer.body === null ? "" : JSON.stringify(answer.body), { status: answer.http, headers: { "content-type": "application/json" } })
+  }) as typeof fetch
+}
+
+function reply(name: string): GatewayReply {
+  const row = settleRow(name)
+  return { http: row.http, body: row.body }
+}
+
+const SETTLED_REPLY: GatewayReply = { http: 200, body: { success: true, transaction: "0xresumed" } }
+const CONSUMED_REPLY: GatewayReply = { http: 200, body: { success: false, errorReason: "authorization_consumed" } }
+const FIRST_TX = String(settleRow("settlement_pending").body!.transaction)
+
+function getSession(routes: Built["routes"], id = CHECKOUT_ID) {
+  return routes.checkoutSession.GET(ucpRequest(`${UCP_SESSIONS}/${id}`), params({ id }))
+}
+
+function withSettlement(value: object) {
+  const checkout = checkoutTemplate()
+  checkout.privateMetadata = [...checkout.privateMetadata, { key: SETTLEMENT_KEY, value: JSON.stringify(value) }]
+  return buildRoutes({ prism: true, checkouts: [checkout], config: { acpEnabled: true } })
+}
+
+const STORED_PENDING = {
+  state: "pending",
+  attemptId: "attempt-old",
+  handlerId: PRISM,
+  startedAt: "2026-10-19T00:00:00.000Z",
+  amount: 5497,
+  currency: "USD",
+  keys: ["stored-key"],
+}
+
+const STORED_HELD = {
+  state: "held",
+  attemptId: "attempt-old",
+  handlerId: PRISM,
+  startedAt: "2026-10-19T00:00:00.000Z",
+  reference: "0xheld",
+  code: "settled_payment_mismatch",
+  reason: "the settlement did not match the signed payment",
+  heldAt: "2026-10-19T00:00:01.000Z",
+}
+
+const STORED_SETTLED = { state: "settled", amount: 5497, currency: "USD", handlerId: PRISM, reference: "0xdone", settledAt: "2026-10-19T00:00:01.000Z" }
+
+describe("Resuming a pending settlement with the same payment credential", () => {
+  it("answers a pending first attempt with 202 and keeps the credential digest and transaction on the record", async () => {
+    replyingGateway([reply("settlement_pending")])
+    const { routes, saleor } = prismRoutes()
+
+    const response = await pay(routes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(202)
+    expect(body.status).toBe("complete_in_progress")
+    expect(body.messages[0].code).toBe("settlement_pending")
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending", credentialSha256: credentialSha256(signed()), transaction: FIRST_TX })
+  })
+
+  it("submits the same credential again as a resume and completes the order once the gateway settles", async () => {
+    replyingGateway([reply("settlement_pending"), SETTLED_REPLY])
+    const settle = vi.spyOn(PrismClient.prototype, "settle")
+    const { routes, saleor } = prismRoutes()
+
+    await pay(routes, CHECKOUT_ID)
+    const retry = await pay(routes, CHECKOUT_ID)
+
+    expect(retry.status).toBe(200)
+    expect((await retry.json()).status).toBe("completed")
+    expect(settleRequests()).toHaveLength(2)
+    expect(settle.mock.calls[1][0]).toMatchObject({ resumed: true })
+    expect(saleor.transactions.map((t) => t.pspReference)).toEqual(["0xresumed"])
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("still asks the gateway on a resume after the signed authorization has expired", async () => {
+    replyingGateway([reply("settlement_pending"), SETTLED_REPLY])
+    const { routes, saleor } = prismRoutes()
+
+    await pay(routes, CHECKOUT_ID)
+    vi.spyOn(Date, "now").mockReturnValue(9999999999 * 1000 + 1)
+    const retry = await pay(routes, CHECKOUT_ID)
+
+    expect(settleRequests()).toHaveLength(2)
+    expect(retry.status).toBe(200)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("refuses a different credential while a payment is pending, without asking the gateway", async () => {
+    replyingGateway([reply("settlement_pending"), SETTLED_REPLY])
+    const { routes } = prismRoutes()
+
+    await pay(routes, CHECKOUT_ID)
+    const other = await pay(routes, CHECKOUT_ID, signed("0x02"))
+
+    expect(other.status).toBe(409)
+    expect(await code(other)).toBe("payment_pending_mismatch")
+    expect(settleRequests()).toHaveLength(1)
+  })
+
+  it("escalates a pending record that has no credential digest, without asking the gateway", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const { routes, saleor } = withSettlement(STORED_PENDING)
+
+    const response = await pay(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(200)
+    expect((await response.json()).status).toBe("requires_escalation")
+    expect(settleRequests()).toHaveLength(0)
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "held", code: "settlement_unresolved" })
+  })
+
+  it.each(SETTLE_ROWS.map((row) => [row.name, row] as const))("settle contract: %s on a resume", async (_name, row) => {
+    replyingGateway([reply("settlement_pending"), { http: row.http, body: row.body }])
+    const { routes, saleor } = prismRoutes()
+
+    await pay(routes, CHECKOUT_ID)
+    const retry = await pay(routes, CHECKOUT_ID)
+    const body = await retry.json()
+    const transaction = typeof row.body?.transaction === "string" ? row.body.transaction : undefined
+
+    expect(settleRequests()).toHaveLength(2)
+    expect(saleor.completed).toEqual([])
+    if (row.resume === "pending") {
+      expect(retry.status).toBe(202)
+      expect(body.status).toBe("complete_in_progress")
+      expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending", transaction: transaction ?? FIRST_TX })
+      return
+    }
+    expect(row.resume).toBe("review")
+    expect(retry.status).toBe(200)
+    expect(body.status).toBe("requires_escalation")
+    expect(body.messages[0].code).toBe("payment_requires_review")
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "held" })
+  })
+
+  it("records one checkout transaction when two resumes run in parallel", async () => {
+    replyingGateway([reply("settlement_pending"), SETTLED_REPLY])
+    const { routes, saleor } = prismRoutes()
+
+    await pay(routes, CHECKOUT_ID)
+    const responses = await Promise.all([pay(routes, CHECKOUT_ID), pay(routes, CHECKOUT_ID)])
+    const answers = await Promise.all(responses.map(async (response) => ({ status: response.status, body: await response.json() })))
+
+    expect(saleor.transactions).toHaveLength(1)
+    for (const answer of answers) {
+      if (answer.status === 409) expect(answer.body.messages[0].code).toBe("settlement_in_progress")
+      else expect(answer).toMatchObject({ status: 200, body: { status: "completed" } })
+    }
+    expect(answers.some((answer) => answer.status === 200)).toBe(true)
+  })
+
+  it("does not record the transaction again when it was recorded after the checkout was read", async () => {
+    const built = prismRoutes()
+    replyingGateway([reply("settlement_pending"), SETTLED_REPLY], async (call) => {
+      if (call !== 2) return
+      await built.saleor.client.createCheckoutTransaction(CHECKOUT_ID, {
+        name: "Finance District Prism",
+        pspReference: "0xresumed",
+        amountCharged: { amount: 54.97, currency: "USD" },
+      })
+    })
+
+    await pay(built.routes, CHECKOUT_ID)
+    const retry = await pay(built.routes, CHECKOUT_ID)
+
+    expect(retry.status).toBe(200)
+    expect(built.saleor.transactions.map((t) => t.pspReference)).toEqual(["0xresumed"])
+    expect(built.saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})
+
+describe("Complete when the gateway asks for review", () => {
+  it("holds checkout_already_settled with its transaction and answers requires_escalation", async () => {
+    const row = settleRow("checkout_already_settled")
+    replyingGateway([reply("checkout_already_settled")])
+    const { routes, saleor } = prismRoutes()
+
+    const response = await pay(routes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body.status).toBe("requires_escalation")
+    expect(body.messages[0].code).toBe("payment_requires_review")
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "held", reference: row.body!.transaction })
+  })
+
+  it("holds authorization_consumed without a reference and claims no transaction key", async () => {
+    replyingGateway([CONSUMED_REPLY])
+    const built = prismRoutes()
+    const claim = vi.spyOn(built.instance.paymentReplayStore, "claim")
+
+    const response = await pay(built.routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(200)
+    expect((await response.json()).status).toBe("requires_escalation")
+    const held = record(built.saleor, CHECKOUT_ID)
+    expect(held).toMatchObject({ state: "held" })
+    expect(held).not.toHaveProperty("reference")
+    const claimedKeys = claim.mock.calls.flatMap(([keys]) => keys)
+    expect(claimedKeys.some((key) => key.startsWith('["settlement"'))).toBe(false)
+  })
+})
+
+describe("Complete when the order cannot be written after the payment settled", () => {
+  it("escalates a failed transaction write and finishes from the settled record on the retry", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const { routes, saleor } = prismRoutes()
+    const original = saleor.client.createCheckoutTransaction.bind(saleor.client)
+    let down = true
+    saleor.client.createCheckoutTransaction = async (id, tx) => (down ? { ok: false as const, error: "saleor unavailable" } : original(id, tx))
+
+    const first = await pay(routes, CHECKOUT_ID)
+    const firstBody = await first.json()
+    down = false
+    const retry = await pay(routes, CHECKOUT_ID)
+
+    expect(first.status).toBe(200)
+    expect(firstBody.status).toBe("requires_escalation")
+    expect(firstBody.messages.map((m: { code: string }) => m.code)).toContain("order_not_recorded_after_settlement")
+    expect(retry.status).toBe(200)
+    expect(settleRequests()).toHaveLength(1)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("escalates a failed order completion and finishes from the settled record on the retry", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const { routes, saleor } = prismRoutes()
+    const original = saleor.client.completeCheckout.bind(saleor.client)
+    let down = true
+    saleor.client.completeCheckout = async (id) => (down ? { ok: false as const, error: "saleor unavailable", errors: [] } : original(id))
+
+    const first = await pay(routes, CHECKOUT_ID)
+    const firstBody = await first.json()
+    down = false
+    const retry = await pay(routes, CHECKOUT_ID)
+
+    expect(first.status).toBe(200)
+    expect(firstBody.status).toBe("requires_escalation")
+    expect(firstBody.messages.map((m: { code: string }) => m.code)).toContain("order_not_completed_after_settlement")
+    expect(retry.status).toBe(200)
+    expect(settleRequests()).toHaveLength(1)
+    expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})
+
+describe("ACP complete keeps 409 for pending and review", () => {
+  it("answers a pending payment with 409 settlement_pending and asks for the same credential", async () => {
+    replyingGateway([reply("settlement_pending")])
+    const { acpRoutes } = buildRoutes({ prism: true, checkouts: [checkoutTemplate()], config: { acpEnabled: true } })
+
+    const response = await acpPay(acpRoutes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.code).toBe("settlement_pending")
+    expect(body.message).toContain("same payment credential")
+  })
+
+  it("answers a review without a reference with 409 and a message that names no undefined value", async () => {
+    replyingGateway([CONSUMED_REPLY])
+    const { acpRoutes } = buildRoutes({ prism: true, checkouts: [checkoutTemplate()], config: { acpEnabled: true } })
+
+    const response = await acpPay(acpRoutes, CHECKOUT_ID)
+    const body = await response.json()
+
+    expect(response.status).toBe(409)
+    expect(body.message).not.toContain("undefined")
+  })
+})
+
+describe("Session status while a settlement is live", () => {
+  it("shows complete_in_progress for a pending settlement", async () => {
+    const { routes } = withSettlement(STORED_PENDING)
+    expect((await (await getSession(routes)).json()).status).toBe("complete_in_progress")
+  })
+
+  it("shows requires_escalation for a held settlement", async () => {
+    const { routes } = withSettlement(STORED_HELD)
+    expect((await (await getSession(routes)).json()).status).toBe("requires_escalation")
+  })
+})
+
+describe("Complete with an old quote", () => {
+  it("answers 409 quote_expired for a first attempt on a quote older than 15 minutes", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const checkout = checkoutTemplate()
+    const old = new Date(Date.now() - 16 * 60 * 1000).toISOString()
+    checkout.privateMetadata = checkout.privateMetadata.map((m) => (m.key === QUOTE_KEY ? { key: m.key, value: freshQuote(JSON.parse(m.value), old) } : m))
+    const { routes } = buildRoutes({ prism: true, checkouts: [checkout] })
+
+    const response = await pay(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(409)
+    expect(await code(response)).toBe("quote_expired")
+    expect(settleRequests()).toHaveLength(0)
+  })
+})
+
+const ACP_SESSIONS = "https://store.test/api/acp/checkout_sessions"
+
+type Protocol = "ucp" | "acp"
+
+const FLAG: Record<Protocol, string> = { ucp: "ucp_canceled", acp: "acp_canceled" }
+
+function cancel(built: Built, protocol: Protocol, id = CHECKOUT_ID) {
+  if (protocol === "ucp") return built.routes.checkoutSessionCancel.POST(ucpRequest(`${UCP_SESSIONS}/${id}/cancel`, { body: {} }), params({ id }))
+  return built.acpRoutes.checkoutSessionCancel.POST(
+    new Request(`${ACP_SESSIONS}/${id}/cancel`, { method: "POST", headers: { "content-type": "application/json", ...ACP_AUTH }, body: "{}" }),
+    params({ id }),
+  )
+}
+
+function complete(built: Built, protocol: Protocol, id = CHECKOUT_ID) {
+  return protocol === "ucp" ? pay(built.routes, id) : acpPay(built.acpRoutes, id)
+}
+
+async function errorCode(response: Response, protocol: Protocol): Promise<string> {
+  const body = await response.json()
+  return protocol === "ucp" ? body.messages[0].code : body.code
+}
+
+function flagValue(saleor: Built["saleor"], key: string, id = CHECKOUT_ID): string | undefined {
+  return saleor.checkouts.get(id)!.privateMetadata.find((m) => m.key === key)?.value
+}
+
+function liveRecords() {
+  return {
+    pending: { ...STORED_PENDING, credentialSha256: credentialSha256(signed()) },
+    held: STORED_HELD,
+    settled: STORED_SETTLED,
+  }
+}
+
+function setRecord(saleor: Built["saleor"], value: object, id = CHECKOUT_ID) {
+  const checkout = saleor.checkouts.get(id)!
+  checkout.privateMetadata = [...checkout.privateMetadata.filter((m) => m.key !== SETTLEMENT_KEY), { key: SETTLEMENT_KEY, value: JSON.stringify(value) }]
+}
+
+function interceptWrites(saleor: Built["saleor"], intercept: (items: { key: string; value: string }[]) => "fail" | void) {
+  const original = saleor.client.updatePrivateMetadata.bind(saleor.client)
+  saleor.client.updatePrivateMetadata = async (id, items) => {
+    if (intercept(items) === "fail") return { ok: false as const, error: "saleor unavailable" }
+    return original(id, items)
+  }
+}
+
+const writesFlag = (items: { key: string; value: string }[], key: string, value: string) => items.some((item) => item.key === key && item.value === value)
+
+describe.each(["ucp", "acp"] as const)("Cancel while a settlement is live (%s)", (protocol) => {
+  const flag = FLAG[protocol]
+
+  it.each([
+    ["pending", "session_complete_in_progress"],
+    ["held", "session_requires_escalation"],
+    ["settled", "session_completed"],
+  ] as const)("refuses to cancel a %s settlement and leaves the session not canceled", async (state, expected) => {
+    const built = withSettlement(liveRecords()[state])
+
+    const response = await cancel(built, protocol)
+
+    expect(response.status).toBe(409)
+    expect(await errorCode(response, protocol)).toBe(expected)
+    expect(flagValue(built.saleor, flag)).toBeUndefined()
+  })
+
+  it.each([
+    ["no settlement", null],
+    ["a declined settlement", { state: "failed", attemptId: "attempt-old", amount: 5497, currency: "USD", reason: "insufficient_funds", failedAt: "2026-10-19T00:00:01.000Z" }],
+  ] as const)("cancels a session with %s", async (_case, value) => {
+    const built = value ? withSettlement(value) : buildRoutes({ prism: true, checkouts: [checkoutTemplate()], config: { acpEnabled: true } })
+
+    const response = await cancel(built, protocol)
+
+    expect(response.status).toBe(200)
+    expect((await response.json()).status).toBe("canceled")
+    expect(flagValue(built.saleor, flag)).toBe("true")
+  })
+
+  it("rolls the cancel back when a settlement started while the flag was written", async () => {
+    const built = buildRoutes({ prism: true, checkouts: [checkoutTemplate()], config: { acpEnabled: true } })
+    interceptWrites(built.saleor, (items) => {
+      if (writesFlag(items, flag, "true")) setRecord(built.saleor, liveRecords().pending)
+    })
+
+    const response = await cancel(built, protocol)
+
+    expect(response.status).toBe(409)
+    expect(await errorCode(response, protocol)).toBe("session_complete_in_progress")
+    expect(flagValue(built.saleor, flag)).toBe("false")
+  })
+
+  it("retries a failed roll back of the cancel flag", async () => {
+    const built = buildRoutes({ prism: true, checkouts: [checkoutTemplate()], config: { acpEnabled: true } })
+    let rollbacks = 0
+    interceptWrites(built.saleor, (items) => {
+      if (writesFlag(items, flag, "true")) setRecord(built.saleor, liveRecords().pending)
+      if (writesFlag(items, flag, "false") && ++rollbacks === 1) return "fail"
+    })
+
+    const response = await cancel(built, protocol)
+
+    expect(response.status).toBe(409)
+    expect(rollbacks).toBe(2)
+    expect(flagValue(built.saleor, flag)).toBe("false")
+  })
+
+  it("answers 503 when the cancel flag cannot be rolled back, and a same-credential complete still resumes", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const built = buildRoutes({ prism: true, checkouts: [checkoutTemplate()], config: { acpEnabled: true } })
+    let rollbacks = 0
+    interceptWrites(built.saleor, (items) => {
+      if (writesFlag(items, flag, "true")) setRecord(built.saleor, liveRecords().pending)
+      if (writesFlag(items, flag, "false")) {
+        rollbacks++
+        return "fail"
+      }
+    })
+
+    const response = await cancel(built, protocol)
+    const completed = await complete(built, protocol)
+
+    expect(response.status).toBe(503)
+    expect(await errorCode(response, protocol)).toBe("cancel_not_confirmed")
+    expect(rollbacks).toBe(3)
+    expect(flagValue(built.saleor, flag)).toBe("true")
+    expect(completed.status).toBe(200)
+    expect(settleRequests()).toHaveLength(1)
+    expect(built.saleor.completed).toEqual([CHECKOUT_ID])
+  })
+
+  it("does not submit the payment when a cancel lands while the settlement is being recorded", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const built = buildRoutes({ prism: true, checkouts: [checkoutTemplate()], config: { acpEnabled: true } })
+    interceptWrites(built.saleor, (items) => {
+      const pendingWrite = items.some((item) => item.key === SETTLEMENT_KEY && JSON.parse(item.value).state === "pending")
+      if (!pendingWrite) return
+      const checkout = built.saleor.checkouts.get(CHECKOUT_ID)!
+      checkout.privateMetadata = [...checkout.privateMetadata.filter((m) => m.key !== flag), { key: flag, value: "true" }]
+    })
+
+    const response = await complete(built, protocol)
+
+    expect(response.status).toBe(409)
+    expect(await errorCode(response, protocol)).toBe("session_canceled")
+    expect(settleRequests()).toHaveLength(0)
+    expect(record(built.saleor, CHECKOUT_ID)).toMatchObject({ state: "failed" })
+  })
+})
+
+function ucpUpdate(built: Built, id = CHECKOUT_ID) {
+  return built.routes.checkoutSession.PUT(
+    ucpRequest(`${UCP_SESSIONS}/${id}`, { method: "PUT", body: { line_items: [{ item: { id: "UHJvZHVjdFZhcmlhbnQ6OTk5" }, quantity: 1 }] } }),
+    params({ id }),
+  )
+}
+
+function acpUpdate(built: Built, id = CHECKOUT_ID) {
+  return built.acpRoutes.checkoutSession.POST(
+    new Request(`${ACP_SESSIONS}/${id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...ACP_AUTH },
+      body: JSON.stringify({ items: [{ id: "UHJvZHVjdFZhcmlhbnQ6OTk5", quantity: 1 }] }),
+    }),
+    params({ id }),
+  )
+}
+
+describe("Update while a settlement is live", () => {
+  it.each([
+    ["pending", "session_complete_in_progress"],
+    ["held", "session_requires_escalation"],
+    ["settled", "session_completed"],
+  ] as const)("refuses a UCP and an ACP update of a %s settlement without touching the cart or the quote", async (state, expected) => {
+    gateway = stubPrismGateway()
+    const built = withSettlement(liveRecords()[state])
+    const lineCalls = vi.spyOn(built.saleor.client, "updateCheckoutLines")
+    const addCalls = vi.spyOn(built.saleor.client, "addCheckoutLines")
+
+    const ucp = await ucpUpdate(built)
+    const acp = await acpUpdate(built)
+
+    expect(ucp.status).toBe(409)
+    expect(await errorCode(ucp, "ucp")).toBe(expected)
+    expect(acp.status).toBe(409)
+    expect(await errorCode(acp, "acp")).toBe(expected)
+    expect(lineCalls).not.toHaveBeenCalled()
+    expect(addCalls).not.toHaveBeenCalled()
+    expect(gateway.requests.filter((r) => r.url.endsWith("/payment-requirements"))).toHaveLength(0)
+  })
+
+  it("does not change the billing address on a same-credential complete of a pending payment", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const built = withSettlement(liveRecords().pending)
+    const billing = vi.spyOn(built.saleor.client, "updateCheckoutBillingAddress")
+    const address = { first_name: "Ada", last_name: "Lovelace", street_address: "1 Way", address_locality: "London", postal_code: "N1", address_country: "GB" }
+
+    const response = await built.routes.checkoutSessionComplete.POST(
+      ucpRequest(`${UCP_SESSIONS}/${CHECKOUT_ID}/complete`, {
+        body: { payment: { instruments: [{ id: "inst_1", handler_id: PRISM, type: "x402", credential: signed(), billing_address: address }] } },
+      }),
+      params({ id: CHECKOUT_ID }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(billing).not.toHaveBeenCalled()
   })
 })

@@ -280,5 +280,6 @@ export {
 } from "./lib/session-secret.js"
 export type { SessionSecretRecord } from "./lib/session-secret.js"
 
+export { credentialSha256 } from "./lib/credential-digest.js"
 export { createMemoryPaymentReplayStore, resolvePaymentReplayStore, settledReferenceFromKeys, settlementReplayKey } from "./lib/payment-replay.js"
 export type { PaymentReplayClaim, PaymentReplayStore } from "./lib/payment-replay.js"

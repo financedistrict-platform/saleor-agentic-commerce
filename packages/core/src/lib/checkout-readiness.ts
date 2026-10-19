@@ -7,6 +7,8 @@
  * places an order. Whatever Saleor complains about is passed back verbatim.
  */
 
+import { metadataToRecord } from "./metadata.js"
+import { readSettlementRecord } from "./payment-reconciliation.js"
 import type { SaleorClient } from "./saleor-client.js"
 import type { SaleorCheckout } from "../types/saleor.js"
 import type { UcpCheckoutStatus, UcpMessage } from "../types/ucp.js"
@@ -80,6 +82,10 @@ export async function evaluateReadiness(
   saleor: SaleorClient,
   checkout: SaleorCheckout,
 ): Promise<CheckoutReadiness> {
+  const settlement = readSettlementRecord(metadataToRecord(checkout.privateMetadata))
+  if (settlement.kind === "pending") return { status: "complete_in_progress", ready: false, messages: [] }
+  if (settlement.kind === "held") return { status: "requires_escalation", ready: false, messages: [] }
+
   // A transaction already present means settlement is underway or done; a probe
   // here would drive a real completion.
   if (checkout.transactions && checkout.transactions.length > 0) {
