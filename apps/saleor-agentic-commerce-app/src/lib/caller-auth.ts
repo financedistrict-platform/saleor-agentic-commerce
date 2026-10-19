@@ -106,7 +106,8 @@ async function validateCallerToken(
 async function lookupOwnAuth(saleorApiUrl: string): Promise<AuthData | undefined> {
   try {
     return await saleorApp.apl.get(saleorApiUrl)
-  } catch {
+  } catch (err) {
+    console.error("[caller-auth] APL lookup failed:", err)
     return undefined
   }
 }

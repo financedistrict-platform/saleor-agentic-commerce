@@ -67,7 +67,6 @@ type AppConfigResponse = {
 // =====================================================
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  // 1. Validate caller credentials.
   const creds = readCallerCredentials(request)
   if (!creds) {
     return NextResponse.json(
@@ -88,8 +87,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   }
   const { ownAuth } = caller
 
-  // 3. Read the App's own privateMetadata using its own credentials and
-  //    parse into the AppConfig shape the storefront SDK expects.
   try {
     const manager = new ConfigManager(ownAuth.saleorApiUrl, ownAuth.token)
 

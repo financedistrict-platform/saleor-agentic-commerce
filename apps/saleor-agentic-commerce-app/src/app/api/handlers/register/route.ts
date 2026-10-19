@@ -51,7 +51,6 @@ function isWellFormedManifest(m: unknown): m is HandlerManifest {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  // 1. Validate caller credentials.
   const creds = readCallerCredentials(request)
   if (!creds) {
     return NextResponse.json(
@@ -71,7 +70,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   const { appId, ownAuth } = caller
 
-  // 2. Parse body.
   let body: RegisterBody
   try {
     body = (await request.json()) as RegisterBody
@@ -93,8 +91,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   const manifest = body.manifest
 
-  // 4. Read existing entry, merge manifest, write back. Preserves
-  //    merchant-controlled fields across re-registers.
   try {
     const manager = new ConfigManager(ownAuth.saleorApiUrl, ownAuth.token)
     const existing = await manager.getPaymentHandler(manifest.id)
