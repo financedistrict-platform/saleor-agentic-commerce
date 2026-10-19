@@ -169,15 +169,21 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       })
 
       if (!result.success) {
-        return { success: false, outcome: result.outcome, error: result.error }
+        return {
+          success: false,
+          outcome: result.outcome,
+          error: result.error,
+          ...(result.settledReference ? { settledReference: result.settledReference } : {}),
+          ...(result.pendingReference ? { pendingReference: result.pendingReference } : {}),
+        }
       }
       const { network } = signed
       const settledReference = result.transactionHash
       if (result.network !== undefined && result.network !== network) {
-        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} on ${result.network}, not on the signed network ${network}` }
+        return { success: false, outcome: "review", code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} on ${result.network}, not on the signed network ${network}` }
       }
       if (result.payer !== undefined && canonicalOnNetwork(network, result.payer) !== canonicalOnNetwork(network, signed.from)) {
-        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} from another payer than the signed authorization` }
+        return { success: false, outcome: "review", code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} from another payer than the signed authorization` }
       }
 
       return {
@@ -191,7 +197,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown error"
-      return { success: false, outcome: "unknown", error: `Prism settlement failed: ${message}` }
+      return { success: false, outcome: "pending", error: `Prism settlement failed: ${message}` }
     }
   }
 

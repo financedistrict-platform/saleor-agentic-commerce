@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { settlementReplayKey } from "@financedistrict/saleor-agentic-commerce-core"
 import type { PaymentHandlerAdapter, PaymentSettleInput, SaleorCheckout } from "@financedistrict/saleor-agentic-commerce-core"
@@ -18,6 +21,18 @@ const QUOTED = {
 }
 
 type Built = ReturnType<typeof buildRoutes>
+
+type SettleRow = { name: string; http: number; body: Record<string, unknown> | null; first: string; resume: string }
+
+const SETTLE_ROWS: SettleRow[] = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "prism-payment", "src", "__fixtures__", "settle-replies.json"), "utf8"),
+).rows
+
+function settleRow(name: string): SettleRow {
+  const row = SETTLE_ROWS.find((candidate) => candidate.name === name)
+  if (!row) throw new Error(`settle fixture has no row ${name}`)
+  return row
+}
 
 let gateway: ReturnType<typeof stubPrismGateway>
 
@@ -690,7 +705,7 @@ describe("Complete when another request already settled the payment", () => {
       settle: async () => {
         calls++
         await built.instance.paymentReplayStore.claim([settlementReplayKey(PRISM, WON)], CHECKOUT_ID)
-        return { success: false, errorReason: "authorization is already used" }
+        return { success: false, errorReason: "credential_already_used" }
       },
     })
 
@@ -788,5 +803,40 @@ describe("Complete when the pending record cannot be read back", () => {
     expect(response.status).toBe(200)
     expect(settleRequests()).toHaveLength(1)
     expect(saleor.completed).toEqual([CHECKOUT_ID])
+  })
+})
+
+describe("Complete when the gateway reply is classified by the settle contract", () => {
+  it.each(["settlement_pending", "transaction_reverted"])("keeps the settlement pending for a %s reply that carries a transaction", async (name) => {
+    const row = settleRow(name)
+    gateway = stubPrismGateway({ settle: () => row.body })
+    const { routes, saleor } = prismRoutes()
+    const states: string[] = []
+    const original = saleor.client.updatePrivateMetadata.bind(saleor.client)
+    saleor.client.updatePrivateMetadata = async (id, items) => {
+      for (const item of items) if (item.key === SETTLEMENT_KEY) states.push(JSON.parse(item.value).state)
+      return original(id, items)
+    }
+
+    const response = await pay(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(409)
+    expect(await code(response)).toBe("settlement_pending")
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "pending" })
+    expect(states).toEqual(["pending"])
+    expect(saleor.transactions).toEqual([])
+    expect(saleor.completed).toEqual([])
+  })
+
+  it("records a failure and answers payment_failed for a quote_not_found reply", async () => {
+    const row = settleRow("quote_not_found")
+    gateway = stubPrismGateway({ settle: () => row.body })
+    const { routes, saleor } = prismRoutes()
+
+    const response = await pay(routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(422)
+    expect(await code(response)).toBe("payment_failed")
+    expect(record(saleor, CHECKOUT_ID)).toMatchObject({ state: "failed" })
   })
 })

@@ -396,7 +396,7 @@ async function submit(context: SettleContext, settleInput: PaymentSettleInput): 
   try {
     return await context.instance.paymentHandlers.settlePayment(settleInput)
   } catch (error: unknown) {
-    return { success: false, outcome: "unknown", error: error instanceof Error ? error.message : "Unknown error" }
+    return { success: false, outcome: "pending", error: error instanceof Error ? error.message : "Unknown error" }
   }
 }
 

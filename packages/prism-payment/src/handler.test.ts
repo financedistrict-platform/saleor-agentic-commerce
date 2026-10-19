@@ -988,17 +988,17 @@ describe("PrismPaymentHandler — settlement declaration and outcome", () => {
     mock.settle.mockResolvedValueOnce({ success: false, outcome: "declined", error: "insufficient_funds" })
     expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "declined", error: "insufficient_funds" })
 
-    mock.settle.mockResolvedValueOnce({ success: false, outcome: "unknown", error: "unreadable" })
-    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "unknown", error: "unreadable" })
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "pending", error: "unreadable" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "pending", error: "unreadable" })
   })
 
-  it("reports an unknown outcome when the request to the gateway throws", async () => {
+  it("reports a pending outcome when the request to the gateway throws", async () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockRejectedValue(new Error("socket hang up"))
 
     expect(await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }))).toEqual({
       success: false,
-      outcome: "unknown",
+      outcome: "pending",
       error: "Prism settlement failed: socket hang up",
     })
   })
