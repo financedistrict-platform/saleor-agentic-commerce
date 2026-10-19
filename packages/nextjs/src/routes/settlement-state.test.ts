@@ -1014,6 +1014,26 @@ describe("Resuming a pending settlement with the same payment credential", () =>
     expect(answers.some((answer) => answer.status === 200)).toBe(true)
   })
 
+  it("does not resume from a stale read when another request already moved the settlement on", async () => {
+    replyingGateway([SETTLED_REPLY])
+    const built = withSettlement(STORED_SETTLED)
+    const stale = structuredClone(built.saleor.checkouts.get(CHECKOUT_ID)!)
+    stale.privateMetadata = [
+      ...stale.privateMetadata.filter((m) => m.key !== SETTLEMENT_KEY),
+      { key: SETTLEMENT_KEY, value: JSON.stringify({ ...STORED_PENDING, credentialSha256: credentialSha256(signed()) }) },
+    ]
+    const originalRead = built.saleor.client.getCheckout.bind(built.saleor.client)
+    let reads = 0
+    built.saleor.client.getCheckout = async (id) => (++reads === 1 ? { ok: true as const, data: structuredClone(stale) } : originalRead(id))
+
+    const response = await pay(built.routes, CHECKOUT_ID)
+
+    expect(response.status).toBe(409)
+    expect(await code(response)).toBe("settlement_in_progress")
+    expect(settleRequests()).toHaveLength(0)
+    expect(record(built.saleor, CHECKOUT_ID)).toMatchObject({ state: "settled", reference: "0xdone" })
+  })
+
   it("does not record the transaction again when it was recorded after the checkout was read", async () => {
     const built = prismRoutes()
     replyingGateway([reply("settlement_pending"), SETTLED_REPLY], async (call) => {
@@ -1351,6 +1371,22 @@ describe("Update while a settlement is live", () => {
     expect(lineCalls).not.toHaveBeenCalled()
     expect(addCalls).not.toHaveBeenCalled()
     expect(gateway.requests.filter((r) => r.url.endsWith("/payment-requirements"))).toHaveLength(0)
+  })
+
+  it.each(["ucp", "acp"] as const)("names the live settlement, not a stranded cancel flag, when a %s update is refused", async (protocol) => {
+    gateway = stubPrismGateway()
+    const checkout = checkoutTemplate()
+    checkout.privateMetadata = [
+      ...checkout.privateMetadata,
+      { key: SETTLEMENT_KEY, value: JSON.stringify(liveRecords().pending) },
+      { key: FLAG[protocol], value: "true" },
+    ]
+    const built = buildRoutes({ prism: true, checkouts: [checkout], config: { acpEnabled: true } })
+
+    const response = protocol === "ucp" ? await ucpUpdate(built) : await acpUpdate(built)
+
+    expect(response.status).toBe(409)
+    expect(await errorCode(response, protocol)).toBe("session_complete_in_progress")
   })
 
   it("does not change the billing address on a same-credential complete of a pending payment", async () => {

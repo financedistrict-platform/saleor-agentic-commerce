@@ -494,11 +494,11 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         const pinned = pinScope(scope, sessionMetadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
+        const refused = cancelRefusal(sessionMetadata)
+        if (refused) return ucpError(scope.wire, refused.code, refused.message, 409)
         if (sessionMetadata.ucp_canceled === true) {
           return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
         }
-        const refused = cancelRefusal(sessionMetadata)
-        if (refused) return ucpError(scope.wire, refused.code, refused.message, 409)
 
         let body: any
         try {

@@ -316,6 +316,11 @@ async function recoverPending(context: SettleContext, pending: PendingSettlement
   }
   if (pending.credentialSha256 !== credentialSha256(context.payment.credential)) return context.reject(pendingMismatchFailure())
 
+  const latest = await context.instance.saleorClient.getCheckout(id)
+  if (!latest.ok) return context.reject(pendingFailure())
+  const current = readSettlementRecord(metadataToRecord(latest.data.privateMetadata))
+  if (current.kind !== "pending" || current.pending.attemptId !== pending.attemptId) return context.reject(inProgressFailure())
+
   const next: PendingSettlement = { ...pending, attemptId: crypto.randomUUID() }
   const claimed = await claimAttempt(context, next, true)
   if (claimed) return claimed

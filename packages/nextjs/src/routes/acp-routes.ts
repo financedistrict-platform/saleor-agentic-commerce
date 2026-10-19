@@ -261,11 +261,11 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         const cancelGuard = await saleorClient.getCheckout(id)
         if (!cancelGuard.ok) return acpError("not_found", cancelGuard.error, 404)
         const guardMetadata = metadataToRecord(cancelGuard.data.privateMetadata)
+        const refused = cancelRefusal(guardMetadata)
+        if (refused) return acpError(refused.code, refused.message, 409)
         if (guardMetadata.acp_canceled === true) {
           return acpError("session_canceled", "Checkout session has been canceled", 409)
         }
-        const refused = cancelRefusal(guardMetadata)
-        if (refused) return acpError(refused.code, refused.message, 409)
 
         // Update buyer email
         if (body.buyer?.email) {
