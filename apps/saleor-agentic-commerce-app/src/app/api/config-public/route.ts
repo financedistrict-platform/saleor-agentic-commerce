@@ -28,11 +28,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { saleorApp } from "@/lib/saleor-app"
 import { ConfigManager } from "@/lib/config-manager"
 import {
+  authorizeCaller,
   readCallerCredentials,
-  validateCallerToken,
 } from "@/lib/caller-auth"
 import { publicHandlerConfig } from "@/lib/config-secrets"
 import type { HandlerManifest, PaymentHandlerEntry } from "@/lib/metadata-keys"
@@ -80,26 +79,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     )
   }
 
-  const validation = await validateCallerToken(creds)
-  if (!validation.ok) {
+  const caller = await authorizeCaller(creds)
+  if (!caller.ok) {
     return NextResponse.json(
-      { error: `Unauthorized: ${validation.message}` },
-      { status: validation.status },
+      { error: `Unauthorized: ${caller.message}` },
+      { status: caller.status },
     )
   }
-
-  // 2. Look up the Agentic Commerce App's own auth for this Saleor
-  //    instance. The APL was populated during install (EnvAPL reads from
-  //    env vars; UpstashAPL from Redis; FileAPL from local disk).
-  const ownAuth = await saleorApp.apl.get(creds.saleorApiUrl)
-  if (!ownAuth) {
-    return NextResponse.json(
-      {
-        error: `Agentic Commerce App is not registered for ${creds.saleorApiUrl}. Install it via the Saleor dashboard first.`,
-      },
-      { status: 503 },
-    )
-  }
+  const { ownAuth } = caller
 
   // 3. Read the App's own privateMetadata using its own credentials and
   //    parse into the AppConfig shape the storefront SDK expects.

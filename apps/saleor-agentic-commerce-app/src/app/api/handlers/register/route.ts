@@ -24,10 +24,9 @@
  */
 
 import { NextRequest, NextResponse } from "next/server"
-import { saleorApp } from "@/lib/saleor-app"
 import {
+  authorizeCaller,
   readCallerCredentials,
-  validateCallerToken,
 } from "@/lib/caller-auth"
 import { ConfigManager } from "@/lib/config-manager"
 import {
@@ -63,13 +62,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       { status: 401 },
     )
   }
-  const validation = await validateCallerToken(creds)
-  if (!validation.ok) {
+  const caller = await authorizeCaller(creds)
+  if (!caller.ok) {
     return NextResponse.json(
-      { error: `Unauthorized: ${validation.message}` },
-      { status: validation.status },
+      { error: `Unauthorized: ${caller.message}` },
+      { status: caller.status },
     )
   }
+  const { appId, ownAuth } = caller
 
   // 2. Parse body.
   let body: RegisterBody
@@ -93,28 +93,25 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
   const manifest = body.manifest
 
-  // 3. Look up the App's own auth — needed to write to its own metadata.
-  const ownAuth = await saleorApp.apl.get(creds.saleorApiUrl)
-  if (!ownAuth) {
-    return NextResponse.json(
-      {
-        error: `Agentic Commerce App is not registered for ${creds.saleorApiUrl}. Install it via the Saleor dashboard first.`,
-      },
-      { status: 503 },
-    )
-  }
-
   // 4. Read existing entry, merge manifest, write back. Preserves
   //    merchant-controlled fields across re-registers.
   try {
     const manager = new ConfigManager(ownAuth.saleorApiUrl, ownAuth.token)
     const existing = await manager.getPaymentHandler(manifest.id)
 
+    if (existing?.ownerAppId && existing.ownerAppId !== appId) {
+      return NextResponse.json(
+        { error: "handler_owned_by_other_app" },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      )
+    }
+
     const updated: PaymentHandlerEntry = {
       enabled: existing?.enabled ?? false,
       channels: existing?.channels ?? null,
       config: existing?.config ?? {},
       manifest,
+      ownerAppId: appId,
     }
 
     await manager.savePaymentHandler(manifest.id, updated)
