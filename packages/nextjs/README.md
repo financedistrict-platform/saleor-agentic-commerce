@@ -231,14 +231,19 @@ The settle path records its progress on the checkout, in the private metadata ke
 | `held` | The payment settled but cannot be accepted (`settled_payment_mismatch`, `settled_payment_unchecked` or `payment_already_used`). | The same 409; nothing is submitted. |
 | `failed` | The gateway clearly declined the payment. The record keeps the amount that was about to be submitted. | Submits again, unless the store already holds a settlement reference for the checkout; then finishes the order from it at the recorded amount. A `failed` record without an amount gets 409 `settlement_pending` in that case. |
 
-A failure whose outcome is unknown (timeout, network error, an unreadable reply or
-a handler that does not say) leaves the checkout `pending`. Only a clear decline
-makes it `failed`. Handlers report this with `outcome: "declined" | "unknown"` on a
-failed settle result; a missing outcome counts as unknown.
+A failure that is not a clear decline (timeout, network error, an unreadable reply,
+a pending or unlisted gateway reason, or a handler that does not say) leaves the checkout
+`pending`. Only a clear decline makes it `failed`. Handlers report this with
+`outcome: "declined" | "pending" | "review"` on a failed settle result; a missing outcome
+counts as pending. A `pending` result may carry the gateway transaction as
+`pendingReference`; only a result with a `settledReference` is held.
 
-`failed` is written only when the gateway answers clearly. How the Prism handler sorts
-HTTP replies into declined and unknown is an assumption that has not been tried against a
-real gateway. For a scheme whose authorization has no one-time nonce on chain, two
+The Prism handler sorts each settle reply with explicit reason lists: listed pre-broadcast
+reasons and HTTP 4xx other than 408/409/429 are declined; `checkout_already_settled`,
+`authorization_consumed` and `settlement_unresolved` are review; everything else that is
+not a settled reply with a transaction is pending.
+
+For a scheme whose authorization has no one-time nonce on chain, two
 parallel completes of the same checkout are not safe, because reading the record back
 only narrows the window.
 

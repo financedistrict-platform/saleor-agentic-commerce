@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import { readFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { PrismClient } from "./prism-client.js"
+
+type SettleRow = { name: string; http: number; body: Record<string, unknown> | null; first: "settled" | "pending" | "review" | "declined" }
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const settleRows: SettleRow[] = JSON.parse(readFileSync(join(HERE, "__fixtures__", "settle-replies.json"), "utf8")).rows
 
 describe("PrismClient — payload formatting", () => {
   let fetchMock: ReturnType<typeof vi.fn>
@@ -74,7 +82,7 @@ describe("PrismClient — settle reply", () => {
   })
 
   function replying(reply: unknown) {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => reply }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => reply }))
     return new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" }).settle({ paymentPayload: {}, paymentRequirements: {} })
   }
 
@@ -107,20 +115,20 @@ describe("PrismClient — settle outcome of a failure", () => {
   })
 
   function answering(response: { ok: boolean; status?: number; text?: string; json?: () => Promise<unknown> }) {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ text: async () => response.text ?? "", ...response }))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ text: async () => response.text ?? "", json: async () => null, ...response }))
     return new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" }).settle({ paymentPayload: {}, paymentRequirements: {} })
   }
 
-  it.each([400, 402, 422, 429])("treats an HTTP %i as declined", async (status) => {
+  it.each([400, 402, 422])("treats an HTTP %i as declined", async (status) => {
     expect(await answering({ ok: false, status })).toMatchObject({ success: false, outcome: "declined" })
   })
 
-  it.each([408, 409, 500, 502, 504])("treats an HTTP %i as unknown, since the gateway may still have settled", async (status) => {
-    expect(await answering({ ok: false, status })).toMatchObject({ success: false, outcome: "unknown" })
+  it.each([408, 409, 429, 500, 502, 504])("treats an HTTP %i as pending, since the gateway may still have settled", async (status) => {
+    expect(await answering({ ok: false, status })).toMatchObject({ success: false, outcome: "pending" })
   })
 
   it("treats a reply that says success is false as declined and keeps its reason", async () => {
-    expect(await answering({ ok: true, json: async () => ({ success: false, errorReason: "insufficient_funds" }) })).toEqual({
+    expect(await answering({ ok: true, status: 200, json: async () => ({ success: false, errorReason: "insufficient_funds" }) })).toEqual({
       success: false,
       outcome: "declined",
       error: "insufficient_funds",
@@ -133,10 +141,43 @@ describe("PrismClient — settle outcome of a failure", () => {
     ["no success flag", async () => ({ transaction: "0x1" })],
     ["a success flag that is not a boolean", async () => ({ success: "true", transaction: "0x1" })],
     ["success without a transaction", async () => ({ success: true })],
-    ["success with an unreadable network", async () => ({ success: true, transaction: "0x1", network: 8453 })],
-    ["success with an unreadable payer", async () => ({ success: true, transaction: "0x1", payer: {} })],
-  ])("treats a reply with %s as unknown", async (_case, json) => {
-    expect(await answering({ ok: true, json })).toMatchObject({ success: false, outcome: "unknown" })
+  ])("treats a reply with %s as pending", async (_case, json) => {
+    expect(await answering({ ok: true, status: 200, json })).toMatchObject({ success: false, outcome: "pending" })
+  })
+
+  it.each([
+    ["an unreadable network", async () => ({ success: true, transaction: "0x1", network: 8453 })],
+    ["an unreadable payer", async () => ({ success: true, transaction: "0x1", payer: {} })],
+  ])("holds a settled reply with %s for review and keeps its transaction", async (_case, json) => {
+    expect(await answering({ ok: true, status: 200, json })).toMatchObject({ success: false, outcome: "review", settledReference: "0x1" })
+  })
+
+  it("treats a request that throws as pending", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")))
+    const result = await new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" }).settle({ paymentPayload: {}, paymentRequirements: {} })
+    expect(result).toMatchObject({ success: false, outcome: "pending" })
+  })
+
+  it("holds a failure on a resume for review", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ success: false, errorReason: "quote_not_found" }) }))
+    const result = await new PrismClient({ apiUrl: "https://prism.test", apiKey: "k" }).settle({ paymentPayload: {}, paymentRequirements: {}, resumed: true })
+    expect(result).toMatchObject({ success: false, outcome: "review" })
+  })
+
+  it.each(settleRows.map((row) => [row.name, row] as const))("settle contract: %s first attempt outcome", async (_name, row) => {
+    const result = await answering({ ok: row.http >= 200 && row.http <= 299, status: row.http, json: async () => row.body })
+    const transaction = typeof row.body?.transaction === "string" ? row.body.transaction : undefined
+    expect(result).toMatchObject({ success: false, outcome: row.first })
+    if (result.success) return
+    if (row.first === "pending") {
+      expect(result.settledReference).toBeUndefined()
+      expect(result.pendingReference).toBe(transaction)
+    }
+    if (row.first === "review") expect(result.settledReference).toBe(transaction)
+    if (row.first === "declined") {
+      expect(result.settledReference).toBeUndefined()
+      expect(result.pendingReference).toBeUndefined()
+    }
   })
 
   it("treats a missing API key as declined, since nothing was sent", async () => {
