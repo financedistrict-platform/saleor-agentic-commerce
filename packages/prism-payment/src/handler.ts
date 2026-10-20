@@ -17,6 +17,7 @@ import {
   type UcpHandlersDiscoveryResponse,
   type X402AcceptEntry,
 } from "./prism-client.js"
+import { REVIEW_REASONS } from "./settle-classifier.js"
 
 
 export const PRISM_HANDLER_ID = "xyz.fd.prism_payment"
@@ -166,6 +167,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       const result = await this.client.settle({
         paymentPayload: { ...signed.payload, resource: { url: resourceUrl } },
         paymentRequirements: entry,
+        ...(input.resume === true ? { resumed: true } : {}),
       })
 
       if (!result.success) {
@@ -173,6 +175,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
           success: false,
           outcome: result.outcome,
           error: result.error,
+          ...(result.outcome === "review" && REVIEW_REASONS.includes(result.error) ? { code: result.error } : {}),
           ...(result.settledReference ? { settledReference: result.settledReference } : {}),
           ...(result.pendingReference ? { pendingReference: result.pendingReference } : {}),
         }
@@ -252,7 +255,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
 
     const expiresAt = authorizationExpiry(signed)
-    if (expiresAt !== undefined && expiresAt <= Date.now()) {
+    if (input.resume !== true && expiresAt !== undefined && expiresAt <= Date.now()) {
       return { ok: false, code: "payment_expired", error: "The signed authorization has expired. Sign a new payment and complete again." }
     }
 

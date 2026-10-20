@@ -48,7 +48,9 @@ import {
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
-import type { FormatterContext, SaleorCheckout, SessionSecretRecord, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
+import type { CompletionFailure } from "./settle-and-complete.js"
+import { cancelCheckout, cancelRefusal } from "./cancel-guard.js"
+import type { FormatterContext, SaleorCheckout, SessionSecretRecord, UcpErrorSeverity, UcpMessage, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   UCP_VERSION_METADATA_KEY,
@@ -121,6 +123,23 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     severity?: UcpErrorSeverity,
   ): Response {
     return Response.json(wire.error({ code, content, severity }), { status })
+  }
+
+  function completionFailureResponse(scope: UcpRequestScope, checkout: SaleorCheckout, failure: CompletionFailure): Response {
+    if (failure.disposition === "pending") {
+      const messages: UcpMessage[] = [
+        { type: "info", code: "settlement_pending", content: "Payment is being confirmed. Retry complete with the same payment credential." },
+      ]
+      return Response.json(formatUcpCheckoutSession(scope.ctx, checkout, { status: "complete_in_progress", messages }), { status: 202 })
+    }
+    if (failure.disposition === "review") {
+      const messages: UcpMessage[] = [
+        { type: "error", code: "payment_requires_review", severity: "unrecoverable", content: "The payment needs merchant review. Do not pay again." },
+        { type: "error", code: failure.code, severity: failure.severity ?? "unrecoverable", content: failure.message },
+      ]
+      return Response.json(formatUcpCheckoutSession(scope.ctx, checkout, { status: "requires_escalation", messages }))
+    }
+    return ucpError(scope.wire, failure.code, failure.message, failure.status, failure.severity)
   }
 
   function scopeOf(resolution: UcpResolution): UcpRequestScope {
@@ -450,7 +469,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         // metadataToRecord JSON.parses values, so the literal "true" written by
         // the cancel route comes back as boolean true (not the string "true").
-        const canceled = sessionMetadata.ucp_canceled === true
+        const canceled = sessionMetadata.ucp_canceled === true && cancelRefusal(sessionMetadata) === null
         if (canceled) {
           const session = formatUcpCheckoutSession(scope.ctx, owned)
           return Response.json({ ...session, status: "canceled" })
@@ -475,6 +494,8 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         const pinned = pinScope(scope, sessionMetadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
+        const refused = cancelRefusal(sessionMetadata)
+        if (refused) return ucpError(scope.wire, refused.code, refused.message, 409)
         if (sessionMetadata.ucp_canceled === true) {
           return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
         }
@@ -624,7 +645,8 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // Refuse to settle on a session the agent has already cancelled.
         // Without this, an agent that aborts and retries can still sign
         // and settle against a session it thought was dead.
-        if (metadata.ucp_canceled === true) {
+        const liveSettlement = cancelRefusal(metadata) !== null
+        if (metadata.ucp_canceled === true && !liveSettlement) {
           return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
         }
 
@@ -633,7 +655,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // is checked there, but silently swallowed here — a malformed
         // override would let settlement proceed against the previously-set
         // billing address with no error surfaced to the agent.
-        if (selectedInstrument.billing_address) {
+        if (selectedInstrument.billing_address && !liveSettlement) {
           const addr = ucpToSaleorAddress(selectedInstrument.billing_address)
           const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
           if (!billingResult.ok) {
@@ -658,7 +680,8 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             const readiness = await evaluateReadiness(saleorClient, checkout)
             return readiness.ready ? null : Response.json(formatUcpCheckoutSession(scope.ctx, checkout, readiness))
           },
-          fail: ({ code, message, status, severity }) => ucpError(scope.wire, code, message, status, severity),
+          fail: (failure) => completionFailureResponse(scope, checkout, failure),
+          isCanceled: (current) => current.ucp_canceled === true,
           logPrefix: "[ucp-routes]",
         })
         if (!completion.ok) return completion.response
@@ -691,28 +714,13 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
         const owned = await loadOwnedCheckout(request, scope.wire, id)
         if (owned instanceof Response) return owned
-        const pinned = pinScope(scope, metadataToRecord(owned.privateMetadata))
+        const ownedMetadata = metadataToRecord(owned.privateMetadata)
+        const pinned = pinScope(scope, ownedMetadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
 
-        // Mark as canceled via metadata. We MUST check this write succeeded
-        // before telling the agent the session is cancelled — the cancel
-        // guards on GET/PUT/complete (PR #40, fixed in PR #42) read this
-        // metadata flag to decide whether to refuse further mutations. A
-        // silent persistence failure here would return status="canceled" to
-        // the agent but leave the flag unwritten, so the very next request
-        // would find no flag, the guards would not fire, and the agent could
-        // continue to mutate, sign, and settle against a session it thought
-        // was dead — the exact bug PR #42 closed at the type-coercion layer,
-        // re-opened here at a different failure mode (transient Saleor write
-        // error, permission issue, concurrent modification).
-        const persistResult = await saleorClient.updatePrivateMetadata(id, [
-          { key: "ucp_canceled", value: "true" },
-          { key: "ucp_canceled_at", value: new Date().toISOString() },
-        ])
-        if (!persistResult.ok) {
-          return ucpError(scope.wire, "cancel_persist_failed", persistResult.error, 422)
-        }
+        const canceled = await cancelCheckout(saleorClient, id, ownedMetadata, "ucp_canceled")
+        if (!canceled.ok) return ucpError(scope.wire, canceled.code, canceled.message, canceled.status)
 
         // Return full checkout session with canceled status
         const session = formatUcpCheckoutSession(scope.ctx, owned)

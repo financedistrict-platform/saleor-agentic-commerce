@@ -123,6 +123,7 @@ type PaymentSettleInputBase = {
   credential: unknown
   /** Checkout metadata (may contain handler-specific state) */
   checkoutMetadata?: Record<string, unknown>
+  resume?: boolean
 }
 
 export type PaymentSettleInput =

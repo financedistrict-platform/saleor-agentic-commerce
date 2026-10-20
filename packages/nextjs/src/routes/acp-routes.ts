@@ -36,6 +36,7 @@ import {
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
+import { cancelCheckout, cancelRefusal } from "./cancel-guard.js"
 import { rejectMoneyErrors } from "./money-errors.js"
 
 export type AcpRouteHandlers = {
@@ -259,7 +260,10 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         // Refuse updates on a session the agent has already cancelled.
         const cancelGuard = await saleorClient.getCheckout(id)
         if (!cancelGuard.ok) return acpError("not_found", cancelGuard.error, 404)
-        if (metadataToRecord(cancelGuard.data.privateMetadata).acp_canceled === true) {
+        const guardMetadata = metadataToRecord(cancelGuard.data.privateMetadata)
+        const refused = cancelRefusal(guardMetadata)
+        if (refused) return acpError(refused.code, refused.message, 409)
+        if (guardMetadata.acp_canceled === true) {
           return acpError("session_canceled", "Checkout session has been canceled", 409)
         }
 
@@ -355,31 +359,26 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           return acpError("missing", "payment_data is required", 400)
         }
 
-        // Update billing address if provided. Mirror the PUT route's
-        // error-check pattern: the same SDK call is checked there, but
-        // silently swallowed here — a malformed override would let
-        // settlement proceed against the previously-set billing address
-        // with no error surfaced to the agent.
-        if (paymentData.billing_address) {
+        const checkoutResult = await saleorClient.getCheckout(id)
+        if (!checkoutResult.ok) return acpError("not_found", checkoutResult.error, 404)
+
+        let checkout = checkoutResult.data
+        const metadata = metadataToRecord(checkout.privateMetadata)
+        const liveSettlement = cancelRefusal(metadata) !== null
+
+        if (metadata.acp_canceled === true && !liveSettlement) {
+          return acpError("session_canceled", "Checkout session has been canceled", 409)
+        }
+
+        if (paymentData.billing_address && !liveSettlement) {
           const addr = acpToSaleorAddress(paymentData.billing_address)
           const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
           if (!billingResult.ok) {
             return acpError("billing_address_update_failed", billingResult.error, 422)
           }
-        }
-
-        // Fetch checkout for metadata
-        const checkoutResult = await saleorClient.getCheckout(id)
-        if (!checkoutResult.ok) return acpError("not_found", checkoutResult.error, 404)
-
-        const checkout = checkoutResult.data
-        const metadata = metadataToRecord(checkout.privateMetadata)
-
-        // Refuse to settle on a session the agent has already cancelled.
-        // Without this, an agent that aborts and retries can still sign
-        // and settle against a session it thought was dead.
-        if (metadata.acp_canceled === true) {
-          return acpError("session_canceled", "Checkout session has been canceled", 409)
+          const refreshed = await saleorClient.getCheckout(id)
+          if (!refreshed.ok) return acpError("not_found", refreshed.error, 404)
+          checkout = refreshed.data
         }
 
         // Determine the payment handler to use
@@ -393,6 +392,7 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
           checkout,
           payment: { protocol: "acp", handlerId, ucpVersion: config.ucpVersion, credential },
           fail: ({ code, message, status }) => acpError(code, message, status),
+          isCanceled: (current) => current.acp_canceled === true,
           logPrefix: "[acp-routes]",
         })
         if (!completion.ok) return completion.response
@@ -421,24 +421,8 @@ export function createAcpRoutes(instance: AgenticCommerceInstance): AcpRouteHand
         const result = await saleorClient.getCheckout(id)
         if (!result.ok) return acpError("not_found", result.error, 404)
 
-        // Mark as canceled via metadata. We MUST check this write succeeded
-        // before telling the agent the session is cancelled — the cancel
-        // guards on GET/PUT/complete (PR #40, fixed in PR #42) read this
-        // metadata flag to decide whether to refuse further mutations. A
-        // silent persistence failure here would return status="canceled" to
-        // the agent but leave the flag unwritten, so the very next request
-        // would find no flag, the guards would not fire, and the agent could
-        // continue to mutate, sign, and settle against a session it thought
-        // was dead — the exact bug PR #42 closed at the type-coercion layer,
-        // re-opened here at a different failure mode (transient Saleor write
-        // error, permission issue, concurrent modification).
-        const persistResult = await saleorClient.updatePrivateMetadata(id, [
-          { key: "acp_canceled", value: "true" },
-          { key: "acp_canceled_at", value: new Date().toISOString() },
-        ])
-        if (!persistResult.ok) {
-          return acpError("cancel_persist_failed", persistResult.error, 422)
-        }
+        const canceled = await cancelCheckout(saleorClient, id, metadataToRecord(result.data.privateMetadata), "acp_canceled")
+        if (!canceled.ok) return acpError(canceled.code, canceled.message, canceled.status)
 
         // Return full session with canceled status
         const session = formatAcpCheckoutSession(formatterContext, result.data)

@@ -975,6 +975,26 @@ describe("PrismPaymentHandler — settlement declaration and outcome", () => {
     expect(mock.settle).not.toHaveBeenCalled()
   })
 
+  it("submits an expired authorization on a resume and tells the gateway client it is one", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+
+    const result = await handler.settlePayment({ ...settleInput(withValidBefore("1")), resume: true })
+
+    expect(result).toMatchObject({ success: true, transactionReference: "0xabc" })
+    expect(mock.settle).toHaveBeenCalledOnce()
+    expect(mock.settle.mock.calls[0][0]).toMatchObject({ resumed: true })
+  })
+
+  it("tells the gateway client a first attempt is not a resume", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+
+    await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }))
+
+    expect(mock.settle.mock.calls[0][0].resumed).not.toBe(true)
+  })
+
   it("refuses to declare keys for a credential it cannot read", () => {
     const { handler } = makeHandler()
 
@@ -990,6 +1010,23 @@ describe("PrismPaymentHandler — settlement declaration and outcome", () => {
 
     mock.settle.mockResolvedValueOnce({ success: false, outcome: "pending", error: "unreadable" })
     expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "pending", error: "unreadable" })
+  })
+
+  it("passes on a pending transaction and names a review reason as the code", async () => {
+    const { handler, mock } = makeHandler()
+    const credential = { type: "x402", ...SIGNED }
+
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "pending", error: "settlement_pending", pendingReference: "0xpending" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "pending", error: "settlement_pending", pendingReference: "0xpending" })
+
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "review", error: "checkout_already_settled", settledReference: "0xdone" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({
+      success: false,
+      outcome: "review",
+      code: "checkout_already_settled",
+      error: "checkout_already_settled",
+      settledReference: "0xdone",
+    })
   })
 
   it("reports a pending outcome when the request to the gateway throws", async () => {

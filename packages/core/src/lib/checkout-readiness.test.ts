@@ -13,9 +13,31 @@ function checkout(over: Partial<any> = {}): any {
     lines: [{ id: "l1" }],
     totalPrice: { gross: { amount: 600, currency: "USD" } },
     transactions: [],
+    privateMetadata: [],
     ...over,
   }
 }
+
+const ATTEMPT = { attemptId: "attempt-1", handlerId: "xyz.fd.prism_payment", startedAt: "2026-10-19T00:00:00.000Z" }
+
+function withSettlement(value: object): any {
+  return checkout({ privateMetadata: [{ key: "agentic_commerce__settlement", value: JSON.stringify(value) }] })
+}
+
+describe("evaluateReadiness — a live settlement decides the status", () => {
+  it.each([
+    ["pending", { state: "pending", ...ATTEMPT, amount: 600, currency: "USD", keys: ["k"] }, "complete_in_progress"],
+    ["held", { state: "held", ...ATTEMPT, code: "settlement_unresolved", reason: "it could not be confirmed", heldAt: "2026-10-19T00:00:01.000Z" }, "requires_escalation"],
+  ] as const)("a %s settlement => %s, no probe", async (_label, record, status) => {
+    const complete = vi.fn()
+    const saleor = { completeCheckout: complete, getChannelOrderSettings: vi.fn() } as any
+
+    const r = await evaluateReadiness(saleor, withSettlement(record))
+
+    expect(r).toEqual({ status, ready: false, messages: [] })
+    expect(complete).not.toHaveBeenCalled()
+  })
+})
 
 describe("classifyCompleteErrors — Saleor is the authority, we only translate", () => {
   it("no errors => ready_for_complete", () => {

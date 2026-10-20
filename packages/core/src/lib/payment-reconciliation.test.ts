@@ -42,7 +42,7 @@ describe("reconcilePayment quote lifetime", () => {
   it("rejects a quote past its lifetime before any settlement", () => {
     const result = reconcilePayment({ quote: quoteAt(PAYMENT_QUOTE_TTL_MS + 1), total, now: NOW })
 
-    expect(result).toMatchObject({ ok: false, code: "payment_quote_expired" })
+    expect(result).toMatchObject({ ok: false, code: "quote_expired" })
   })
 
   it("does not expire a quote once the payment has settled", () => {

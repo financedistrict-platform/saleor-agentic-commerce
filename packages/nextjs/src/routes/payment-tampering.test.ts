@@ -976,8 +976,8 @@ describe("The same signed payment on two checkouts", () => {
     await ucpPay(routes, CHECKOUT_ID, signed("0x01"))
     const second = await ucpPay(routes, OTHER_ID, signed("0x02"))
 
-    expect(second.status).toBe(409)
-    expect((await second.json()).messages[0].code).toBe("payment_already_used")
+    expect(second.status).toBe(200)
+    expect((await second.json()).messages.map((m: { code: string }) => m.code)).toEqual(["payment_requires_review", "payment_already_used"])
     expect(saleor.completed).toEqual([CHECKOUT_ID])
   })
 
@@ -1044,7 +1044,7 @@ describe("The same signed payment on two checkouts", () => {
 
     const response = await ucpPay(routes, CHECKOUT_ID, signed())
 
-    expect(response.status).toBe(409)
+    expect(response.status).toBe(202)
     expect((await response.json()).messages[0].code).toBe("settlement_pending")
     expect(saleor.transactions).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
@@ -1060,9 +1060,9 @@ describe("The same signed payment on two checkouts", () => {
     const response = await ucpPay(routes, CHECKOUT_ID, signed())
     const body = await response.json()
 
-    expect(response.status).toBe(409)
-    expect(body.messages[0].code).toBe("settled_payment_mismatch")
-    expect(body.messages[0].content).toContain("0xmoved")
+    expect(response.status).toBe(200)
+    expect(body.messages.map((m: { code: string }) => m.code)).toEqual(["payment_requires_review", "settled_payment_mismatch"])
+    expect(body.messages[1].content).toContain("0xmoved")
     expect(saleor.transactions).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
   })
@@ -1095,8 +1095,8 @@ describe("The same signed payment on two checkouts", () => {
 
     const response = await ucpCompleteWith(routes, CHECKOUT_ID, "test.unchecked")
 
-    expect(response.status).toBe(409)
-    expect((await response.json()).messages[0].code).toBe("settled_payment_unchecked")
+    expect(response.status).toBe(200)
+    expect((await response.json()).messages.map((m: { code: string }) => m.code)).toEqual(["payment_requires_review", "settled_payment_unchecked"])
     expect(saleor.completed).toHaveLength(0)
   })
 
@@ -1124,7 +1124,8 @@ describe("The same signed payment on two checkouts", () => {
     const replayed = await ucpCompleteWith(routes, OTHER_ID, "test.reused")
 
     expect(ok.status).toBe(200)
-    expect(replayed.status).toBe(409)
+    expect(replayed.status).toBe(200)
+    expect((await replayed.json()).messages.map((m: { code: string }) => m.code)).toEqual(["payment_requires_review", "payment_already_used"])
     expect(saleor.completed).toEqual([CHECKOUT_ID])
   })
 })
@@ -1318,7 +1319,7 @@ describe("Payment quote lifetime", () => {
     const body = await response.json()
 
     expect(response.status).toBe(409)
-    expect(body.messages[0].code).toBe("payment_quote_expired")
+    expect(body.messages[0].code).toBe("quote_expired")
     expect(pay.settled).toHaveLength(0)
     expect(saleor.transactions).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
@@ -1332,7 +1333,7 @@ describe("Payment quote lifetime", () => {
     const body = await response.json()
 
     expect(response.status).toBe(409)
-    expect(body.code).toBe("payment_quote_expired")
+    expect(body.code).toBe("quote_expired")
     expect(pay.settled).toHaveLength(0)
     expect(saleor.completed).toHaveLength(0)
   })
