@@ -12,15 +12,21 @@
  */
 
 import type { NextRequest } from "next/server"
+import type { AuthData } from "@saleor/app-sdk/APL"
+import { saleorApp } from "@/lib/saleor-app"
 
 export type CallerCredentials = {
   token: string
   saleorApiUrl: string
 }
 
-export type CallerValidation =
-  | { ok: true; appId: string }
-  | { ok: false; status: number; message: string }
+type CallerRejection = { ok: false; status: number; message: string }
+
+type CallerValidation = { ok: true; appId: string } | CallerRejection
+
+export type CallerAuthorization =
+  | { ok: true; appId: string; ownAuth: AuthData }
+  | CallerRejection
 
 /**
  * Pull `Authorization: Bearer <token>` and `saleor-api-url` from the
@@ -46,7 +52,7 @@ export function readCallerCredentials(
  * Probe Saleor with the caller's token. If it resolves to a real
  * installed App, the token is valid.
  */
-export async function validateCallerToken(
+async function validateCallerToken(
   creds: CallerCredentials,
 ): Promise<CallerValidation> {
   let res: Response
@@ -95,4 +101,34 @@ export async function validateCallerToken(
   }
 
   return { ok: true, appId: json.data.app.id }
+}
+
+async function lookupOwnAuth(saleorApiUrl: string): Promise<AuthData | undefined> {
+  try {
+    return await saleorApp.apl.get(saleorApiUrl)
+  } catch (err) {
+    console.error("[caller-auth] APL lookup failed:", err)
+    return undefined
+  }
+}
+
+export async function authorizeCaller(
+  creds: CallerCredentials,
+): Promise<CallerAuthorization> {
+  const ownAuth = await lookupOwnAuth(creds.saleorApiUrl)
+  if (!ownAuth) {
+    return {
+      ok: false,
+      status: 401,
+      message: "Agentic Commerce App is not installed for this saleor-api-url",
+    }
+  }
+
+  const validation = await validateCallerToken({
+    token: creds.token,
+    saleorApiUrl: ownAuth.saleorApiUrl,
+  })
+  if (!validation.ok) return validation
+
+  return { ok: true, appId: validation.appId, ownAuth }
 }

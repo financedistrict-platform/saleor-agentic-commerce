@@ -76,6 +76,8 @@ function signedFor(entry: { scheme: string; network: string; asset: string; payT
 
 const SIGNED = signedFor(samplePaymentHandlerConfig.accepts[0])
 
+const withQuotedResource = (payload: object) => ({ ...payload, resource: { url: samplePaymentHandlerConfig.resource.url } })
+
 const baseInput = {
   ucpVersion: TEST_UCP_VERSION,
   checkoutId: "abc",
@@ -481,7 +483,7 @@ describe("PrismPaymentHandler — settlement", () => {
     expect(result.success).toBe(true)
     expect(result.transactionReference).toBe("0xdeadbeef")
     expect(mock.settle).toHaveBeenCalledWith({
-      paymentPayload: credential,
+      paymentPayload: withQuotedResource(credential),
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
   })
@@ -510,7 +512,7 @@ describe("PrismPaymentHandler — settlement", () => {
     })
 
     expect(mock.settle).toHaveBeenCalledWith({
-      paymentPayload: credential,
+      paymentPayload: withQuotedResource(credential),
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
   })
@@ -539,7 +541,7 @@ describe("PrismPaymentHandler — settlement", () => {
 
     expect(result.success).toBe(true)
     expect(mock.settle).toHaveBeenCalledWith({
-      paymentPayload: credential,
+      paymentPayload: withQuotedResource(credential),
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
   })
@@ -641,7 +643,7 @@ describe("PrismPaymentHandler — settlement", () => {
 
     expect(result.success).toBe(true)
     expect(mock.settle).toHaveBeenCalledWith({
-      paymentPayload,
+      paymentPayload: withQuotedResource(paymentPayload),
       paymentRequirements: samplePaymentHandlerConfig.accepts[0],
     })
   })
@@ -852,7 +854,7 @@ describe("PrismPaymentHandler — signed credential check", () => {
     const result = await settle(handler, btoa(JSON.stringify(SIGNED)))
 
     expect(result.success).toBe(true)
-    expect(mock.settle).toHaveBeenCalledWith({ paymentPayload: SIGNED, paymentRequirements: samplePaymentHandlerConfig.accepts[0] })
+    expect(mock.settle).toHaveBeenCalledWith({ paymentPayload: withQuotedResource(SIGNED), paymentRequirements: samplePaymentHandlerConfig.accepts[0] })
   })
 
   it.each([
@@ -886,7 +888,7 @@ describe("PrismPaymentHandler — signed credential check", () => {
     const result = await settleAgainst(handler, credential, [entry])
 
     expect(result.success).toBe(true)
-    expect(mock.settle).toHaveBeenCalledWith({ paymentPayload: credential, paymentRequirements: entry })
+    expect(mock.settle).toHaveBeenCalledWith({ paymentPayload: withQuotedResource(credential), paymentRequirements: entry })
   })
 
   it("compares a non-EVM recipient exactly", async () => {
@@ -973,6 +975,26 @@ describe("PrismPaymentHandler — settlement declaration and outcome", () => {
     expect(mock.settle).not.toHaveBeenCalled()
   })
 
+  it("submits an expired authorization on a resume and tells the gateway client it is one", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+
+    const result = await handler.settlePayment({ ...settleInput(withValidBefore("1")), resume: true })
+
+    expect(result).toMatchObject({ success: true, transactionReference: "0xabc" })
+    expect(mock.settle).toHaveBeenCalledOnce()
+    expect(mock.settle.mock.calls[0][0]).toMatchObject({ resumed: true })
+  })
+
+  it("tells the gateway client a first attempt is not a resume", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+
+    await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }))
+
+    expect(mock.settle.mock.calls[0][0].resumed).not.toBe(true)
+  })
+
   it("refuses to declare keys for a credential it cannot read", () => {
     const { handler } = makeHandler()
 
@@ -986,18 +1008,106 @@ describe("PrismPaymentHandler — settlement declaration and outcome", () => {
     mock.settle.mockResolvedValueOnce({ success: false, outcome: "declined", error: "insufficient_funds" })
     expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "declined", error: "insufficient_funds" })
 
-    mock.settle.mockResolvedValueOnce({ success: false, outcome: "unknown", error: "unreadable" })
-    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "unknown", error: "unreadable" })
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "pending", error: "unreadable" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "pending", error: "unreadable" })
   })
 
-  it("reports an unknown outcome when the request to the gateway throws", async () => {
+  it("passes on a pending transaction and names a review reason as the code", async () => {
+    const { handler, mock } = makeHandler()
+    const credential = { type: "x402", ...SIGNED }
+
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "pending", error: "settlement_pending", pendingReference: "0xpending" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({ success: false, outcome: "pending", error: "settlement_pending", pendingReference: "0xpending" })
+
+    mock.settle.mockResolvedValueOnce({ success: false, outcome: "review", error: "checkout_already_settled", settledReference: "0xdone" })
+    expect(await handler.settlePayment(settleInput(credential))).toEqual({
+      success: false,
+      outcome: "review",
+      code: "checkout_already_settled",
+      error: "checkout_already_settled",
+      settledReference: "0xdone",
+    })
+  })
+
+  it("reports a pending outcome when the request to the gateway throws", async () => {
     const { handler, mock } = makeHandler()
     mock.settle.mockRejectedValue(new Error("socket hang up"))
 
     expect(await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }))).toEqual({
       success: false,
-      outcome: "unknown",
+      outcome: "pending",
       error: "Prism settlement failed: socket hang up",
     })
+  })
+})
+
+describe("PrismPaymentHandler — resource binding", () => {
+  const quotedUrl = samplePaymentHandlerConfig.resource.url
+  const prepared = { ucp: sampleUcpPrepare, acp: null, preparedAmount: 1099, preparedCurrency: "USD", preparedResourceUrl: quotedUrl }
+  const settleInput = (credential: unknown, metadata: unknown = prepared) => ({
+    ucpVersion: TEST_UCP_VERSION,
+    checkoutId: "abc",
+    handlerId: PRISM_HANDLER_ID,
+    instrumentType: "x402",
+    credential,
+    checkoutMetadata: { [PRISM_HANDLER_ID]: metadata },
+  })
+  const withResource = (resource: unknown) => ({ type: "x402", ...SIGNED, resource })
+
+  it("sends the quoted resource url to the gateway when the credential carries none", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+
+    const result = await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }))
+
+    expect(result.success).toBe(true)
+    expect(mock.settle.mock.calls[0][0].paymentPayload.resource).toEqual({ url: quotedUrl })
+  })
+
+  it("sends the quoted resource url, and only the url, when the credential names the same resource", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+
+    const result = await handler.settlePayment(settleInput(withResource({ url: quotedUrl, description: "Purchase", mimeType: null })))
+
+    expect(result.success).toBe(true)
+    expect(mock.settle.mock.calls[0][0].paymentPayload.resource).toEqual({ url: quotedUrl })
+  })
+
+  it("keeps the rest of the signed payload as the buyer sent it", async () => {
+    const { handler, mock } = makeHandler()
+    mock.settle.mockResolvedValue({ success: true, transactionHash: "0xabc" })
+
+    await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }))
+
+    expect(mock.settle.mock.calls[0][0].paymentPayload).toEqual(withQuotedResource({ type: "x402", ...SIGNED }))
+  })
+
+  it.each([
+    ["a different url", { url: "https://evil.test/checkout/other" }],
+    ["no url", { description: "Purchase" }],
+    ["a null url", { url: null }],
+    ["a non-string url", { url: 7 }],
+    ["null", null],
+    ["a string", quotedUrl],
+    ["an array", [{ url: quotedUrl }]],
+  ])("refuses a credential whose resource is %s, when declaring and when settling, and never calls the gateway", async (_name, resource) => {
+    const { handler, mock } = makeHandler()
+    const input = settleInput(withResource(resource))
+
+    expect(handler.settlementKeys(input)).toMatchObject({ ok: false, code: "resource_mismatch" })
+    expect(await handler.settlePayment(input)).toMatchObject({ success: false, outcome: "declined", code: "resource_mismatch" })
+    expect(mock.settle).not.toHaveBeenCalled()
+  })
+
+  it("refuses to settle when the stored config has no resource url", async () => {
+    const { handler, mock } = makeHandler()
+    const { resource: _resource, ...withoutResource } = samplePaymentHandlerConfig
+    const metadata = { ...prepared, ucp: { "xyz.fd.prism_payment": [{ id: "xyz.fd.prism_payment", version: "2026-10-07", config: withoutResource }] } }
+
+    const result = await handler.settlePayment(settleInput({ type: "x402", ...SIGNED }, metadata))
+
+    expect(result).toEqual({ success: false, outcome: "declined", error: "Prism payment config has no resource url" })
+    expect(mock.settle).not.toHaveBeenCalled()
   })
 })

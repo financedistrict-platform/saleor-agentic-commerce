@@ -32,10 +32,12 @@ export type SettlementAttempt = {
 
 export type PendingSettlement = MinorMoney & SettlementAttempt & {
   keys: readonly string[]
+  credentialSha256?: string
+  transaction?: string
 }
 
 export type HeldSettlement = SettlementAttempt & {
-  reference: string
+  reference?: string
   code: string
   reason: string
   heldAt: string
@@ -65,7 +67,7 @@ export type ReconciliationErrorCode =
   | MoneyErrorCode
   | "payment_quote_missing"
   | "payment_quote_stale"
-  | "payment_quote_expired"
+  | "quote_expired"
   | "order_total_changed_after_settlement"
 
 export type ReconciliationResult =
@@ -124,18 +126,29 @@ function parseSettled(raw: object): SettlementRead {
 function parsePending(raw: object): SettlementRead {
   const money = readMinorMoney(raw)
   const attempt = readAttempt(raw as Record<string, unknown>)
-  const { keys } = raw as Record<string, unknown>
+  const { keys, credentialSha256, transaction } = raw as Record<string, unknown>
   if (!money || !attempt || !Array.isArray(keys) || !keys.every(isNonEmptyString)) return { kind: "unreadable", raw }
-  return { kind: "pending", pending: { ...money, ...attempt, keys } }
+  return {
+    kind: "pending",
+    pending: {
+      ...money,
+      ...attempt,
+      keys,
+      ...(isNonEmptyString(credentialSha256) ? { credentialSha256 } : {}),
+      ...(isNonEmptyString(transaction) ? { transaction } : {}),
+    },
+  }
 }
 
 function parseHeld(raw: object): SettlementRead {
   const record = raw as Record<string, unknown>
   const attempt = readAttempt(record)
-  if (!attempt || !isNonEmptyString(record.reference) || !isNonEmptyString(record.code) || typeof record.reason !== "string" || !isNonEmptyString(record.heldAt)) {
+  const referenceReadable = record.reference === undefined || isNonEmptyString(record.reference)
+  if (!attempt || !referenceReadable || !isNonEmptyString(record.code) || typeof record.reason !== "string" || !isNonEmptyString(record.heldAt)) {
     return { kind: "unreadable", raw }
   }
-  return { kind: "held", held: { ...attempt, reference: record.reference, code: record.code, reason: record.reason, heldAt: record.heldAt } }
+  const reference = isNonEmptyString(record.reference) ? { reference: record.reference } : {}
+  return { kind: "held", held: { ...attempt, ...reference, code: record.code, reason: record.reason, heldAt: record.heldAt } }
 }
 
 function readAttempt(record: Record<string, unknown>): SettlementAttempt | null {
@@ -224,7 +237,7 @@ export function reconcilePayment(input: {
     if (ageMs > PAYMENT_QUOTE_TTL_MS) {
       return {
         ok: false,
-        code: "payment_quote_expired",
+        code: "quote_expired",
         message: `The payment quote was made at ${quote.quotedAt}, more than ${PAYMENT_QUOTE_TTL_MS / 60_000} minutes ago. Update the checkout to get a fresh quote and sign again.`,
       }
     }

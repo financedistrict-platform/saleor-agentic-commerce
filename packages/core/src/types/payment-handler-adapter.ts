@@ -123,6 +123,7 @@ type PaymentSettleInputBase = {
   credential: unknown
   /** Checkout metadata (may contain handler-specific state) */
   checkoutMetadata?: Record<string, unknown>
+  resume?: boolean
 }
 
 export type PaymentSettleInput =
@@ -138,7 +139,7 @@ export type SettledAmount = {
   currency: string
 }
 
-export type SettleOutcome = "declined" | "unknown"
+export type SettleOutcome = "declined" | "pending" | "review"
 
 export type PaymentSettleResult =
   | {
@@ -154,5 +155,6 @@ export type PaymentSettleResult =
       error: string
       code?: string
       settledReference?: string
+      pendingReference?: string
       outcome?: SettleOutcome
     }

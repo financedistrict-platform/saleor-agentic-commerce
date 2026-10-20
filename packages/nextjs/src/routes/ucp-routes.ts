@@ -48,7 +48,9 @@ import {
 } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgenticCommerceInstance } from "../config.js"
 import { settleAndCompleteCheckout } from "./settle-and-complete.js"
-import type { FormatterContext, SessionSecretRecord, UcpErrorSeverity, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
+import type { CompletionFailure } from "./settle-and-complete.js"
+import { cancelCheckout, cancelRefusal } from "./cancel-guard.js"
+import type { FormatterContext, SaleorCheckout, SessionSecretRecord, UcpErrorSeverity, UcpMessage, UcpWire } from "@financedistrict/saleor-agentic-commerce-core"
 import { createAgentProfileFetcher } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import {
   UCP_VERSION_METADATA_KEY,
@@ -123,6 +125,23 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
     return Response.json(wire.error({ code, content, severity }), { status })
   }
 
+  function completionFailureResponse(scope: UcpRequestScope, checkout: SaleorCheckout, failure: CompletionFailure): Response {
+    if (failure.disposition === "pending") {
+      const messages: UcpMessage[] = [
+        { type: "info", code: "settlement_pending", content: "Payment is being confirmed. Retry complete with the same payment credential." },
+      ]
+      return Response.json(formatUcpCheckoutSession(scope.ctx, checkout, { status: "complete_in_progress", messages }), { status: 202 })
+    }
+    if (failure.disposition === "review") {
+      const messages: UcpMessage[] = [
+        { type: "error", code: "payment_requires_review", severity: "unrecoverable", content: "The payment needs merchant review. Do not pay again." },
+        { type: "error", code: failure.code, severity: failure.severity ?? "unrecoverable", content: failure.message },
+      ]
+      return Response.json(formatUcpCheckoutSession(scope.ctx, checkout, { status: "requires_escalation", messages }))
+    }
+    return ucpError(scope.wire, failure.code, failure.message, failure.status, failure.severity)
+  }
+
   function scopeOf(resolution: UcpResolution): UcpRequestScope {
     return {
       resolution,
@@ -134,15 +153,23 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
   function rejectionResponse(resolution: UcpResolution): Response | null {
     if (!resolution.rejection) return null
-    const { status, code, content } = resolution.rejection
-    return ucpError(resolution.wire, code, content, status)
+    const { status, code, content, retryAfterSeconds } = resolution.rejection
+    return Response.json(resolution.wire.error({ code, content }), {
+      status,
+      ...(retryAfterSeconds !== undefined ? { headers: { "Retry-After": String(retryAfterSeconds) } } : {}),
+    })
   }
 
-  async function resolveScope(request: Request): Promise<UcpRequestScope | Response> {
+  async function resolveScope(
+    request: Request,
+    options: { deferToSessionPin?: boolean } = {},
+  ): Promise<UcpRequestScope | Response> {
     const resolution = await resolveUcpVersion(ucpRegistry, request, agentProfileFetcher)
     logUcpResolution(resolution)
-    const rejection = rejectionResponse(resolution)
-    if (rejection) return rejection
+    if (!(options.deferToSessionPin && resolution.rejection?.pinRecoverable)) {
+      const rejection = rejectionResponse(resolution)
+      if (rejection) return rejection
+    }
     const presentedKey = request.headers.get("X-API-Key")?.trim()
     if (presentedKey && !secretsMatch(presentedKey, config.acpApiKey ?? "")) {
       return ucpError(
@@ -158,9 +185,21 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
 
   function pinScope(scope: UcpRequestScope, metadata: Record<string, unknown>): UcpRequestScope | Response {
     const pinned = applyUcpSessionPin(ucpRegistry, scope.resolution, metadata[UCP_VERSION_METADATA_KEY])
-    if (pinned === scope.resolution) return scope
+    if (pinned === scope.resolution) return rejectionResponse(pinned) ?? scope
     if (pinned.version !== scope.version) logUcpResolution(pinned)
     return rejectionResponse(pinned) ?? scopeOf(pinned)
+  }
+
+  async function loadOwnedCheckout(request: Request, wire: UcpWire, id: string): Promise<SaleorCheckout | Response> {
+    const supplied = request.headers.get(SESSION_SECRET_HEADER)?.trim()
+    if (!supplied) {
+      return ucpError(wire, "session_secret_required", `The ${SESSION_SECRET_HEADER} header returned when the checkout was created is required`, 401)
+    }
+    const result = await saleorClient.getCheckout(id)
+    if (!result.ok || !sessionSecretMatches(metadataToRecord(result.data.privateMetadata), supplied)) {
+      return ucpError(wire, "checkout_not_found", "Checkout session not found", 404)
+    }
+    return result.data
   }
 
   function supportedVersionLinks(): Record<string, string> {
@@ -415,55 +454,57 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async GET(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 
         const { id } = await context.params
-        const result = await saleorClient.getCheckout(id)
-        if (!result.ok) return ucpError(scope.wire, "checkout_not_found", result.error, 404)
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
 
-        const sessionMetadata = metadataToRecord(result.data.privateMetadata)
+        const sessionMetadata = metadataToRecord(owned.privateMetadata)
         const pinned = pinScope(scope, sessionMetadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
 
         // metadataToRecord JSON.parses values, so the literal "true" written by
         // the cancel route comes back as boolean true (not the string "true").
-        const canceled = sessionMetadata.ucp_canceled === true
+        const canceled = sessionMetadata.ucp_canceled === true && cancelRefusal(sessionMetadata) === null
         if (canceled) {
-          const session = formatUcpCheckoutSession(scope.ctx, result.data)
+          const session = formatUcpCheckoutSession(scope.ctx, owned)
           return Response.json({ ...session, status: "canceled" })
         }
-        const readiness = await evaluateReadiness(saleorClient, result.data)
-        const session = formatUcpCheckoutSession(scope.ctx, result.data, readiness)
+        const readiness = await evaluateReadiness(saleorClient, owned)
+        const session = formatUcpCheckoutSession(scope.ctx, owned, readiness)
         return Response.json(session)
       },
 
       async PUT(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 
         const { id } = await context.params
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
+
+        const sessionMetadata = metadataToRecord(owned.privateMetadata)
+        const pinned = pinScope(scope, sessionMetadata)
+        if (pinned instanceof Response) return pinned
+        scope = pinned
+        const refused = cancelRefusal(sessionMetadata)
+        if (refused) return ucpError(scope.wire, refused.code, refused.message, 409)
+        if (sessionMetadata.ucp_canceled === true) {
+          return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
+        }
+
         let body: any
         try {
           body = await request.json()
         } catch {
           return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
-        }
-
-        // Refuse updates on a session the agent has already cancelled.
-        const cancelGuard = await saleorClient.getCheckout(id)
-        if (!cancelGuard.ok) return ucpError(scope.wire, "checkout_not_found", cancelGuard.error, 404)
-        const sessionMetadata = metadataToRecord(cancelGuard.data.privateMetadata)
-        const pinned = pinScope(scope, sessionMetadata)
-        if (pinned instanceof Response) return pinned
-        scope = pinned
-        if (sessionMetadata.ucp_canceled === true) {
-          return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
         }
 
         // Update buyer email
@@ -522,7 +563,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             variantId: item.item?.id || item.id,
             quantity: item.quantity ?? 1,
           }))
-          const current = cancelGuard.data.lines.map((l) => ({
+          const current = owned.lines.map((l) => ({
             id: l.id,
             variantId: l.variant.id,
             quantity: l.quantity,
@@ -565,11 +606,20 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 
         const { id } = await context.params
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
+
+        let checkout = owned
+        const metadata = metadataToRecord(checkout.privateMetadata)
+        const pinned = pinScope(scope, metadata)
+        if (pinned instanceof Response) return pinned
+        scope = pinned
+
         let body: any
         try {
           body = await request.json()
@@ -577,7 +627,6 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           return ucpError(scope.wire, "invalid_body", "Request body must be valid JSON", 400)
         }
 
-        // Extract payment instrument
         const payment = body.payment
         if (!payment?.instruments || !Array.isArray(payment.instruments)) {
           return ucpError(scope.wire, "missing_payment", "payment.instruments array is required", 400, "recoverable")
@@ -588,15 +637,6 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
           return ucpError(scope.wire, "no_instrument_selected", "At least one payment instrument must be provided", 400, "recoverable")
         }
 
-        // Fetch checkout for metadata
-        const checkoutResult = await saleorClient.getCheckout(id)
-        if (!checkoutResult.ok) return ucpError(scope.wire, "checkout_not_found", checkoutResult.error, 404)
-
-        let checkout = checkoutResult.data
-        const metadata = metadataToRecord(checkout.privateMetadata)
-        const pinned = pinScope(scope, metadata)
-        if (pinned instanceof Response) return pinned
-        scope = pinned
         if (!isWellFormedInstrument(selectedInstrument)) {
           return ucpError(scope.wire, "invalid_instrument", "Payment instrument requires handler_id", 400, "recoverable")
         }
@@ -605,7 +645,8 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // Refuse to settle on a session the agent has already cancelled.
         // Without this, an agent that aborts and retries can still sign
         // and settle against a session it thought was dead.
-        if (metadata.ucp_canceled === true) {
+        const liveSettlement = cancelRefusal(metadata) !== null
+        if (metadata.ucp_canceled === true && !liveSettlement) {
           return ucpError(scope.wire, "session_canceled", "Checkout session has been canceled", 409)
         }
 
@@ -614,7 +655,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         // is checked there, but silently swallowed here — a malformed
         // override would let settlement proceed against the previously-set
         // billing address with no error surfaced to the agent.
-        if (selectedInstrument.billing_address) {
+        if (selectedInstrument.billing_address && !liveSettlement) {
           const addr = ucpToSaleorAddress(selectedInstrument.billing_address)
           const billingResult = await saleorClient.updateCheckoutBillingAddress(id, addr)
           if (!billingResult.ok) {
@@ -639,7 +680,8 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
             const readiness = await evaluateReadiness(saleorClient, checkout)
             return readiness.ready ? null : Response.json(formatUcpCheckoutSession(scope.ctx, checkout, readiness))
           },
-          fail: ({ code, message, status, severity }) => ucpError(scope.wire, code, message, status, severity),
+          fail: (failure) => completionFailureResponse(scope, checkout, failure),
+          isCanceled: (current) => current.ucp_canceled === true,
           logPrefix: "[ucp-routes]",
         })
         if (!completion.ok) return completion.response
@@ -664,40 +706,24 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
       async POST(request: Request, context: { params: Promise<{ id: string }> }) {
         const blocked = checkUcpEnabled()
         if (blocked) return blocked
-        const resolved = await resolveScope(request)
+        const resolved = await resolveScope(request, { deferToSessionPin: true })
         if (resolved instanceof Response) return resolved
         let scope = resolved
 
         const { id } = await context.params
 
-        // Verify checkout exists
-        const result = await saleorClient.getCheckout(id)
-        if (!result.ok) return ucpError(scope.wire, "checkout_not_found", result.error, 404)
-        const pinned = pinScope(scope, metadataToRecord(result.data.privateMetadata))
+        const owned = await loadOwnedCheckout(request, scope.wire, id)
+        if (owned instanceof Response) return owned
+        const ownedMetadata = metadataToRecord(owned.privateMetadata)
+        const pinned = pinScope(scope, ownedMetadata)
         if (pinned instanceof Response) return pinned
         scope = pinned
 
-        // Mark as canceled via metadata. We MUST check this write succeeded
-        // before telling the agent the session is cancelled — the cancel
-        // guards on GET/PUT/complete (PR #40, fixed in PR #42) read this
-        // metadata flag to decide whether to refuse further mutations. A
-        // silent persistence failure here would return status="canceled" to
-        // the agent but leave the flag unwritten, so the very next request
-        // would find no flag, the guards would not fire, and the agent could
-        // continue to mutate, sign, and settle against a session it thought
-        // was dead — the exact bug PR #42 closed at the type-coercion layer,
-        // re-opened here at a different failure mode (transient Saleor write
-        // error, permission issue, concurrent modification).
-        const persistResult = await saleorClient.updatePrivateMetadata(id, [
-          { key: "ucp_canceled", value: "true" },
-          { key: "ucp_canceled_at", value: new Date().toISOString() },
-        ])
-        if (!persistResult.ok) {
-          return ucpError(scope.wire, "cancel_persist_failed", persistResult.error, 422)
-        }
+        const canceled = await cancelCheckout(saleorClient, id, ownedMetadata, "ucp_canceled")
+        if (!canceled.ok) return ucpError(scope.wire, canceled.code, canceled.message, canceled.status)
 
         // Return full checkout session with canceled status
-        const session = formatUcpCheckoutSession(scope.ctx, result.data)
+        const session = formatUcpCheckoutSession(scope.ctx, owned)
         return Response.json({
           ...session,
           status: "canceled",
@@ -716,7 +742,7 @@ export function createUcpRoutes(instance: AgenticCommerceInstance): UcpRouteHand
         if (resolved instanceof Response) return resolved
         const scope = resolved
 
-        const suppliedSecret = request.headers.get(SESSION_SECRET_HEADER)
+        const suppliedSecret = request.headers.get(SESSION_SECRET_HEADER)?.trim() ?? null
         if (!suppliedSecret) {
           return ucpError(scope.wire, "session_secret_required", `The ${SESSION_SECRET_HEADER} header returned when the checkout was created is required`, 401)
         }

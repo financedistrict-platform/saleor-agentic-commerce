@@ -160,20 +160,26 @@ API key (`acpApiKey`), compared in constant time; otherwise the answer is 401
 missing or blank header is served as before. `GET /.well-known/ucp` ignores the
 header. Ownership of sessions and orders still rests on `UCP-Session-Secret`.
 
-### Order reads
+### Session ownership
 
 `POST /api/ucp/checkout-sessions` returns a `UCP-Session-Secret` header once.
 Only its SHA-256 hash is stored, in checkout metadata, and Saleor carries it to
-the order. `GET /api/ucp/orders/{id}` needs that header: without it the answer
-is 401, and with a wrong secret, or for an order whose checkout never had one,
-it is 404. The `UCP-Agent` profile header identifies no one. If the hash cannot
-be stored, creation answers 503 and no secret is handed out.
+the order. Every later call needs that header: `GET`, `PUT`,
+`POST .../complete` and `POST .../cancel` on the checkout session, and
+`GET /api/ucp/orders/{id}`. Without it the answer is 401
+`session_secret_required`. With a wrong secret, or for a checkout or order that
+never had one, it is 404 `checkout_not_found` or `order_not_found`, the same as
+an unknown id. The secret is checked before the version pin and before the
+body is read. The `UCP-Agent` profile header identifies no one. If the hash
+cannot be stored, creation answers 503 and no secret is handed out. URLs in
+responses carry ids only; `continue_url` is the storefront page for the buyer.
 
 ### Quote lifetime
 
 Every quote is stamped with the time it was made and is good for 15 minutes.
-Completing with an older quote answers 409 `payment_quote_expired`; an update to
-the checkout makes a fresh one. A quote with no readable timestamp is treated as
+Completing with an older quote answers 409 `quote_expired`; an update to
+the checkout makes a fresh one. A same-credential resume of a pending payment skips
+this check; the gateway decides. A quote with no readable timestamp is treated as
 missing. A payment already taken is never held back because its quote aged out.
 
 ### Payment replay store
@@ -221,25 +227,52 @@ The settle path records its progress on the checkout, in the private metadata ke
 
 | State | Meaning | Next `complete` |
 |---|---|---|
-| `pending` | The payment is about to be, or was, submitted and no result is recorded. | If the store holds the settlement reference for the checkout, finishes the order from it without calling the gateway. Otherwise 409 `settlement_pending`; the payment is not submitted again. |
+| `pending` | The payment is about to be, or was, submitted and no result is recorded. The record keeps `credentialSha256` (sha256 of the payment credential, keys sorted) and the gateway `transaction` when one was reported. | If the store holds the settlement reference for the checkout, finishes the order from it without calling the gateway. With the same credential, submits it again as a resume (the expired-authorization check is skipped; the gateway decides) under a new attempt id, read back first so two parallel resumes submit once. A different credential gets 409 `payment_pending_mismatch`. A record without `credentialSha256` is held for review. |
 | `settled` | The gateway settled the payment. A record without a state counts as settled. | Creates the transaction and completes the order. |
-| `held` | The payment settled but cannot be accepted (`settled_payment_mismatch`, `settled_payment_unchecked` or `payment_already_used`). | The same 409; nothing is submitted. |
+| `held` | The payment needs review: it settled but cannot be accepted (`settled_payment_mismatch`, `settled_payment_unchecked`, `payment_already_used`), the gateway asked for review (`checkout_already_settled`, `authorization_consumed`, `settlement_unresolved`), or a resume did not end settled or pending. `reference` is set only when a transaction is known. | Refused the same way; nothing is submitted. |
 | `failed` | The gateway clearly declined the payment. The record keeps the amount that was about to be submitted. | Submits again, unless the store already holds a settlement reference for the checkout; then finishes the order from it at the recorded amount. A `failed` record without an amount gets 409 `settlement_pending` in that case. |
 
-A failure whose outcome is unknown (timeout, network error, an unreadable reply or
-a handler that does not say) leaves the checkout `pending`. Only a clear decline
-makes it `failed`. Handlers report this with `outcome: "declined" | "unknown"` on a
-failed settle result; a missing outcome counts as unknown.
+A failure that is not a clear decline (timeout, network error, an unreadable reply,
+a pending or unlisted gateway reason, or a handler that does not say) leaves the checkout
+`pending`. Only a clear decline makes it `failed`. Handlers report this with
+`outcome: "declined" | "pending" | "review"` on a failed settle result; a missing outcome
+counts as pending. A `pending` result may carry the gateway transaction as
+`pendingReference`, which is kept on the pending record. A `review` result is held, with
+its `settledReference` when there is one. On a resume, a `declined` result is held too.
 
-`failed` is written only when the gateway answers clearly. How the Prism handler sorts
-HTTP replies into declined and unknown is an assumption that has not been tried against a
-real gateway. For a scheme whose authorization has no one-time nonce on chain, two
+The Prism handler sorts each settle reply with explicit reason lists: listed pre-broadcast
+reasons and HTTP 4xx other than 408/409/429 are declined; `checkout_already_settled`,
+`authorization_consumed` and `settlement_unresolved` are review; everything else that is
+not a settled reply with a transaction is pending.
+
+For a scheme whose authorization has no one-time nonce on chain, two
 parallel completes of the same checkout are not safe, because reading the record back
 only narrows the window.
 
+UCP `complete` answers a pending payment with 202 and the checkout session
+(`status: "complete_in_progress"`, message `settlement_pending`), and a payment that needs
+review with 200 and the session (`status: "requires_escalation"`, messages
+`payment_requires_review` then the specific code). That includes a settled payment whose
+order could not be recorded or completed (`order_not_recorded_after_settlement`,
+`order_not_completed_after_settlement`); a retry with the same credential finishes it. ACP
+keeps 409 for both. GET reports `complete_in_progress` for a pending record and
+`requires_escalation` for a held one.
+
+Cancel and update (UCP and ACP) are refused with 409 while a settlement is live:
+`session_complete_in_progress` (pending), `session_requires_escalation` (held or unreadable)
+or `session_completed` (settled). Cancel writes its flag, reads the checkout back and, when a
+settlement started meanwhile, writes the flag back to `"false"` (up to three tries) and
+answers 409 with that code; if the roll back fails it answers 503 `cancel_not_confirmed`, and a
+same-credential `complete` still resumes, because the flag is ignored while a live record
+exists. A cancel whose flag was replaced by another write answers 409 `cancel_conflict`. A
+`complete` that finds the cancel flag when it reads back its pending record records a failure
+and answers 409 `session_canceled` without submitting.
+
 | Code | Status | Meaning |
 |---|---|---|
-| `settlement_pending` | 409 | A submitted payment has no recorded result, the pending record could not be read back after three tries, or the store holds a settlement that no record accounts for. Nothing is submitted again. |
+| `settlement_pending` | 409 (UCP 202) | A submitted payment has no recorded result, or the pending record could not be read back after three tries. Retry with the same payment credential. |
+| `payment_pending_mismatch` | 409 | A payment with another credential is pending for this checkout. |
+| `payment_requires_review` | UCP 200 | The payment is held for merchant review; the next message names why. Do not pay again. |
 | `settlement_in_progress` | 409 | Another request is settling the same checkout, or already settled it while this request was declined. Retry shortly. The check reads the record back after writing it, which narrows the window but is not a lock. |
 | `settlement_not_started` | 422 | The pending record could not be saved, so the payment was not submitted. Retry. |
 | `payment_amount_mismatch` | 422 | The handler declared an amount other than the quote, so nothing was submitted. |
@@ -255,7 +288,8 @@ recorded at that amount.
 The plugin does not look anything up on a chain or at a gateway. A person does, with
 the facts the plugin recorded. `pending` and `held` records in the checkout's private
 metadata carry `attemptId`, `startedAt`, `expiresAt` (the authorization's `validBefore`),
-`handlerId`, `reference` (held only) and the handler's `details`. For Prism the details are
+`handlerId`, `reference` (held only, when a transaction is known), `credentialSha256` and
+`transaction` (pending only) and the handler's `details`. For Prism the details are
 `network`, `asset`, `payer`, `nonce` and `validBefore`. No signature is stored. The same
 facts are logged once, as one `console.error` line containing `settlement pending needs review`
 or `settlement held needs review` and the `checkoutId`, when a checkout enters either state.
@@ -271,7 +305,7 @@ reference for it. Otherwise look the payment up by hand:
    - No event, and the time is before `validBefore`: wait. The payment may still settle.
    - Never resolve as not settled when the nonce has been used, or while the payment may still settle: the buyer would pay twice.
 
-A `held` checkout means the gateway settled the payment (`reference`) but the settlement cannot be accepted (see `code` and `reason`). It is never submitted again and the order is not placed. Check the reference at the explorer, then refund the buyer or place the order by hand in Saleor.
+A `held` checkout means the payment needs a person (see `code` and `reason`). With a `reference`, the gateway settled that transaction but the settlement cannot be accepted; without one, look the payment up as for `pending` above. It is never submitted again and the order is not placed. Check the reference at the explorer, then refund the buyer or place the order by hand in Saleor.
 
 ```ts
 import { resolvePendingSettlement } from "@financedistrict/saleor-agentic-commerce-nextjs"
@@ -287,13 +321,14 @@ Export the instance from the config file as `agenticCommerce` and run this from 
 
 The store serves `ucpVersion` (default: the latest, `2026-08-25`) and every version in `ucpSupportedVersions`. `/.well-known/ucp` lists the extra versions under `ucp.supported_versions`, each linking to `/.well-known/ucp/<version>` (wire the `discoveryVersion` route shown above).
 
-Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 128 KiB cap and a 10 minute cache.
+Each request picks its version from the agent profile named in the `UCP-Agent` header (`ucp.version`). The profile is fetched over HTTPS only, from public addresses, with a 3 s timeout, a 128 KiB cap and a 10 minute cache. At most 16 profiles are fetched at once per fetcher, 4 per host and 8 per client (the last hop of `X-Forwarded-For`, else `X-Real-IP`); concurrent lookups of one URL share a single fetch, and a busy answer falls back to the last known profile of that URL. Rate-limit `/api/ucp` at your edge as well.
 
 | Agent profile | `lenient` (default) | `strict` |
 |---|---|---|
 | no `UCP-Agent` header | current version | current version |
 | `UCP-Agent` without `profile=` | current version | current version |
 | unreachable | current version + warning | 424 `profile_unreachable` |
+| profile fetcher busy | current version + warning, or the session version | 503 `profile_fetch_busy` with `Retry-After: 3`, or the session version |
 | no or malformed `ucp.version` | current version + warning | 422 `profile_malformed` |
 | unknown version | 422 `version_unsupported` | 422 `version_unsupported` |
 | known version that is not enabled | 422 `version_unsupported` | 422 `version_unsupported` |

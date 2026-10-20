@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { PaymentHandlerAdapter, SaleorCheckout, SaleorMetadataItem, SaleorOrder } from "@financedistrict/saleor-agentic-commerce-core"
+import { SESSION_SECRET_METADATA_KEY, type PaymentHandlerAdapter, type SaleorCheckout, type SaleorMetadataItem, type SaleorOrder } from "@financedistrict/saleor-agentic-commerce-core"
 import type { AgentProfileFetcher, AgentProfileResult } from "@financedistrict/saleor-agentic-commerce-core/agent-profile-fetcher"
 import { PrismPaymentHandler } from "../../../../prism-payment/src/handler.js"
 import { createAgenticCommerce, type AgenticCommerceConfig } from "../../config.js"
@@ -25,11 +26,18 @@ export function freshQuote(quote: { amount: number; currency: string }, quotedAt
   return JSON.stringify({ ...quote, quotedAt })
 }
 
+export const TEST_SESSION_SECRET = "test-session-secret"
+
+export function sessionSecretItem(secret = TEST_SESSION_SECRET): SaleorMetadataItem {
+  return { key: SESSION_SECRET_METADATA_KEY, value: JSON.stringify({ sha256: createHash("sha256").update(secret, "utf8").digest("hex") }) }
+}
+
 export function checkoutTemplate(): SaleorCheckout {
   const checkout = JSON.parse(readFixture("ucp/inputs/checkout.json")) as SaleorCheckout
   checkout.privateMetadata = checkout.privateMetadata.map((item) =>
     item.key === "agentic_commerce__quote" ? { ...item, value: freshQuote(JSON.parse(item.value)) } : item,
   )
+  checkout.privateMetadata = [...checkout.privateMetadata, sessionSecretItem()]
   return checkout
 }
 
@@ -93,6 +101,7 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
   const completed: string[] = []
   const orders = new Map<string, SaleorOrder>()
   const channel: { allowUnpaidOrders: boolean | null } = { allowUnpaidOrders: false }
+  const writes: { id: string; kind: string }[] = []
   const notFound = { ok: false as const, error: "Checkout not found" }
 
   const client = {
@@ -108,6 +117,7 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
     async updatePrivateMetadata(id: string, items: SaleorMetadataItem[]) {
       const found = checkouts.get(id)
       if (!found) return notFound
+      writes.push({ id, kind: "metadata" })
       for (const item of items) {
         found.privateMetadata = [...found.privateMetadata.filter((m) => m.key !== item.key), item]
       }
@@ -157,12 +167,31 @@ export function fakeSaleor(initial: SaleorCheckout[] = []) {
       found.totalPrice.gross.amount = Math.round((found.totalPrice.gross.amount + BILLING_TAX) * 100) / 100
       return { ok: true as const, data: structuredClone(found) }
     },
+    async updateCheckoutEmail(id: string, email: string) {
+      const found = checkouts.get(id)
+      if (!found) return notFound
+      writes.push({ id, kind: "email" })
+      ;(found as { email?: string }).email = email
+      return { ok: true as const, data: structuredClone(found) }
+    },
+    async updateCheckoutShippingAddress(id: string) {
+      const found = checkouts.get(id)
+      if (!found) return notFound
+      writes.push({ id, kind: "shipping_address" })
+      return { ok: true as const, data: { ...structuredClone(found), shippingMethods: [] } }
+    },
+    async updateCheckoutDeliveryMethod(id: string) {
+      const found = checkouts.get(id)
+      if (!found) return notFound
+      writes.push({ id, kind: "delivery_method" })
+      return { ok: true as const, data: structuredClone(found) }
+    },
     async getChannelOrderSettings() {
       if (channel.allowUnpaidOrders === null) return { ok: false as const, error: "You need one of the following permissions: MANAGE_CHANNELS, MANAGE_ORDERS" }
       return { ok: true as const, data: { allowUnpaidOrders: channel.allowUnpaidOrders } }
     },
   }
-  return { client, checkouts, transactions, completed, channel, orders }
+  return { client, checkouts, transactions, completed, channel, orders, writes }
 }
 
 export const BILLING_TAX = 5
@@ -186,6 +215,7 @@ export const AGENT_0123 = "https://agent.example/0123"
 export const AGENT_UNKNOWN = "https://agent.example/unknown"
 export const AGENT_UNDECLARED = "https://agent.example/undeclared"
 export const AGENT_DOWN = "https://agent.example/down"
+export const AGENT_BUSY = "https://agent.example/busy"
 export const AGENT_REDIRECTED = "https://agent.example/redirected"
 export const AGENT_REDIRECTED_NO_LOCATION = "https://agent.example/redirected-no-location"
 
@@ -195,6 +225,7 @@ export const PROFILES: Record<string, AgentProfileResult> = {
   [AGENT_0123]: { status: "ok", version: "2026-01-23" },
   [AGENT_UNKNOWN]: { status: "ok", version: "2027-01-01" },
   [AGENT_UNDECLARED]: { status: "ok", version: null },
+  [AGENT_BUSY]: { status: "busy" },
   [AGENT_REDIRECTED]: { status: "redirected", location: "https://elsewhere.example/profile" },
   [AGENT_REDIRECTED_NO_LOCATION]: { status: "redirected", location: null },
 }
@@ -226,10 +257,11 @@ export function buildRoutes(options: {
   return { routes: createUcpRoutes(instance), acpRoutes: createAcpRoutes(instance), saleor, fetcher, instance }
 }
 
-export function ucpRequest(url: string, options: { agent?: string; method?: string; body?: unknown; sessionSecret?: string; apiKey?: string } = {}): Request {
+export function ucpRequest(url: string, options: { agent?: string; method?: string; body?: unknown; sessionSecret?: string | null; apiKey?: string } = {}): Request {
   const headers: Record<string, string> = { "content-type": "application/json" }
   if (options.agent) headers["UCP-Agent"] = `profile="${options.agent}"`
-  if (options.sessionSecret) headers["UCP-Session-Secret"] = options.sessionSecret
+  const secret = options.sessionSecret === undefined ? TEST_SESSION_SECRET : options.sessionSecret
+  if (secret) headers["UCP-Session-Secret"] = secret
   if (options.apiKey !== undefined) headers["X-API-Key"] = options.apiKey
   return new Request(url, {
     method: options.method ?? (options.body === undefined ? "GET" : "POST"),

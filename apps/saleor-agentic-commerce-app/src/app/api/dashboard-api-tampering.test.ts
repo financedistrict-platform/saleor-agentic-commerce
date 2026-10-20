@@ -58,6 +58,7 @@ vi.mock("@/lib/config-manager", () => ({
 const { GET: getConfig, POST: postConfig } = await import("./config/route")
 const { POST: testConnection } = await import("./payment-handlers/test-connection/route")
 const { GET: getPublicConfig } = await import("./config-public/route")
+const { POST: registerHandler } = await import("./handlers/register/route")
 
 const PRISM_ENTRY: PaymentHandlerEntry = {
   enabled: true,
@@ -307,7 +308,7 @@ describe("dashboard API tampering — every dashboard route requires a verified 
   it.each(DASHBOARD_ROUTES)("/api/%s guards every handler with getAuthContext", (route) => {
     const source = readFileSync(join(API_DIR, route, "route.ts"), "utf8")
     const handlers = source.match(/export (async )?function (GET|POST|PUT|PATCH|DELETE)\b/g) ?? []
-    const guards = source.match(/await getAuthContext\(request\)/g) ?? []
+    const guards = source.match(/await getAuthContext\(request(, \["[A-Z_]+"\])?\)/g) ?? []
     expect(handlers.length).toBeGreaterThan(0)
     expect(guards.length).toBe(handlers.length)
     expect(source).not.toMatch(/export const (GET|POST|PUT|PATCH|DELETE)\b/)
@@ -321,8 +322,9 @@ function publicConfigRequest(token: string | null = "storefront-service-token"):
 }
 
 function installedApp(): void {
-  fetchSpy.mockResolvedValue(
-    new Response(JSON.stringify({ data: { app: { id: "storefront-app", name: "Storefront" } } }), { status: 200 }),
+  fetchSpy.mockImplementation(
+    async () =>
+      new Response(JSON.stringify({ data: { app: { id: "storefront-app", name: "Storefront" } } }), { status: 200 }),
   )
 }
 
@@ -397,5 +399,168 @@ describe("config-public tampering — another installed app's token never receiv
     const res = await getPublicConfig(publicConfigRequest("stolen-user-token"))
 
     expect(res.status).toBe(401)
+  })
+})
+
+const UNKNOWN_SALEOR_API_URL = "https://attacker.example/graphql/"
+
+function callerRequest(
+  path: string,
+  init: { method?: string; token?: string; saleorApiUrl?: string; body?: unknown } = {},
+): NextRequest {
+  return new NextRequest(`https://app.example${path}`, {
+    method: init.method ?? "GET",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${init.token ?? "storefront-service-token"}`,
+      "saleor-api-url": init.saleorApiUrl ?? SALEOR_API_URL,
+    },
+    body: init.body === undefined ? undefined : JSON.stringify(init.body),
+  })
+}
+
+function registerRequest(manifestId: string, token?: string, saleorApiUrl?: string): NextRequest {
+  return callerRequest("/api/handlers/register", {
+    method: "POST",
+    token,
+    saleorApiUrl,
+    body: { manifest: { id: manifestId, name: manifestId, version: "2026-10-19", displayName: `from ${token ?? "default"}` } },
+  })
+}
+
+describe("storefront caller auth — an unknown Saleor URL is refused before any outbound call", () => {
+  it("config-public answers 401 and never fetches the unknown URL", async () => {
+    installedApp()
+
+    const res = await getPublicConfig(callerRequest("/api/config-public", { saleorApiUrl: UNKNOWN_SALEOR_API_URL }))
+
+    expect(res.status).toBe(401)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(state.managers).toBe(0)
+  })
+
+  it("handler register answers 401 and never fetches the unknown URL", async () => {
+    installedApp()
+
+    const res = await registerHandler(registerRequest("xyz.fd.new_payment", undefined, UNKNOWN_SALEOR_API_URL))
+
+    expect(res.status).toBe(401)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(state.managers).toBe(0)
+  })
+
+  it("answers 401 when the APL lookup throws, without any outbound call", async () => {
+    installedApp()
+    aplGet.mockRejectedValue(new Error("Unknown saleorApiUrl"))
+
+    const publicRes = await getPublicConfig(callerRequest("/api/config-public", { saleorApiUrl: UNKNOWN_SALEOR_API_URL }))
+    const registerRes = await registerHandler(registerRequest("xyz.fd.new_payment", undefined, UNKNOWN_SALEOR_API_URL))
+
+    expect(publicRes.status).toBe(401)
+    expect(registerRes.status).toBe(401)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it("still validates the caller token against a known Saleor URL", async () => {
+    installedApp()
+
+    const publicRes = await getPublicConfig(callerRequest("/api/config-public"))
+    const registerRes = await registerHandler(registerRequest("xyz.fd.new_payment"))
+
+    expect(publicRes.status).toBe(200)
+    expect(registerRes.status).toBe(200)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    for (const [url, init] of fetchSpy.mock.calls) {
+      expect(url).toBe(SALEOR_API_URL)
+      expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer storefront-service-token" })
+    }
+  })
+})
+
+const APP_A_TOKEN = "app-a-token"
+const APP_B_TOKEN = "app-b-token"
+const APP_IDS_BY_TOKEN: Record<string, string> = { [APP_A_TOKEN]: "app-A", [APP_B_TOKEN]: "app-B" }
+
+function installedApps(): void {
+  fetchSpy.mockImplementation(async (_url: string, init: RequestInit) => {
+    const token = String((init.headers as Record<string, string>).Authorization).replace("Bearer ", "")
+    const id = APP_IDS_BY_TOKEN[token]
+    return new Response(JSON.stringify({ data: { app: id ? { id, name: id } : null } }), { status: 200 })
+  })
+}
+
+function storedPrism(): PaymentHandlerEntry {
+  return JSON.parse(JSON.stringify(state.handlers["xyz.fd.prism_payment"]))
+}
+
+describe("handler register tampering — a handler id belongs to the app that registered it first", () => {
+  beforeEach(() => {
+    installedApps()
+  })
+
+  it("refuses another app that registers an id already owned, leaving the entry unchanged", async () => {
+    delete state.handlers["xyz.fd.prism_payment"]
+    const first = await registerHandler(registerRequest("xyz.fd.prism_payment", APP_A_TOKEN))
+    expect(first.status).toBe(200)
+    const entry = state.handlers["xyz.fd.prism_payment"] as PaymentHandlerEntry
+    entry.enabled = true
+    entry.channels = ["default-channel"]
+    const before = storedPrism()
+
+    const res = await registerHandler(registerRequest("xyz.fd.prism_payment", APP_B_TOKEN))
+
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe("handler_owned_by_other_app")
+    expect(storedPrism()).toEqual(before)
+    expect(storedPrism().manifest?.displayName).toBe(`from ${APP_A_TOKEN}`)
+  })
+
+  it("lets the owning app register its own id again", async () => {
+    delete state.handlers["xyz.fd.prism_payment"]
+    await registerHandler(registerRequest("xyz.fd.prism_payment", APP_A_TOKEN))
+
+    const res = await registerHandler(registerRequest("xyz.fd.prism_payment", APP_A_TOKEN))
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).created).toBe(false)
+    expect(storedPrism().ownerAppId).toBe("app-A")
+  })
+
+  it("lets the first valid app claim an entry stored without an owner, then refuses others", async () => {
+    const claim = await registerHandler(registerRequest("xyz.fd.prism_payment", APP_B_TOKEN))
+
+    expect(claim.status).toBe(200)
+    expect(storedPrism()).toMatchObject({
+      ownerAppId: "app-B",
+      enabled: PRISM_ENTRY.enabled,
+      channels: PRISM_ENTRY.channels,
+      config: PRISM_ENTRY.config,
+    })
+
+    const before = storedPrism()
+    const res = await registerHandler(registerRequest("xyz.fd.prism_payment", APP_A_TOKEN))
+
+    expect(res.status).toBe(403)
+    expect(storedPrism()).toEqual(before)
+  })
+
+  it("keeps the owner when the dashboard saves the handler back without it or with another one", async () => {
+    await registerHandler(registerRequest("xyz.fd.prism_payment", APP_A_TOKEN))
+    const { ownerAppId: _owner, ...withoutOwner } = storedPrism()
+
+    for (const submitted of [withoutOwner, { ...withoutOwner, ownerAppId: "app-B" }]) {
+      const res = await postConfig(
+        request("/api/config", {
+          method: "POST",
+          jwt: VALID_JWT,
+          body: { paymentHandlers: { "xyz.fd.prism_payment": submitted } },
+        }),
+      )
+      expect(res.status).toBe(200)
+      expect(storedPrism().ownerAppId).toBe("app-A")
+    }
+
+    const res = await registerHandler(registerRequest("xyz.fd.prism_payment", APP_B_TOKEN))
+    expect(res.status).toBe(403)
   })
 })

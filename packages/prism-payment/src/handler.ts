@@ -17,6 +17,7 @@ import {
   type UcpHandlersDiscoveryResponse,
   type X402AcceptEntry,
 } from "./prism-client.js"
+import { REVIEW_REASONS } from "./settle-classifier.js"
 
 
 export const PRISM_HANDLER_ID = "xyz.fd.prism_payment"
@@ -38,7 +39,7 @@ type PrismCheckoutData = {
 
 
 type CredentialCheck =
-  | { ok: true; signed: SignedPaymentSummary; entry: X402AcceptEntry; settled: SettledAmount }
+  | { ok: true; signed: SignedPaymentSummary; entry: X402AcceptEntry; settled: SettledAmount; resourceUrl: string }
   | { ok: false; error: string; code?: string }
 
 export type PrismPaymentHandlerOptions = {
@@ -160,24 +161,32 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
   async settlePayment(input: PaymentSettleInput): Promise<PaymentSettleResult> {
     const checked = this.checkCredential(input)
     if (!checked.ok) return { success: false, outcome: "declined", error: checked.error, ...(checked.code ? { code: checked.code } : {}) }
-    const { signed, entry, settled } = checked
+    const { signed, entry, settled, resourceUrl } = checked
 
     try {
       const result = await this.client.settle({
-        paymentPayload: signed.payload,
+        paymentPayload: { ...signed.payload, resource: { url: resourceUrl } },
         paymentRequirements: entry,
+        ...(input.resume === true ? { resumed: true } : {}),
       })
 
       if (!result.success) {
-        return { success: false, outcome: result.outcome, error: result.error }
+        return {
+          success: false,
+          outcome: result.outcome,
+          error: result.error,
+          ...(result.outcome === "review" && REVIEW_REASONS.includes(result.error) ? { code: result.error } : {}),
+          ...(result.settledReference ? { settledReference: result.settledReference } : {}),
+          ...(result.pendingReference ? { pendingReference: result.pendingReference } : {}),
+        }
       }
       const { network } = signed
       const settledReference = result.transactionHash
       if (result.network !== undefined && result.network !== network) {
-        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} on ${result.network}, not on the signed network ${network}` }
+        return { success: false, outcome: "review", code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} on ${result.network}, not on the signed network ${network}` }
       }
       if (result.payer !== undefined && canonicalOnNetwork(network, result.payer) !== canonicalOnNetwork(network, signed.from)) {
-        return { success: false, code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} from another payer than the signed authorization` }
+        return { success: false, outcome: "review", code: "settled_payment_mismatch", settledReference, error: `Prism settled ${settledReference} from another payer than the signed authorization` }
       }
 
       return {
@@ -191,7 +200,7 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "Unknown error"
-      return { success: false, outcome: "unknown", error: `Prism settlement failed: ${message}` }
+      return { success: false, outcome: "pending", error: `Prism settlement failed: ${message}` }
     }
   }
 
@@ -217,6 +226,11 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
     }
     const settled = { amount: prepared.preparedAmount as number, currency: prepared.preparedCurrency }
 
+    const resourceUrl = config.resource?.url
+    if (typeof resourceUrl !== "string" || resourceUrl.length === 0) {
+      return { ok: false, error: "Prism payment config has no resource url" }
+    }
+
     const accepts = config.accepts ?? []
     if (accepts.length === 0) {
       return { ok: false, error: "Prism payment config has no accepts entries" }
@@ -236,12 +250,16 @@ export class PrismPaymentHandler implements PaymentHandlerAdapter {
       return { ok: false, code: checked.code, error: checked.message }
     }
 
+    if (!resourceMatches(signed.payload, resourceUrl)) {
+      return { ok: false, code: "resource_mismatch", error: "The signed payment names a different resource than the one the checkout was quoted for. Sign again for this checkout." }
+    }
+
     const expiresAt = authorizationExpiry(signed)
-    if (expiresAt !== undefined && expiresAt <= Date.now()) {
+    if (input.resume !== true && expiresAt !== undefined && expiresAt <= Date.now()) {
       return { ok: false, code: "payment_expired", error: "The signed authorization has expired. Sign a new payment and complete again." }
     }
 
-    return { ok: true, signed, entry: checked.entry, settled }
+    return { ok: true, signed, entry: checked.entry, settled, resourceUrl }
   }
 
 
@@ -336,6 +354,13 @@ export function isContractEntry(data: unknown): data is UcpHandlersDiscoveryResp
 function authorizationExpiry(signed: SignedPaymentSummary): number | undefined {
   if (signed.validBefore === undefined || !/^\d+$/.test(signed.validBefore)) return undefined
   return Number(signed.validBefore) * 1000
+}
+
+function resourceMatches(payload: Record<string, unknown>, quotedUrl: string): boolean {
+  const { resource } = payload
+  if (resource === undefined) return true
+  if (typeof resource !== "object" || resource === null || Array.isArray(resource)) return false
+  return (resource as Record<string, unknown>).url === quotedUrl
 }
 
 function readString(value: unknown, key: string): string | undefined {

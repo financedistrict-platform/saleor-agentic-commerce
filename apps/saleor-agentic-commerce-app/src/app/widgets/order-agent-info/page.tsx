@@ -1,8 +1,42 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useAppBridge } from "@saleor/app-sdk/app-bridge"
+import { useDashboardFetch } from "@/lib/dashboard-fetch"
 import { KEYS } from "@/lib/metadata-keys"
 import type { AgentSessionMetadata } from "@/lib/metadata-keys"
+import {
+  type SettlementSummary,
+  netReceivedText,
+  refundLimitText,
+} from "@/lib/settlement-summary"
+
+const SETTLEMENT_TIMEOUT_MS = 8000
+
+function readOrderId(): string | null {
+  return new URLSearchParams(window.location.search).get("orderId")
+}
+
+function SettlementSection({ summary }: { summary: SettlementSummary | null }) {
+  if (summary?.state === "none") return null
+  return (
+    <div style={styles.settlement}>
+      <div style={styles.settlementHeading}>Prism settlement</div>
+      <table style={styles.table}>
+        <tbody>
+          <tr>
+            <td style={styles.labelCell}>Net received</td>
+            <td style={styles.valueCell}>{summary ? netReceivedText(summary) : "…"}</td>
+          </tr>
+          <tr>
+            <td style={styles.labelCell}>Refund up to</td>
+            <td style={styles.valueCell}>{summary ? refundLimitText(summary) : "…"}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 /**
  * Order Agent Info Widget
@@ -16,6 +50,45 @@ export default function OrderAgentInfoWidget() {
     null
   )
   const [loading, setLoading] = useState(true)
+  const [summary, setSummary] = useState<SettlementSummary | null>(null)
+  const { appBridgeState } = useAppBridge()
+  const dashboardFetch = useDashboardFetch()
+  const [orderId, setOrderId] = useState<string | null>(null)
+
+  useEffect(() => {
+    setOrderId(readOrderId())
+  }, [])
+
+  useEffect(() => {
+    if (!appBridgeState?.ready || !orderId) return
+    let cancelled = false
+    const load = async () => {
+      try {
+        const res = await dashboardFetch(
+          `/api/order-settlement?orderId=${encodeURIComponent(orderId)}`
+        )
+        const next: SettlementSummary = res.ok
+          ? await res.json()
+          : { state: "unavailable" }
+        if (!cancelled) setSummary(next)
+      } catch {
+        if (!cancelled) setSummary({ state: "unavailable" })
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [appBridgeState?.ready, orderId, dashboardFetch])
+
+  useEffect(() => {
+    if (!orderId) return
+    const timer = window.setTimeout(
+      () => setSummary((current) => current ?? { state: "unavailable" }),
+      SETTLEMENT_TIMEOUT_MS
+    )
+    return () => window.clearTimeout(timer)
+  }, [orderId])
 
   useEffect(() => {
     // The Dashboard passes order metadata via postMessage
@@ -58,6 +131,7 @@ export default function OrderAgentInfoWidget() {
         <p style={styles.hint}>
           This order was not placed by an AI agent.
         </p>
+        {orderId && <SettlementSection summary={summary} />}
       </div>
     )
   }
@@ -105,6 +179,7 @@ export default function OrderAgentInfoWidget() {
           </tr>
         </tbody>
       </table>
+      {orderId && <SettlementSection summary={summary} />}
     </div>
   )
 }
@@ -160,6 +235,15 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: "13px",
     color: "#1a1a1a",
     wordBreak: "break-all" as const,
+  },
+  settlement: {
+    marginTop: "12px",
+  },
+  settlementHeading: {
+    fontSize: "13px",
+    fontWeight: 600,
+    color: "#1a1a1a",
+    marginBottom: "4px",
   },
   link: {
     color: "#2563eb",

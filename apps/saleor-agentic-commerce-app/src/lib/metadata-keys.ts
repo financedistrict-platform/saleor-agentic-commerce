@@ -118,6 +118,7 @@ export type PaymentHandlerEntry = {
   channels?: string[] | null
   config: Record<string, unknown>
   manifest?: HandlerManifest
+  ownerAppId?: string
 }
 
 /** v1 Prism handler config — only what's actually local. */
