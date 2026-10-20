@@ -67,5 +67,8 @@ export function restoreHandlerSecrets(
       .map(([field, value]) => [field, resolveSecret(value, stored?.config?.[field])] as const)
       .filter(([, value]) => value !== undefined),
   )
-  return { ...submitted, config }
+  const { ownerAppId: _submittedOwner, ...rest } = submitted
+  return stored?.ownerAppId
+    ? { ...rest, config, ownerAppId: stored.ownerAppId }
+    : { ...rest, config }
 }
