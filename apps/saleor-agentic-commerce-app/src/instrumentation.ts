@@ -3,7 +3,7 @@
  * unreachable token store fails the deploy immediately, rather than silently at
  * the next restart when the install token is already lost (GH-62).
  *
- * Requires `experimental.instrumentationHook: true` in next.config.js (Next 14).
+ * Next.js runs `register()` automatically (stable since Next 15).
  */
 export async function register(): Promise<void> {
   // Node-only: the token store isn't reachable from the edge runtime. The
