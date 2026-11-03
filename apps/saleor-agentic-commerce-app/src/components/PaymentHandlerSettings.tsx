@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useMemo, useState } from "react"
 import { useDashboardFetch } from "@/lib/dashboard-fetch"
 import {
   PRISM_HANDLER_ID,
@@ -93,11 +93,13 @@ function HandlerCard({
   } | null>(null)
 
   // Re-sync if upstream entry changes (e.g. after save round-trip).
-  useEffect(() => {
+  const [syncedEntry, setSyncedEntry] = useState(entry)
+  if (entry !== syncedEntry) {
+    setSyncedEntry(entry)
     setEnabled(entry.enabled)
     setConfig((entry.config ?? {}) as Record<string, unknown>)
     setTestResult(null)
-  }, [entry])
+  }
 
   const dirty = useMemo(() => {
     if (enabled !== entry.enabled) return true
