@@ -16,20 +16,19 @@ const nextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@saleor/macaw-ui"],
 
-  experimental: {
-    // Run src/instrumentation.ts `register()` at server startup (the APL boot
-    // canary — GH-62). Stable in Next 15+; needs this flag on Next 14.
-    instrumentationHook: true,
-    serverComponentsExternalPackages: APL_NODE_ONLY,
-    // pnpm workspace root, so the standalone tracer picks up hoisted
-    // node_modules (Next 14 nests this under experimental).
-    outputFileTracingRoot: path.join(__dirname, "..", ".."),
-  },
+  // src/instrumentation.ts `register()` (the APL boot canary — GH-62) runs at
+  // server startup without any flag; instrumentation is stable since Next 15.
+  serverExternalPackages: APL_NODE_ONLY,
+  // pnpm workspace root, so the standalone tracer picks up hoisted
+  // node_modules (a top-level option since Next 15).
+  outputFileTracingRoot: path.join(__dirname, "..", ".."),
 
   // Belt-and-suspenders to the above: mark the node-only APL deps as externals
   // for the server AND edge compilations so webpack never parses their
   // `node:`-scheme imports (which the edge target can't handle). They're
   // dynamically imported only in the node runtime at request time.
+  // `next dev` and `next build` run with `--webpack` (package.json): Next 16
+  // defaults to Turbopack, which refuses to build with a custom webpack config.
   webpack: (config, { isServer }) => {
     if (isServer) {
       // Map each to `commonjs <pkg>` so webpack emits `require("<pkg>")` rather

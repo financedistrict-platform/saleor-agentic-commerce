@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 import { useAppBridge } from "@saleor/app-sdk/app-bridge"
 import { useDashboardFetch } from "@/lib/dashboard-fetch"
 import { KEYS } from "@/lib/metadata-keys"
@@ -16,6 +16,10 @@ const SETTLEMENT_TIMEOUT_MS = 8000
 function readOrderId(): string | null {
   return new URLSearchParams(window.location.search).get("orderId")
 }
+
+// The order id and the hydrated flag never change after mount, so there is
+// nothing to subscribe to; the server snapshot covers SSR and hydration.
+const subscribeNever = () => () => {}
 
 function SettlementSection({ summary }: { summary: SettlementSummary | null }) {
   if (summary?.state === "none") return null
@@ -49,15 +53,11 @@ export default function OrderAgentInfoWidget() {
   const [agentSession, setAgentSession] = useState<AgentSessionMetadata | null>(
     null
   )
-  const [loading, setLoading] = useState(true)
+  const hydrated = useSyncExternalStore(subscribeNever, () => true, () => false)
   const [summary, setSummary] = useState<SettlementSummary | null>(null)
   const { appBridgeState } = useAppBridge()
   const dashboardFetch = useDashboardFetch()
-  const [orderId, setOrderId] = useState<string | null>(null)
-
-  useEffect(() => {
-    setOrderId(readOrderId())
-  }, [])
+  const orderId = useSyncExternalStore(subscribeNever, readOrderId, () => null)
 
   useEffect(() => {
     if (!appBridgeState?.ready || !orderId) return
@@ -110,17 +110,15 @@ export default function OrderAgentInfoWidget() {
             setAgentSession(null)
           }
         }
-        setLoading(false)
       }
     }
 
     window.addEventListener("message", handleMessage)
-    setLoading(false) // Don't block if no message comes
 
     return () => window.removeEventListener("message", handleMessage)
   }, [])
 
-  if (loading) {
+  if (!hydrated) {
     return <div style={styles.container}>Loading...</div>
   }
 

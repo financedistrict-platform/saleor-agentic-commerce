@@ -4,7 +4,7 @@ Production-bound deployment notes for `@financedistrict/saleor-agentic-commerce-
 
 ## What you're deploying
 
-A Next.js 14 (standalone output) service that:
+A Next.js 16 (standalone output) service that:
 
 - Serves `/api/manifest` describing itself to Saleor
 - Receives `POST /api/register` from Saleor at install time
