@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useRef } from "react"
+import { useCallback, useLayoutEffect, useRef } from "react"
 import { useAppBridge } from "@saleor/app-sdk/app-bridge"
 import {
   SALEOR_API_URL_HEADER,
@@ -13,11 +13,14 @@ type DashboardRequestInit = Omit<RequestInit, "headers"> & {
 
 export function useDashboardFetch() {
   const { appBridgeState } = useAppBridge()
+  const saleorApiUrl = appBridgeState?.saleorApiUrl ?? ""
+  const token = appBridgeState?.token ?? ""
   const credentials = useRef({ saleorApiUrl: "", token: "" })
-  credentials.current = {
-    saleorApiUrl: appBridgeState?.saleorApiUrl ?? "",
-    token: appBridgeState?.token ?? "",
-  }
+  // Layout effects run before every passive effect, so callers' effects
+  // always send the current credentials.
+  useLayoutEffect(() => {
+    credentials.current = { saleorApiUrl, token }
+  }, [saleorApiUrl, token])
 
   return useCallback(
     (path: string, init: DashboardRequestInit = {}) =>
