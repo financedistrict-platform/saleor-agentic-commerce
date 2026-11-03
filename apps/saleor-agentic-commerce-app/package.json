@@ -14,7 +14,7 @@
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1161.0",
     "@aws-sdk/lib-dynamodb": "^3.1161.0",
-    "@saleor/app-sdk": "^1.7.0",
+    "@saleor/app-sdk": "^1.16.0",
     "@saleor/macaw-ui": "^1.4.2",
     "dynamodb-toolbox": "^2.11.1",
     "graphql": "^16.14.2",

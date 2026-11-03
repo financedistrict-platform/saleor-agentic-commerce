@@ -27,8 +27,8 @@ importers:
         specifier: ^3.1161.0
         version: 3.1161.0(@aws-sdk/client-dynamodb@3.1161.0)
       '@saleor/app-sdk':
-        specifier: ^1.7.0
-        version: 1.7.1(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0))(dynamodb-toolbox@2.11.1(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0)))(graphql@16.14.2)(next@14.2.35(@opentelemetry/api@1.9.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(redis@6.3.1(@opentelemetry/api@1.9.1))
+        specifier: ^1.16.0
+        version: 1.16.0(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0))(dynamodb-toolbox@2.11.1(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0)))(graphql@16.14.2)(next@14.2.35(@opentelemetry/api@1.9.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(redis@6.3.1(@opentelemetry/api@1.9.1))
       '@saleor/macaw-ui':
         specifier: ^1.4.2
         version: 1.4.2(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(@vanilla-extract/css@1.20.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
@@ -1112,8 +1112,8 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
-  '@saleor/app-sdk@1.7.1':
-    resolution: {integrity: sha512-V9z2Ll448+8q3bamQe5iA1W5l9ApaSb1inmVYnacP4A2PLW639i8W37eqmM8FG5QWu4m3SH94sSXWCng7V9dDA==}
+  '@saleor/app-sdk@1.16.0':
+    resolution: {integrity: sha512-wYC5aLEDwEZmBgB3ZrhNMPgSd0bMYLju7ePnsYFW1PQO87S2RtHaSNxRM1gI/ozRl49nLedzdCXp1y87QY4oSQ==}
     peerDependencies:
       '@aws-sdk/client-dynamodb': ^3.848.0
       '@aws-sdk/lib-dynamodb': ^3.850.0
@@ -3215,7 +3215,7 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
-  '@saleor/app-sdk@1.7.1(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0))(dynamodb-toolbox@2.11.1(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0)))(graphql@16.14.2)(next@14.2.35(@opentelemetry/api@1.9.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(redis@6.3.1(@opentelemetry/api@1.9.1))':
+  '@saleor/app-sdk@1.16.0(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0))(dynamodb-toolbox@2.11.1(@aws-sdk/client-dynamodb@3.1161.0)(@aws-sdk/lib-dynamodb@3.1161.0(@aws-sdk/client-dynamodb@3.1161.0))(@aws-sdk/util-dynamodb@3.996.9(@aws-sdk/client-dynamodb@3.1161.0)))(graphql@16.14.2)(next@14.2.35(@opentelemetry/api@1.9.1)(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(redis@6.3.1(@opentelemetry/api@1.9.1))':
     dependencies:
       '@opentelemetry/api': 1.9.0
       '@opentelemetry/semantic-conventions': 1.30.0
