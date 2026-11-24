@@ -79,7 +79,7 @@
   },
   "devDependencies": {
     "@financedistrict/saleor-agentic-commerce-core": "workspace:*",
-    "next": "^16.4.4",
+    "next": "^16.4.5",
     "typescript": "^5.9.3"
   }
 }
